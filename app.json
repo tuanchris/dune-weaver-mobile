@@ -1,0 +1,54 @@
+{
+  "expo": {
+    "name": "Dune Weaver",
+    "slug": "dune-weaver-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": [
+      "assets/**",
+      "assets/thr/**",
+      "assets/previews/**"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.joonsolutions.duneweaver",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "Dune Weaver finds and connects to your sand table on the local network to control patterns.",
+        "NSBonjourServices": [
+          "_http._tcp."
+        ],
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
+      }
+    },
+    "android": {
+      "package": "com.joonsolutions.duneweaver",
+      "usesCleartextTraffic": true,
+      "adaptiveIcon": {
+        "backgroundColor": "#1a1a1a",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-status-bar",
+      "expo-asset",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "buildReactNativeFromSource": true
+          }
+        }
+      ]
+    ]
+  }
+}
