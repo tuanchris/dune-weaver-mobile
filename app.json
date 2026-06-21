@@ -4,7 +4,7 @@
     "slug": "dune-weaver-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/dw-logo.png",
     "userInterfaceStyle": "automatic",
     "assetBundlePatterns": [
       "assets/**",
@@ -26,7 +26,7 @@
       }
     },
     "android": {
-      "package": "com.joonsolutions.duneweaver",
+      "package": "com.duneweaver",
       "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "backgroundColor": "#1a1a1a",

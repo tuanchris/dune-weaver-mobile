@@ -2,7 +2,7 @@
 // Read routes return JSON; action routes (/sand_*) return plain text "ok"
 // (do NOT JSON.parse them); /command?plain=... is fire-and-forget.
 
-import type { RawStatus } from './status'
+import type { RawStatus, RawTime } from './status'
 
 /** Clear-before-run modes accepted by the firmware's $Sand/Run command. */
 export type ClearMode = 'none' | 'adaptive' | 'in' | 'out' | 'sideway' | 'random'
@@ -25,6 +25,9 @@ export interface LedInputs {
   color?: boolean
   color2?: boolean
   palette?: boolean
+  /** ball effect: rotation direction (cw/ccw) and start alignment (0..359°). */
+  direction?: boolean
+  align?: boolean
 }
 
 export interface LedEffectDef {
@@ -73,6 +76,7 @@ export const LED_EFFECTS: LedEffectDef[] = [
   { name: 'pride', label: 'Pride', uses: {} },
   { name: 'colorwaves', label: 'Color waves', uses: { palette: true } },
   { name: 'bpm', label: 'BPM', uses: { palette: true } },
+  { name: 'ball', label: 'Ball', uses: { color: true, direction: true, align: true } },
 ]
 
 /** Palettes that recolor the auto-hue effects ($LED/Palette=). */
@@ -317,6 +321,18 @@ export const board = {
   setLedColor2: (base: string, hex: string) => command(base, `$Sand/Led=color2=${hexRRGGBB(hex)}`),
   setLedBrightness: (base: string, value: number) => command(base, `$Sand/Led=brightness=${clampInt(value, 0, 255)}`),
   setLedSpeed: (base: string, value: number) => command(base, `$Sand/Led=speed=${clampInt(value, 1, 255)}`),
+  /** Ball effect: rotation direction. */
+  setLedDirection: (base: string, dir: 'cw' | 'ccw') => command(base, `$Sand/Led=direction=${dir}`),
+  /** Ball effect: start alignment in degrees (0..359). */
+  setLedAlign: (base: string, deg: number) => command(base, `$Sand/Led=align=${clampInt(deg, 0, 359)}`),
+  /** Ball effect: glow size in LEDs (1..200). */
+  setLedBallSize: (base: string, leds: number) => command(base, `$Sand/Led=size=${clampInt(leds, 1, 200)}`),
+  /** Ball effect: tracking-blob brightness (0..255), independent of master + bg. */
+  setLedBallBright: (base: string, value: number) => command(base, `$Sand/Led=fgbright=${clampInt(value, 0, 255)}`),
+  /** Ball effect: background brightness (0..255), independent of master + blob. */
+  setLedBallBgBright: (base: string, value: number) => command(base, `$Sand/Led=bgbright=${clampInt(value, 0, 255)}`),
+  /** Ball effect: background mode — "static" (solid Color2), "off", or any effect name. */
+  setLedBallBg: (base: string, bg: string) => command(base, `$Sand/Led=bg=${bg}`),
   /** Effect to force while the table is moving (Run/Jog/Home); "none" = don't override. */
   setLedRunEffect: (base: string, effect: string) => command(base, `$LED/RunEffect=${effect}`),
   /** Effect to force while the table is Idle/Hold; "none" = don't override. */
@@ -326,6 +342,21 @@ export const board = {
   setQuietEnabled: (base: string, on: boolean) => command(base, `$Sands/Enabled=${on ? 'ON' : 'OFF'}`),
   /** Slots string, e.g. "21:00-08:00@daily" or comma-separated "HH:MM-HH:MM@days". */
   setQuietSlots: (base: string, slots: string) => command(base, `$Sands/Slots=${slots}`),
+  /** Turn LEDs off during quiet hours. */
+  setQuietLedOff: (base: string, on: boolean) => command(base, `$Sands/LedOff=${on ? 'ON' : 'OFF'}`),
+  /** ON: finish the current pattern before pausing; OFF: feed-hold mid-pattern. */
+  setQuietFinishPattern: (base: string, on: boolean) => command(base, `$Sands/FinishPattern=${on ? 'ON' : 'OFF'}`),
+
+  // ---- Clock / timezone (the wall clock the quiet-hours schedule runs against) ----
+  /** Read the table's clock: {epoch, synced, local, tz}. */
+  time: (base: string) => getJson<RawTime>(base, '/sand_time'),
+  /** Push a unix epoch and/or POSIX TZ to the table (app clock sync). */
+  syncTime: (base: string, opts: { epoch?: number; tz?: string }) => {
+    const p: string[] = []
+    if (opts.epoch != null) p.push(`epoch=${Math.round(opts.epoch)}`)
+    if (opts.tz) p.push(`tz=${encodeURIComponent(opts.tz)}`)
+    return hit(base, `/sand_time?${p.join('&')}`)
+  },
 
   // ---- System ----
   /** Clear an Alarm without homing ($X). */

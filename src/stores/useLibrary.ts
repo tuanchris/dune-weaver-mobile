@@ -64,6 +64,10 @@ export type PreviewSource =
  */
 export function previewSource(name: string | null | undefined): PreviewSource {
   const key = bareName(name)
+  // Metro's dev asset server URL-decodes '+' to a space and then can't find the
+  // '+'-named webp ("Asset not found"), so render those few patterns from live
+  // geometry instead of their bundled preview.
+  if (key.includes('+')) return { kind: 'svg' }
   const mod = (PREVIEW as Record<string, number>)[key]
   return mod != null ? { kind: 'webp', module: mod } : { kind: 'svg' }
 }

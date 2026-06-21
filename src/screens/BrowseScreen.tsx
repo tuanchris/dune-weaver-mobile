@@ -275,11 +275,11 @@ export function BrowseScreen() {
           horizontal
           showsHorizontalScrollIndicator={false}
           style={styles.folderRow}
-          contentContainerStyle={{ gap: spacing.xs, paddingHorizontal: spacing.md }}
+          contentContainerStyle={{ gap: spacing.xs, paddingHorizontal: spacing.md, alignItems: 'center' }}
         >
           {[
             { key: ALL_FOLDERS, label: 'All' },
-            ...(hasTopLevel ? [{ key: TOP_LEVEL, label: 'Top level' }] : []),
+            ...(hasTopLevel ? [{ key: TOP_LEVEL, label: 'Default' }] : []),
             ...folders.map((f) => ({ key: f, label: folderLabel(f) })),
           ].map(({ key, label }) => {
             const on = folder === key
@@ -415,8 +415,8 @@ function EmptyState({ icon, text }: { icon: keyof typeof MaterialIcons.glyphMap;
 
 const styles = StyleSheet.create({
   searchRow: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.md, paddingTop: spacing.sm },
-  folderRow: { flexGrow: 0, paddingTop: spacing.sm },
-  folderChip: { paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: radius.pill, borderWidth: 1, justifyContent: 'center' },
+  folderRow: { flexGrow: 0, height: 44, marginTop: spacing.sm, marginBottom: spacing.sm },
+  folderChip: { paddingHorizontal: spacing.lg, height: 34, borderRadius: radius.pill, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   control: { shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
   search: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderRadius: radius.pill, borderWidth: 1, paddingHorizontal: spacing.md, height: 44 },
   searchInput: { flex: 1, fontSize: font.size.md, paddingVertical: 0 },

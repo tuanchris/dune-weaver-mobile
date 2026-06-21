@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { PanResponder, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Modal, PanResponder, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
 import Svg, { Circle, Defs, G, Path, RadialGradient, Stop } from 'react-native-svg'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board, LED_EFFECTS, LED_PALETTES, ledEffectInputs } from '../api/board'
@@ -7,7 +7,7 @@ import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
 import { toast } from '../stores/useToast'
-import { Card, CardTitle, Select, Slider } from '../components/ui'
+import { Card, CardTitle, IconButton, Select, Slider } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { radius, spacing, font } from '../theme'
 
@@ -18,9 +18,16 @@ const SWATCHES = [
   '#FF00E0', '#FF0080', '#FFFFFF', '#FFB060', '#60C0FF', '#FF4040',
 ]
 
-const EFFECT_OPTIONS = LED_EFFECTS.map((e) => ({ value: e.name, label: e.label }))
+// 'ball' is promoted to its own card, so keep it out of the generic effect list.
+const EFFECT_OPTIONS = LED_EFFECTS.filter((e) => e.name !== 'ball').map((e) => ({ value: e.name, label: e.label }))
 const PALETTE_OPTIONS = LED_PALETTES.map((p) => ({ value: p, label: p[0].toUpperCase() + p.slice(1) }))
 const HOOK_OPTIONS = [{ value: 'none', label: "Don't override" }, ...LED_EFFECTS.map((e) => ({ value: e.name, label: e.label }))]
+// What renders behind the ball's blob: a solid color, black, or a live effect.
+const BG_OPTIONS = [
+  { value: 'static', label: 'Solid color' },
+  { value: 'off', label: 'Off (black)' },
+  ...LED_EFFECTS.filter((e) => e.name !== 'ball' && e.name !== 'off' && e.name !== 'static').map((e) => ({ value: e.name, label: e.label })),
+]
 
 const HEX_RE = /^#?[0-9a-fA-F]{6}$/
 
@@ -75,6 +82,13 @@ export function LedScreen() {
   const [color2, setColor2] = useState('#0040FF')
   const [brightness, setBrightness] = useState(40)
   const [speed, setSpeed] = useState(50)
+  const [direction, setDirection] = useState<'cw' | 'ccw'>('cw')
+  const [align, setAlign] = useState(0)
+  // Ball-effect controls (blob/background brightness, background sub-effect, size).
+  const [ballBright, setBallBright] = useState(255)
+  const [ballBgBright, setBallBgBright] = useState(255)
+  const [ballSize, setBallSize] = useState(3)
+  const [ballBg, setBallBg] = useState('static')
   const [runEffect, setRunEffect] = useState('none')
   const [idleEffect, setIdleEffect] = useState('none')
   const [hasLed, setHasLed] = useState<boolean | null>(null)
@@ -84,9 +98,12 @@ export function LedScreen() {
   // on release) so we don't fire a command on every move.
   const colorThrottle = useThrottledSend(500)
   const color2Throttle = useThrottledSend(500)
+  const alignThrottle = useThrottledSend(150)
 
   // Remember the last "on" effect so the power button can restore it.
   const lastOnRef = useRef('rainbow')
+  // Effect to restore when the ball toggle is turned off.
+  const lastNonBallRef = useRef('static')
   // When the user last touched the brightness slider, so the 1s status poll
   // doesn't clobber the value mid-drag / right after release (same idea as the
   // table speed slider holding through the poll).
@@ -102,6 +119,12 @@ export function LedScreen() {
       if (s['LED/Color2']) setColor2(`#${s['LED/Color2'].replace(/^#/, '')}`)
       if (s['LED/Brightness']) setBrightness(Number(s['LED/Brightness']))
       if (s['LED/Speed']) setSpeed(Number(s['LED/Speed']))
+      if (s['LED/Direction']) setDirection(s['LED/Direction'] === 'ccw' ? 'ccw' : 'cw')
+      if (s['LED/Align'] != null) setAlign(Number(s['LED/Align']) || 0)
+      if (s['LED/BallSize'] != null) setBallSize(Number(s['LED/BallSize']) || 3)
+      if (s['LED/BallBright'] != null) setBallBright(Number(s['LED/BallBright']) || 0)
+      if (s['LED/BallBgBright'] != null) setBallBgBright(Number(s['LED/BallBgBright']) || 0)
+      if (s['LED/BallBg']) setBallBg(s['LED/BallBg'])
       if (s['LED/RunEffect']) setRunEffect(s['LED/RunEffect'])
       if (s['LED/IdleEffect']) setIdleEffect(s['LED/IdleEffect'])
       if (s['LED/Effect'] && s['LED/Effect'] !== 'off') lastOnRef.current = s['LED/Effect']
@@ -137,7 +160,16 @@ export function LedScreen() {
   const isOn = effect !== 'off'
   const togglePower = () => applyEffect(isOn ? 'off' : lastOnRef.current || 'rainbow')
 
+  const isBall = effect === 'ball'
+  // Remember the last non-ball effect so toggling the ball off can restore it.
+  useEffect(() => {
+    if (effect !== 'ball' && effect !== 'off') lastNonBallRef.current = effect
+  }, [effect])
+  const toggleBall = (on: boolean) => applyEffect(on ? 'ball' : lastNonBallRef.current || 'static')
+
   const inputs = ledEffectInputs(effect)
+  // What the ball's background sub-effect reads, so we can expose its controls.
+  const bgInputs = ledEffectInputs(ballBg)
 
   if (!base) {
     return (
@@ -178,68 +210,144 @@ export function LedScreen() {
           </Pressable>
         </Card>
 
+        {/* Ball tracker — promoted out of the effect list so it's easy to find. */}
         <Card>
-          <SliderRow
-            label="Brightness"
-            value={brightness}
-            min={0}
-            max={255}
-            onChange={(v) => { brightnessTouchedRef.current = Date.now(); setBrightness(v) }}
-            onComplete={(v) => { brightnessTouchedRef.current = Date.now(); send(() => board.setLedBrightness(base, v)) }}
-          />
-          <View style={{ height: spacing.lg }} />
-          <SliderRow label="Speed" value={speed} min={1} max={255} onChange={setSpeed} onComplete={(v) => send(() => board.setLedSpeed(base, v))} />
-        </Card>
+          <View style={styles.ballHead}>
+            <View style={{ flex: 1, paddingRight: spacing.md }}>
+              <CardTitle>Ball tracker</CardTitle>
+              <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: -spacing.sm }}>
+                A glowing dot that follows the sand ball around the ring.
+              </Text>
+            </View>
+            <Switch value={isBall} onValueChange={toggleBall} />
+          </View>
 
-        <Card>
-          <CardTitle>Effect</CardTitle>
-          <Select value={effect} options={EFFECT_OPTIONS} onChange={applyEffect} />
-
-          {inputs.palette ? (
-            <View style={{ marginTop: spacing.md }}>
-              <Text style={[styles.label, { color: colors.foreground }]}>Palette</Text>
-              <Select
-                value={palette}
-                options={PALETTE_OPTIONS}
-                onChange={(p) => {
-                  setPalette(p)
-                  send(() => board.setLedPalette(base, p))
-                }}
+          {isBall ? (
+            <View style={{ gap: spacing.md, marginTop: spacing.md }}>
+              {/* Blob */}
+              <View style={{ marginTop: spacing.sm }}>
+                <Text style={{ color: colors.foreground, fontSize: font.size.md, fontWeight: font.weight.semibold }}>Blob</Text>
+                <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>The dot that tracks the ball.</Text>
+              </View>
+              <ColorField
+                label="Blob color"
+                value={color}
+                onChange={(hex) => { setColor(hex); colorThrottle.run(() => board.setLedColor(base, hex).catch(() => {})) }}
+                onCommit={(hex) => { setColor(hex); colorThrottle.flush(() => send(() => board.setLedColor(base, hex))) }}
               />
+              <SliderRow label="Blob brightness" value={ballBright} min={0} max={255} onChange={setBallBright} onComplete={(v) => send(() => board.setLedBallBright(base, v))} />
+              <View>
+                <Text style={[styles.label, { color: colors.foreground }]}>Direction</Text>
+                <Select value={direction} options={[{ value: 'cw', label: 'Clockwise' }, { value: 'ccw', label: 'Counter-clockwise' }]} onChange={(d) => { setDirection(d); send(() => board.setLedDirection(base, d)) }} />
+              </View>
+              <SliderRow
+                label="Alignment"
+                value={align}
+                min={0}
+                max={359}
+                onChange={(v) => { setAlign(v); alignThrottle.run(() => board.setLedAlign(base, v).catch(() => {})) }}
+                onComplete={(v) => { setAlign(v); alignThrottle.flush(() => send(() => board.setLedAlign(base, v))) }}
+              />
+              <SliderRow label="Glow size (LEDs)" value={ballSize} min={1} max={30} onChange={setBallSize} onComplete={(v) => send(() => board.setLedBallSize(base, v))} />
+
+              {/* Background */}
+              <View style={[styles.sectionHead, { borderTopColor: colors.border }]}>
+                <Text style={{ color: colors.foreground, fontSize: font.size.md, fontWeight: font.weight.semibold }}>Background</Text>
+                <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>What renders behind the blob.</Text>
+              </View>
+              <Select value={ballBg} options={BG_OPTIONS} onChange={(bg) => { setBallBg(bg); send(() => board.setLedBallBg(base, bg)) }} />
+              {bgInputs.palette ? (
+                <View>
+                  <Text style={[styles.label, { color: colors.foreground }]}>Background palette</Text>
+                  <Select value={palette} options={PALETTE_OPTIONS} onChange={(p) => { setPalette(p); send(() => board.setLedPalette(base, p)) }} />
+                </View>
+              ) : null}
+              {ballBg === 'static' || bgInputs.color2 ? (
+                <ColorField
+                  label={ballBg === 'static' ? 'Background color' : 'Background 2nd color'}
+                  value={color2}
+                  onChange={(hex) => { setColor2(hex); color2Throttle.run(() => board.setLedColor2(base, hex).catch(() => {})) }}
+                  onCommit={(hex) => { setColor2(hex); color2Throttle.flush(() => send(() => board.setLedColor2(base, hex))) }}
+                />
+              ) : null}
+              {ballBg !== 'static' && ballBg !== 'off' && bgInputs.color && !bgInputs.color2 && !bgInputs.palette ? (
+                <Text style={[styles.hint, { color: colors.mutedForeground }]}>This background reuses the blob color above (the firmware shares one color for both).</Text>
+              ) : null}
+              {ballBg !== 'off' ? (
+                <SliderRow label="Background brightness" value={ballBgBright} min={0} max={255} onChange={setBallBgBright} onComplete={(v) => send(() => board.setLedBallBgBright(base, v))} />
+              ) : null}
             </View>
           ) : null}
-
-          {inputs.color ? (
-            <ColorField
-              label={inputs.color2 ? 'Primary color' : 'Color'}
-              value={color}
-              onChange={(hex) => {
-                setColor(hex)
-                colorThrottle.run(() => board.setLedColor(base, hex).catch(() => {}))
-              }}
-              onCommit={(hex) => {
-                setColor(hex)
-                colorThrottle.flush(() => send(() => board.setLedColor(base, hex)))
-              }}
-              onActiveChange={(active) => setScrollEnabled(!active)}
-            />
-          ) : null}
-          {inputs.color2 ? (
-            <ColorField
-              label="Secondary color"
-              value={color2}
-              onChange={(hex) => {
-                setColor2(hex)
-                color2Throttle.run(() => board.setLedColor2(base, hex).catch(() => {}))
-              }}
-              onCommit={(hex) => {
-                setColor2(hex)
-                color2Throttle.flush(() => send(() => board.setLedColor2(base, hex)))
-              }}
-              onActiveChange={(active) => setScrollEnabled(!active)}
-            />
-          ) : null}
         </Card>
+
+        {!isBall ? (
+          <Card>
+            <SliderRow
+              label="Brightness"
+              value={brightness}
+              min={0}
+              max={255}
+              onChange={(v) => { brightnessTouchedRef.current = Date.now(); setBrightness(v) }}
+              onComplete={(v) => { brightnessTouchedRef.current = Date.now(); send(() => board.setLedBrightness(base, v)) }}
+            />
+            <View style={{ height: spacing.lg }} />
+            <SliderRow label="Speed" value={speed} min={1} max={255} onChange={setSpeed} onComplete={(v) => send(() => board.setLedSpeed(base, v))} />
+          </Card>
+        ) : null}
+
+        {!isBall ? (
+          <Card>
+            <CardTitle>Effect</CardTitle>
+            <Select value={effect} options={EFFECT_OPTIONS} onChange={applyEffect} />
+
+            {inputs.palette ? (
+              <View style={{ marginTop: spacing.md }}>
+                <Text style={[styles.label, { color: colors.foreground }]}>Palette</Text>
+                <Select
+                  value={palette}
+                  options={PALETTE_OPTIONS}
+                  onChange={(p) => {
+                    setPalette(p)
+                    send(() => board.setLedPalette(base, p))
+                  }}
+                />
+              </View>
+            ) : null}
+
+            {inputs.color ? (
+              <View style={{ marginTop: spacing.md }}>
+                <ColorField
+                  label={inputs.color2 ? 'Primary color' : 'Color'}
+                  value={color}
+                  onChange={(hex) => {
+                    setColor(hex)
+                    colorThrottle.run(() => board.setLedColor(base, hex).catch(() => {}))
+                  }}
+                  onCommit={(hex) => {
+                    setColor(hex)
+                    colorThrottle.flush(() => send(() => board.setLedColor(base, hex)))
+                  }}
+                />
+              </View>
+            ) : null}
+            {inputs.color2 ? (
+              <View style={{ marginTop: spacing.md }}>
+                <ColorField
+                  label="Secondary color"
+                  value={color2}
+                  onChange={(hex) => {
+                    setColor2(hex)
+                    color2Throttle.run(() => board.setLedColor2(base, hex).catch(() => {}))
+                  }}
+                  onCommit={(hex) => {
+                    setColor2(hex)
+                    color2Throttle.flush(() => send(() => board.setLedColor2(base, hex)))
+                  }}
+                />
+              </View>
+            ) : null}
+          </Card>
+        ) : null}
 
         <Card>
           <CardTitle>Motion-reactive</CardTitle>
@@ -377,8 +485,12 @@ function ColorWheel({ size, value, onChange, onComplete, onActiveChange }: { siz
   )
 }
 
-function ColorField({ label, value, onChange, onCommit, onActiveChange }: { label: string; value: string; onChange: (hex: string) => void; onCommit: (hex: string) => void; onActiveChange?: (active: boolean) => void }) {
+// A compact tappable row (label · swatch · hex) that opens a bottom-sheet
+// overlay with the wheel, presets, and hex input — so the wheel only takes up
+// space when you're actually picking a color.
+function ColorField({ label, value, onChange, onCommit }: { label: string; value: string; onChange: (hex: string) => void; onCommit: (hex: string) => void; onActiveChange?: (active: boolean) => void }) {
   const colors = useTheme((s) => s.colors)
+  const [open, setOpen] = useState(false)
   const [hex, setHex] = useState(value.replace(/^#/, ''))
   useEffect(() => setHex(value.replace(/^#/, '')), [value])
 
@@ -388,42 +500,57 @@ function ColorField({ label, value, onChange, onCommit, onActiveChange }: { labe
   }
 
   return (
-    <View style={{ marginTop: spacing.lg }}>
-      <View style={styles.colorHeader}>
-        <Text style={[styles.label, { color: colors.foreground, marginBottom: 0 }]}>{label}</Text>
+    <>
+      <Pressable
+        onPress={() => setOpen(true)}
+        style={[styles.colorTrigger, { borderColor: colors.border, backgroundColor: colors.inputBackground }]}
+      >
+        <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>{label}</Text>
         <View style={styles.colorValue}>
-          <View style={[styles.colorPreview, { backgroundColor: value, borderColor: colors.border }]} />
           <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, fontVariant: ['tabular-nums'] }}>{value.toUpperCase()}</Text>
+          <View style={[styles.colorPreview, { backgroundColor: value, borderColor: colors.border }]} />
+          <MaterialIcons name="chevron-right" size={20} color={colors.mutedForeground} />
         </View>
-      </View>
+      </Pressable>
 
-      <View style={styles.wheelWrap}>
-        <ColorWheel size={WHEEL_SIZE} value={value} onChange={onChange} onComplete={onCommit} onActiveChange={onActiveChange} />
-      </View>
+      <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
+        <Pressable style={styles.colorBackdrop} onPress={() => setOpen(false)}>
+          <Pressable style={[styles.colorSheet, { backgroundColor: colors.background, borderColor: colors.border }]} onPress={() => {}}>
+            <View style={styles.colorSheetHead}>
+              <Text style={{ color: colors.foreground, fontSize: font.size.lg, fontWeight: font.weight.semibold }}>{label}</Text>
+              <IconButton icon="close" size={26} color={colors.foreground} onPress={() => setOpen(false)} />
+            </View>
 
-      <Text style={[styles.presetLabel, { color: colors.mutedForeground }]}>Presets</Text>
-      <View style={styles.swatches}>
-        {SWATCHES.map((c) => {
-          const active = c.toUpperCase() === value.toUpperCase()
-          return <Pressable key={c} onPress={() => onCommit(c)} style={[styles.swatch, { backgroundColor: c, borderColor: active ? colors.foreground : colors.border, borderWidth: active ? 3 : 1 }]} />
-        })}
-      </View>
+            <View style={styles.wheelWrap}>
+              <ColorWheel size={WHEEL_SIZE} value={value} onChange={onChange} onComplete={onCommit} />
+            </View>
 
-      <View style={[styles.hexRow, { borderColor: colors.border, backgroundColor: colors.inputBackground }]}>
-        <Text style={{ color: colors.mutedForeground, fontSize: font.size.md }}>#</Text>
-        <TextInput
-          value={hex}
-          onChangeText={(t) => setHex(t.replace(/[^0-9a-fA-F]/g, '').slice(0, 6))}
-          onBlur={commitHex}
-          onSubmitEditing={commitHex}
-          autoCapitalize="characters"
-          autoCorrect={false}
-          placeholder="RRGGBB"
-          placeholderTextColor={colors.mutedForeground}
-          style={{ flex: 1, color: colors.foreground, fontSize: font.size.md, letterSpacing: 1 }}
-        />
-      </View>
-    </View>
+            <Text style={[styles.presetLabel, { color: colors.mutedForeground }]}>Presets</Text>
+            <View style={styles.swatches}>
+              {SWATCHES.map((c) => {
+                const active = c.toUpperCase() === value.toUpperCase()
+                return <Pressable key={c} onPress={() => onCommit(c)} style={[styles.swatch, { backgroundColor: c, borderColor: active ? colors.foreground : colors.border, borderWidth: active ? 3 : 1 }]} />
+              })}
+            </View>
+
+            <View style={[styles.hexRow, { borderColor: colors.border, backgroundColor: colors.inputBackground }]}>
+              <Text style={{ color: colors.mutedForeground, fontSize: font.size.md }}>#</Text>
+              <TextInput
+                value={hex}
+                onChangeText={(t) => setHex(t.replace(/[^0-9a-fA-F]/g, '').slice(0, 6))}
+                onBlur={commitHex}
+                onSubmitEditing={commitHex}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                placeholder="RRGGBB"
+                placeholderTextColor={colors.mutedForeground}
+                style={{ flex: 1, color: colors.foreground, fontSize: font.size.md, letterSpacing: 1 }}
+              />
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </>
   )
 }
 
@@ -444,11 +571,17 @@ const styles = StyleSheet.create({
   empty: { alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
   banner: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1 },
   label: { fontSize: font.size.sm, fontWeight: font.weight.medium, marginBottom: spacing.sm },
+  ballHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sectionHead: { borderTopWidth: 1, paddingTop: spacing.md, marginTop: spacing.xs },
   hint: { fontSize: font.size.xs },
   power: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, height: 48, borderRadius: radius.md },
   colorHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   colorValue: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   colorPreview: { width: 24, height: 24, borderRadius: 12, borderWidth: 1 },
+  colorTrigger: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: radius.md, borderWidth: 1, paddingLeft: spacing.md, paddingRight: spacing.sm, height: 50 },
+  colorBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  colorSheet: { borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1, padding: spacing.lg, paddingBottom: spacing.xl },
+  colorSheetHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   wheelWrap: { alignItems: 'center', marginTop: spacing.md, marginBottom: spacing.lg },
   presetLabel: { fontSize: font.size.xs, fontWeight: font.weight.medium, marginBottom: spacing.sm, textTransform: 'uppercase', letterSpacing: 0.5 },
   swatches: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },

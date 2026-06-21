@@ -29,6 +29,17 @@ export interface RawStatus {
     effect: string
     brightness: number
   }
+  /** Wall clock — same shape as /sand_time. `synced:false` means the clock isn't
+   * set, so quiet hours won't fire (the app should push the device time). */
+  time?: RawTime
+}
+
+/** The table's wall clock (from /sand_time or status.time). */
+export interface RawTime {
+  epoch: number // unix seconds
+  synced: boolean // true once the clock has been set (NTP or app push)
+  local: string // formatted local time on the table
+  tz: string // effective POSIX TZ
 }
 
 export interface Status {
@@ -51,6 +62,8 @@ export interface Status {
   isQuiet: boolean
   /** LED state, or null if the table has no LEDs configured. */
   led: { effect: string; brightness: number } | null
+  /** Table wall clock, or null on firmware that doesn't report it. */
+  clock: RawTime | null
   state: string
   connected: boolean
 }
@@ -93,6 +106,7 @@ export function translateStatus(raw: RawStatus): Status {
     pauseTotal,
     isQuiet: raw.playlist?.quiet ?? false,
     led: raw.led ? { effect: raw.led.effect, brightness: raw.led.brightness } : null,
+    clock: raw.time ?? null,
     state,
     connected: true,
   }

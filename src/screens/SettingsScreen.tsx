@@ -10,6 +10,7 @@ import { useBranding, DEFAULT_BRAND } from '../stores/useBranding'
 import { toast } from '../stores/useToast'
 import { Button, Card, CardTitle, IconButton, Select } from '../components/ui'
 import { Screen } from '../components/Screen'
+import { StillSands } from '../components/StillSands'
 import { useDiscovery, type DiscoveredTable } from '../lib/discovery'
 import { playlistName } from '../lib/playlists'
 import { pickLogo, clearLogo } from '../lib/branding'
@@ -339,6 +340,8 @@ export function SettingsScreen() {
             ) : null}
           </Card>
         ) : null}
+
+        {base ? <StillSands base={base} /> : null}
 
         <Card>
           <CardTitle>App branding</CardTitle>

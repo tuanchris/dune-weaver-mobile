@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
+import React, { useEffect, useRef, useState } from 'react'
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board } from '../api/board'
 import { useBoards } from '../stores/useBoards'
@@ -33,25 +33,6 @@ export function ControlScreen() {
   const speedHoldRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => { if (speedHoldRef.current) clearTimeout(speedHoldRef.current) }, [])
 
-  // Quiet-hours ("Still Sands") state, seeded from /sand_settings.
-  const [quietEnabled, setQuietEnabled] = useState(false)
-  const [quietSlots, setQuietSlots] = useState('')
-
-  const loadSettings = useCallback(async () => {
-    if (!base) return
-    try {
-      const s = await board.settings(base)
-      setQuietEnabled((s['Sands/Enabled'] ?? '').toUpperCase() === 'ON' || s['Sands/Enabled'] === '1')
-      setQuietSlots(s['Sands/Slots'] ?? '')
-    } catch {
-      // leave defaults
-    }
-  }, [base])
-
-  useEffect(() => {
-    loadSettings()
-  }, [loadSettings])
-
   const act = async (fn: () => Promise<void>, msg: string) => {
     if (!base) return
     setBusy(true)
@@ -64,15 +45,6 @@ export function ControlScreen() {
     } finally {
       setBusy(false)
     }
-  }
-
-  const toggleQuiet = (on: boolean) => {
-    setQuietEnabled(on)
-    act(() => board.setQuietEnabled(base!, on), on ? 'Quiet hours on' : 'Quiet hours off')
-  }
-
-  const saveSlots = () => {
-    act(() => board.setQuietSlots(base!, quietSlots.trim()), 'Quiet hours saved')
   }
 
   if (!base) {
@@ -96,7 +68,7 @@ export function ControlScreen() {
         <Card>
           <CardTitle>Movement Controls</CardTitle>
           <View style={styles.row}>
-            <Button title="Home" icon="home" variant="secondary" flex disabled={busy} onPress={() => act(() => board.home(base), 'Homing')} />
+            <Button title="Home" icon="home" variant="primary" flex disabled={busy} onPress={() => act(() => board.home(base), 'Homing')} />
             <Button title="Stop" icon="stop" variant="destructive" flex disabled={busy} onPress={() => act(() => board.stop(base), 'Stopped')} />
           </View>
           {isAlarm ? (
@@ -152,29 +124,6 @@ export function ControlScreen() {
             }}
           />
         </Card>
-
-        <Card>
-          <View style={styles.quietHeader}>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.cardTitle, { color: colors.foreground, marginBottom: 2 }]}>Quiet hours</Text>
-              <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>“Still Sands” — pauses motion on a schedule.</Text>
-            </View>
-            <Switch value={quietEnabled} onValueChange={toggleQuiet} disabled={busy} />
-          </View>
-          <View style={[styles.row, { marginTop: spacing.md }]}>
-            <TextInput
-              value={quietSlots}
-              onChangeText={setQuietSlots}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="21:00-08:00@daily"
-              placeholderTextColor={colors.mutedForeground}
-              style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground }]}
-            />
-            <Button title="Save" variant="secondary" disabled={busy} onPress={saveSlots} />
-          </View>
-          <Text style={[styles.hint, { color: colors.mutedForeground }]}>Format: HH:MM-HH:MM@days (e.g. @daily, @mon,tue). Needs the table’s clock set.</Text>
-        </Card>
       </ScrollView>
     </Screen>
   )
@@ -195,12 +144,9 @@ function ActionTile({ icon, label, onPress, disabled }: { icon: IconName; label:
 }
 
 const styles = StyleSheet.create({
-  cardTitle: { fontSize: font.size.md, fontWeight: font.weight.semibold, marginBottom: spacing.md },
   row: { flexDirection: 'row', gap: spacing.sm, alignItems: 'center' },
   tileRow: { flexDirection: 'row', gap: spacing.sm },
   tile: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 6, height: 72, borderRadius: radius.md, borderWidth: 1 },
   hint: { fontSize: font.size.xs, marginTop: spacing.md },
-  input: { flex: 1, borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 46, fontSize: font.size.md },
   speedHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm },
-  quietHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
 })

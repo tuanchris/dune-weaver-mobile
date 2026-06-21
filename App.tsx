@@ -21,6 +21,7 @@ import { useTheme } from './src/stores/useTheme'
 import { useLibrary } from './src/stores/useLibrary'
 import { usePrefs } from './src/stores/usePrefs'
 import { useBranding } from './src/stores/useBranding'
+import { syncClock } from './src/lib/clock'
 
 const Tab = createBottomTabNavigator()
 
@@ -61,6 +62,9 @@ export default function App() {
     const base = useBoards.getState().getActiveBase()
     setBase(base)
     useLibrary.getState().loadTable(base, true)
+    // Keep the table's clock correct so Still Sands fires on schedule: push the
+    // device time/timezone if they differ (best-effort, once per active board).
+    if (base) syncClock(base)
   }, [activeId, boards, setBase])
 
   const navTheme: Theme = {

@@ -60,7 +60,7 @@ export function Screen({
           <View style={[styles.dot, { backgroundColor: connected ? colors.success : colors.mutedForeground }]} />
           <View style={{ flex: 1 }} />
           <IconButton icon={mode === 'dark' ? 'light-mode' : 'dark-mode'} size={20} color={colors.mutedForeground} onPress={toggle} />
-          <IconButton icon="power-settings-new" size={20} color={colors.destructive} onPress={power} disabled={!base} />
+          <IconButton icon="restart-alt" size={20} color={colors.destructive} onPress={power} disabled={!base} />
         </View>
       </View>
 

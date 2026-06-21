@@ -22,10 +22,9 @@ function clearDir(dir: Directory): void {
 
 /**
  * Pick from the photo library via expo-image-picker. Required lazily (not a
- * top-level import) and guarded: the native module only exists in a dev build
- * that bundled it, so on a stock/old build this returns 'unavailable' and the
- * caller falls back to the Files picker instead of crashing at startup.
- * A denied photo permission throws (a real choice — don't silently fall back).
+ * top-level import) and guarded: until the dev client is rebuilt with the
+ * module this returns 'unavailable' and the caller falls back to the Files
+ * picker instead of crashing. A denied photo permission throws.
  */
 async function pickViaPhotos(): Promise<string | null | 'unavailable'> {
   let ImagePicker: typeof import('expo-image-picker')
@@ -62,10 +61,10 @@ async function pickViaFiles(): Promise<string | null> {
 }
 
 /**
- * Let the user pick a logo (square-cropped from the photo library where
- * available, else the Files browser) and copy it into the app's document
- * storage so it survives relaunches. Returns the persisted file:// uri, or null
- * if cancelled. Old logos are removed first; the filename is timestamped so the
+ * Let the user pick a logo (from the photo library where available, else the
+ * Files browser), square-cropped, and copy it into the app's document storage
+ * so it survives relaunches. Returns the persisted file:// uri, or null if
+ * cancelled. Old logos are removed first; the filename is timestamped so the
  * <Image> cache doesn't show a stale picture after replacing.
  */
 export async function pickLogo(): Promise<string | null> {
