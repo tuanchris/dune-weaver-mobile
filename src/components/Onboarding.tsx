@@ -1,11 +1,12 @@
-import React, { useState } from 'react'
-import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native'
+import React, { useEffect, useState } from 'react'
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { normalizeBase, testBoard } from '../api/board'
 import { useBoards } from '../stores/useBoards'
 import { useTheme } from '../stores/useTheme'
 import { toast } from '../stores/useToast'
+import { useDiscovery, type DiscoveredTable } from '../lib/discovery'
 import { Button } from './ui'
 import { radius, spacing, font } from '../theme'
 
@@ -15,6 +16,18 @@ export function Onboarding() {
   const [name, setName] = useState('')
   const [host, setHost] = useState('')
   const [busy, setBusy] = useState(false)
+
+  // mDNS discovery — kick off a scan as soon as the welcome screen appears so
+  // tables show up without the user having to know their IP.
+  const { available: discoveryAvailable, scanning, tables: found, start, stop } = useDiscovery()
+  useEffect(() => {
+    if (discoveryAvailable) start()
+  }, [discoveryAvailable, start])
+
+  const addDiscovered = (t: DiscoveredTable) => {
+    addBoard(t.name, t.base)
+    toast.success(`Connected to ${t.name}`)
+  }
 
   const connect = async () => {
     if (!host.trim()) {
@@ -37,41 +50,85 @@ export function Onboarding() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.wrap}>
-        <MaterialIcons name="blur-circular" size={64} color={colors.primary} />
-        <Text style={[styles.title, { color: colors.foreground }]}>Dune Weaver</Text>
-        <Text style={[styles.sub, { color: colors.mutedForeground }]}>
-          Connect to your sand table on the local network.
-        </Text>
-        <View style={styles.form}>
-          <TextInput
-            value={name}
-            onChangeText={setName}
-            placeholder="Name (optional)"
-            placeholderTextColor={colors.mutedForeground}
-            style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground }]}
-          />
-          <TextInput
-            value={host}
-            onChangeText={setHost}
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="url"
-            placeholder="IP or host (e.g. 192.168.68.160)"
-            placeholderTextColor={colors.mutedForeground}
-            style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground }]}
-          />
-          <Button title="Connect" icon="wifi-tethering" loading={busy} onPress={connect} />
-        </View>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+        <ScrollView contentContainerStyle={styles.wrap} keyboardShouldPersistTaps="handled">
+          <MaterialIcons name="blur-circular" size={64} color={colors.primary} />
+          <Text style={[styles.title, { color: colors.foreground }]}>Dune Weaver</Text>
+          <Text style={[styles.sub, { color: colors.mutedForeground }]}>
+            Connect to your sand table on the local network.
+          </Text>
+
+          {discoveryAvailable ? (
+            <View style={styles.form}>
+              <Button
+                title={scanning ? 'Scanning…' : 'Search Wi-Fi for tables'}
+                icon={scanning ? undefined : 'wifi-find'}
+                loading={scanning && found.length === 0}
+                onPress={scanning ? stop : start}
+              />
+              {found.map((t) => (
+                <Pressable
+                  key={t.key}
+                  onPress={() => addDiscovered(t)}
+                  style={[styles.foundRow, { borderColor: colors.border, backgroundColor: colors.cardElevated }]}
+                >
+                  <MaterialIcons name="cast-connected" size={22} color={colors.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>{t.name}</Text>
+                    <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{t.base}</Text>
+                  </View>
+                  <MaterialIcons name="add" size={22} color={colors.primary} />
+                </Pressable>
+              ))}
+              {found.length === 0 ? (
+                <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, textAlign: 'center' }}>
+                  {scanning
+                    ? 'Looking for tables on your Wi-Fi…'
+                    : 'No tables found yet — make sure the phone and table share the same Wi-Fi, or add one below.'}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
+
+          <View style={styles.divider}>
+            <View style={[styles.line, { backgroundColor: colors.border }]} />
+            <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>or enter manually</Text>
+            <View style={[styles.line, { backgroundColor: colors.border }]} />
+          </View>
+
+          <View style={styles.form}>
+            <TextInput
+              value={name}
+              onChangeText={setName}
+              placeholder="Name (optional)"
+              placeholderTextColor={colors.mutedForeground}
+              style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground }]}
+            />
+            <TextInput
+              value={host}
+              onChangeText={setHost}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              placeholder="IP or host (e.g. 192.168.68.160)"
+              placeholderTextColor={colors.mutedForeground}
+              style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground }]}
+            />
+            <Button title="Connect" icon="wifi-tethering" variant={discoveryAvailable ? 'secondary' : undefined} loading={busy} onPress={connect} />
+          </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   )
 }
 
 const styles = StyleSheet.create({
-  wrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl, gap: spacing.md },
+  wrap: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl, gap: spacing.md },
   title: { fontSize: font.size.xxl, fontWeight: font.weight.bold },
   sub: { fontSize: font.size.md, textAlign: 'center', marginBottom: spacing.lg },
   form: { alignSelf: 'stretch', gap: spacing.md },
+  foundRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, borderRadius: radius.md, borderWidth: 1, padding: spacing.md },
+  divider: { flexDirection: 'row', alignItems: 'center', alignSelf: 'stretch', gap: spacing.md, marginVertical: spacing.lg },
+  line: { flex: 1, height: 1 },
   input: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 48, fontSize: font.size.md },
 })

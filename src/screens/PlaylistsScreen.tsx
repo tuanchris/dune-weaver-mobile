@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, Alert, Dimensions, FlatList, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, Alert, Dimensions, FlatList, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board, CLEAR_MODES, type ClearMode } from '../api/board'
 import { useBoards } from '../stores/useBoards'
@@ -10,11 +10,26 @@ import { Button, IconButton } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { PatternThumb } from '../components/PatternThumb'
 import { useLibrary } from '../stores/useLibrary'
+import { usePrefs, type PauseUnit, type PlaylistPref } from '../stores/usePrefs'
 import { loadPlaylist, savePlaylist, deletePlaylist, playlistName } from '../lib/playlists'
+import { SdBusyError } from '../lib/sd'
 import { radius, spacing, font } from '../theme'
 
-const PICKER_COLS = 3
-const PICKER_THUMB = Math.floor((Dimensions.get('window').width - spacing.md * 2 - spacing.md * (PICKER_COLS - 1)) / PICKER_COLS)
+const GRID_COLS = 3
+const GRID_THUMB = Math.floor((Dimensions.get('window').width - spacing.md * 2 - spacing.md * (GRID_COLS - 1)) / GRID_COLS)
+
+// Mirrors dw's preExecutionOptions copy so the clear selector reads the same.
+const CLEAR_DESC: Record<ClearMode, string> = {
+  none: 'Start drawing immediately without clearing the sand first',
+  adaptive: 'Automatically picks the best clear direction based on where the ball is',
+  in: 'Spirals outward from the center to erase the current pattern',
+  out: 'Spirals inward from the edge to erase the current pattern',
+  sideway: 'Sweeps side-to-side across the sand to erase the current pattern',
+  random: 'Picks a random clear direction each run',
+}
+
+const UNIT_SUFFIX: Record<PauseUnit, string> = { sec: 's', min: 'm', hr: 'h' }
+const DEFAULT_PREF: PlaylistPref = { loop: false, shuffle: false, pauseTime: 0, pauseUnit: 'sec', clearMode: 'none' }
 
 function patternLabel(file: string) {
   return file.replace(/\.thr$/i, '').split('/').pop() ?? file
@@ -30,17 +45,36 @@ export function PlaylistsScreen() {
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
 
-  // Editor state
-  const [editorOpen, setEditorOpen] = useState(false)
-  const [editExisting, setEditExisting] = useState<string | null>(null) // filename or null (new)
+  // Create-playlist modal (name only, like dw — empty playlist then open detail).
+  const [createOpen, setCreateOpen] = useState(false)
+  const [newName, setNewName] = useState('')
+
+  // Detail view state. `current` is the open playlist's filename (null = closed).
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [current, setCurrent] = useState<string | null>(null)
   const [name, setName] = useState('')
+  // `items` is the working list (edited locally); `baseline` is what's on flash.
+  // Edits are batched and only written to the SD card when the detail closes or
+  // the playlist is played — not on every add/remove.
   const [items, setItems] = useState<string[]>([])
-  const [loop, setLoop] = useState(false)
-  const [shuffle, setShuffle] = useState(false)
-  const [pauseSec, setPauseSec] = useState('0')
-  const [pauseFromStart, setPauseFromStart] = useState(false)
-  const [clearMode, setClearMode] = useState<ClearMode>('none')
-  const [autoHome, setAutoHome] = useState('0')
+  const [baseline, setBaseline] = useState<string[]>([])
+  const dirty = useMemo(() => items.length !== baseline.length || items.some((p, i) => p !== baseline[i]), [items, baseline])
+
+  // Playback options for the open playlist. Remembered per-playlist (see
+  // usePrefs) and applied to the board when Play is pressed — dw passes them as
+  // run params; the firmware only holds a single global set, so we re-apply the
+  // saved one each time a playlist runs.
+  const savedPrefs = usePrefs((s) => s.playlistPrefs)
+  const setPlaylistPref = usePrefs((s) => s.setPlaylistPref)
+  const [pref, setPref] = useState<PlaylistPref>(DEFAULT_PREF)
+  const [clearOpen, setClearOpen] = useState(false)
+
+  // Update one or more options and remember them for the open playlist.
+  const updatePref = (patch: Partial<PlaylistPref>) => {
+    const next = { ...pref, ...patch }
+    setPref(next)
+    if (current) setPlaylistPref(current, next)
+  }
 
   // Pattern picker state. The on-table list comes from the shared store (fetched
   // once at startup) — the picker never triggers its own manifest read.
@@ -81,65 +115,122 @@ export function PlaylistsScreen() {
     }
   }
 
-  // Mode/Shuffle/Pause/Clear/AutoHome are global NVS settings on the board, not
-  // per-playlist — seed the editor from the table's current values so toggles
-  // reflect reality.
-  const seedSettings = async () => {
+  const pauseSeconds = () => {
+    if (pref.pauseUnit === 'hr') return Math.round(pref.pauseTime * 3600)
+    if (pref.pauseUnit === 'min') return Math.round(pref.pauseTime * 60)
+    return Math.round(pref.pauseTime)
+  }
+
+  // Load the saved playback options for a playlist. If it has none yet, fall
+  // back to the board's current global settings (deriving a friendly pause unit
+  // from the stored seconds) so the controls reflect reality the first time.
+  const loadPref = async (filename: string) => {
+    const saved = savedPrefs[filename]
+    if (saved) {
+      setPref(saved)
+      return
+    }
+    setPref(DEFAULT_PREF)
     if (!base) return
     try {
       const s = await board.settings(base)
-      setLoop((s['Playlist/Mode'] ?? '').toLowerCase() === 'loop')
-      setShuffle((s['Playlist/Shuffle'] ?? '').toUpperCase() === 'ON' || s['Playlist/Shuffle'] === '1')
-      setPauseSec(String(parseInt(s['Playlist/PauseTime'] ?? '0', 10) || 0))
-      setPauseFromStart((s['Playlist/PauseFromStart'] ?? '').toUpperCase() === 'ON' || s['Playlist/PauseFromStart'] === '1')
-      setClearMode((CLEAR_MODES.find((c) => c.mode === s['Playlist/ClearPattern'])?.mode ?? 'none'))
-      setAutoHome(String(parseInt(s['Playlist/AutoHome'] ?? '0', 10) || 0))
+      const secs = parseInt(s['Playlist/PauseTime'] ?? '0', 10) || 0
+      const seeded: PlaylistPref = {
+        loop: (s['Playlist/Mode'] ?? '').toLowerCase() === 'loop',
+        shuffle: (s['Playlist/Shuffle'] ?? '').toUpperCase() === 'ON' || s['Playlist/Shuffle'] === '1',
+        clearMode: CLEAR_MODES.find((c) => c.mode === s['Playlist/ClearPattern'])?.mode ?? 'none',
+        pauseUnit: secs && secs % 3600 === 0 ? 'hr' : secs && secs % 60 === 0 ? 'min' : 'sec',
+        pauseTime: secs && secs % 3600 === 0 ? secs / 3600 : secs && secs % 60 === 0 ? secs / 60 : secs,
+      }
+      // Only adopt the board seed if the user hasn't already navigated away.
+      setPref((p) => (p === DEFAULT_PREF ? seeded : p))
     } catch {
-      // keep whatever defaults are showing
+      // keep defaults
     }
   }
 
-  const openNew = () => {
-    setEditExisting(null)
-    setName('')
-    setItems([])
-    setLoop(false)
-    setShuffle(false)
-    setPauseSec('0')
-    setPauseFromStart(false)
-    setClearMode('none')
-    setAutoHome('0')
-    setEditorOpen(true)
-    seedSettings()
+  const openCreate = () => {
+    setNewName('')
+    setCreateOpen(true)
   }
 
-  const openEdit = async (filename: string) => {
+  const createPlaylist = async () => {
     if (!base) return
-    setEditExisting(filename)
+    const trimmed = newName.trim()
+    if (!trimmed) {
+      toast.error('Name the playlist')
+      return
+    }
+    setBusy(true)
+    try {
+      const fname = await savePlaylist(base, trimmed, [])
+      setCreateOpen(false)
+      setNewName('')
+      await load()
+      // Open the freshly created (empty) playlist straight into the detail view.
+      setCurrent(fname)
+      setName(trimmed)
+      setItems([])
+      setBaseline([])
+      setDetailOpen(true)
+      loadPref(fname)
+    } catch (e) {
+      toast.error(`Create failed: ${(e as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const openDetail = async (filename: string) => {
+    if (!base) return
+    setCurrent(filename)
     setName(playlistName(filename))
     setItems([])
-    setEditorOpen(true)
-    seedSettings()
+    setBaseline([])
+    setDetailOpen(true)
+    loadPref(filename)
     try {
-      setItems(await loadPlaylist(base, filename))
+      const loaded = await loadPlaylist(base, filename)
+      setItems(loaded)
+      setBaseline(loaded)
     } catch {
       toast.error('Could not read playlist')
     }
   }
 
-  const moveItem = (i: number, dir: -1 | 1) => {
-    const j = i + dir
-    if (j < 0 || j >= items.length) return
-    const next = [...items]
-    ;[next[i], next[j]] = [next[j], next[i]]
-    setItems(next)
+  // Edits stay local — `items` is mutated in memory and only written to flash by
+  // commitItems (on close or play). Returns false if the write failed so callers
+  // can keep the detail open instead of losing the edits.
+  const commitItems = async (): Promise<boolean> => {
+    if (!base || !current) return true
+    setBusy(true)
+    try {
+      await savePlaylist(base, playlistName(current), items)
+      setBaseline(items)
+      return true
+    } catch (e) {
+      toast.error(e instanceof SdBusyError ? 'Table is busy — try again once it stops.' : `Save failed: ${(e as Error).message}`)
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const closeDetail = async () => {
+    if (current && dirty) {
+      const ok = await commitItems()
+      if (!ok) return // keep the sheet open; the edits (and the error) are still visible
+    }
+    setDetailOpen(false)
   }
 
   const removeItem = (i: number) => setItems(items.filter((_, idx) => idx !== i))
 
   const openPicker = () => {
     if (!base) return
-    setPicked(new Set())
+    // Pre-select the current patterns so the picker both adds and removes,
+    // matching dw — saving replaces the list with the full selection.
+    setPicked(new Set(items))
     setPickerQuery('')
     setPickerOpen(true)
     loadTable(base) // no-op if already loaded; never re-reads mid-job
@@ -167,51 +258,42 @@ export function PlaylistsScreen() {
   }
 
   const confirmPicker = () => {
-    const additions = [...picked].filter((p) => !items.includes(p))
-    setItems([...items, ...additions])
+    // Keep existing order, append newly-picked at the end, drop deselected.
+    // Local only — the change is written when the detail closes or plays.
+    const kept = items.filter((p) => picked.has(p))
+    const added = [...picked].filter((p) => !items.includes(p))
+    setItems([...kept, ...added])
     setPickerOpen(false)
   }
 
-  const save = async () => {
-    if (!base) return
-    const trimmed = name.trim()
-    if (!trimmed) {
-      toast.error('Name the playlist')
-      return
-    }
-    if (items.length === 0) {
-      toast.error('Add at least one pattern')
-      return
+  // Save any pending edits, apply the chosen options to the board, then run — dw
+  // launches playback from the detail view via the floating Play button.
+  const run = async () => {
+    if (!base || !current || items.length === 0) return
+    if (dirty) {
+      const ok = await commitItems()
+      if (!ok) return
     }
     setBusy(true)
     try {
-      await savePlaylist(base, trimmed, items)
-      // Apply the playlist options to the board, best-effort: a settings hiccup
-      // must not make a successful save look like a failure. Playback is started
-      // from the playlist list, not from the editor.
-      try {
-        await board.setPlaylistMode(base, loop ? 'loop' : 'single')
-        await board.setPlaylistShuffle(base, shuffle)
-        await board.setPlaylistPause(base, Number(pauseSec) || 0)
-        await board.setPlaylistPauseFromStart(base, pauseFromStart)
-        await board.setPlaylistClearPattern(base, clearMode)
-        await board.setPlaylistAutoHome(base, Number(autoHome) || 0)
-      } catch {
-        // options are non-critical; the playlist file itself saved fine
-      }
-      toast.success(`Saved ${trimmed}`)
-      setEditorOpen(false)
-      await load()
-    } catch (e) {
-      toast.error(`Save failed: ${(e as Error).message}`)
+      await board.setPlaylistMode(base, pref.loop ? 'loop' : 'single')
+      await board.setPlaylistShuffle(base, pref.shuffle)
+      await board.setPlaylistPause(base, pauseSeconds())
+      await board.setPlaylistClearPattern(base, pref.clearMode)
+      await board.runPlaylist(base, current)
+      toast.success(`Started ${name}`)
+      setDetailOpen(false)
+      setTimeout(refreshStatus, 400)
+    } catch {
+      toast.error('Could not start playlist')
     } finally {
       setBusy(false)
     }
   }
 
   const del = () => {
-    if (!base || !editExisting) return
-    const target = editExisting
+    if (!base || !current) return
+    const target = current
     Alert.alert('Delete playlist', `Delete "${playlistName(target)}"?`, [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -222,7 +304,7 @@ export function PlaylistsScreen() {
           try {
             await deletePlaylist(base, target)
             toast.success('Deleted')
-            setEditorOpen(false)
+            setDetailOpen(false)
             await load()
           } catch {
             toast.error('Delete failed')
@@ -245,8 +327,10 @@ export function PlaylistsScreen() {
     )
   }
 
+  const pauseStep = pref.pauseUnit === 'hr' ? 0.5 : 1
+
   return (
-    <Screen title="Playlists" action={<Button title="New" icon="add" onPress={openNew} />}>
+    <Screen title="Playlists" action={<Button title="New" icon="add" onPress={openCreate} />}>
       {activePlaylist ? (
         <View style={[styles.activeBar, { backgroundColor: colors.card, borderColor: colors.primary }]}>
           <View style={{ flex: 1 }}>
@@ -274,131 +358,186 @@ export function PlaylistsScreen() {
           )
         }
         renderItem={({ item }) => (
-          <Pressable onPress={() => openEdit(item)} style={[styles.row, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Pressable onPress={() => openDetail(item)} style={[styles.row, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <MaterialIcons name="queue-music" size={22} color={colors.primary} />
             <Text numberOfLines={1} style={[styles.rowName, { color: colors.foreground }]}>
               {playlistName(item)}
             </Text>
-            <IconButton icon="edit" size={20} color={colors.mutedForeground} onPress={() => openEdit(item)} />
-            <Pressable
-              onPress={() => act(() => board.runPlaylist(base, item), `Started ${playlistName(item)}`)}
-              disabled={busy}
-              style={({ pressed }) => [styles.play, { backgroundColor: colors.primary, opacity: pressed ? 0.8 : 1 }]}
-            >
-              <MaterialIcons name="play-arrow" size={22} color="#fff" />
-            </Pressable>
+            <MaterialIcons name="chevron-right" size={24} color={colors.mutedForeground} />
           </Pressable>
         )}
       />
 
-      {/* Editor */}
-      <Modal visible={editorOpen} transparent animationType="slide" onRequestClose={() => setEditorOpen(false)}>
+      {/* Create playlist (name only) */}
+      <Modal visible={createOpen} transparent animationType="fade" onRequestClose={() => setCreateOpen(false)}>
+        <Pressable style={styles.centerBackdrop} onPress={() => setCreateOpen(false)}>
+          <Pressable style={[styles.createCard, { backgroundColor: colors.background, borderColor: colors.border }]} onPress={() => {}}>
+            <Text style={{ color: colors.foreground, fontSize: font.size.lg, fontWeight: font.weight.semibold }}>New playlist</Text>
+            <TextInput
+              value={newName}
+              onChangeText={setNewName}
+              autoFocus
+              placeholder="Playlist name"
+              placeholderTextColor={colors.mutedForeground}
+              onSubmitEditing={createPlaylist}
+              style={[styles.input, { color: colors.foreground, backgroundColor: colors.inputBackground, borderColor: colors.border }]}
+            />
+            <View style={{ flexDirection: 'row', gap: spacing.md }}>
+              <Button title="Cancel" variant="secondary" onPress={() => setCreateOpen(false)} flex />
+              <Button title="Create" icon="add" loading={busy} onPress={createPlaylist} flex />
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Detail view */}
+      <Modal visible={detailOpen} transparent animationType="slide" onRequestClose={closeDetail}>
         <View style={styles.modalBackdrop}>
           <View style={[styles.editorSheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
             <View style={styles.editorHeader}>
-              <IconButton icon="close" size={26} color={colors.foreground} onPress={() => setEditorOpen(false)} />
-              <Text style={{ color: colors.foreground, fontSize: font.size.lg, fontWeight: font.weight.semibold }}>
-                {editExisting ? 'Edit playlist' : 'New playlist'}
-              </Text>
-              {editExisting ? (
-                <IconButton icon="delete" size={24} color={colors.destructive} onPress={del} />
-              ) : (
-                <View style={{ width: 32 }} />
-              )}
+              <IconButton icon={dirty ? 'check' : 'close'} size={26} color={dirty ? colors.primary : colors.foreground} onPress={closeDetail} />
+              <View style={{ flex: 1, alignItems: 'center' }}>
+                <Text numberOfLines={1} style={{ color: colors.foreground, fontSize: font.size.lg, fontWeight: font.weight.semibold }}>
+                  {name}
+                </Text>
+                <Text style={{ color: dirty ? colors.primary : colors.mutedForeground, fontSize: font.size.xs }}>
+                  {items.length} pattern{items.length === 1 ? '' : 's'}{dirty ? ' · unsaved' : ''}
+                </Text>
+              </View>
+              <IconButton icon="delete" size={24} color={colors.destructive} onPress={del} />
             </View>
 
-            <ScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.md }}>
-              <TextInput
-                value={name}
-                onChangeText={setName}
-                editable={!editExisting}
-                placeholder="Playlist name"
-                placeholderTextColor={colors.mutedForeground}
-                style={[styles.input, { color: colors.foreground, backgroundColor: colors.inputBackground, borderColor: colors.border, opacity: editExisting ? 0.6 : 1 }]}
-              />
+            <View style={styles.detailSub}>
+              <Button title="Add patterns" icon="add" variant="secondary" onPress={openPicker} />
+            </View>
 
-              <View style={styles.optionRow}>
-                <Text style={{ color: colors.foreground }}>Loop</Text>
-                <Switch value={loop} onValueChange={setLoop} />
-              </View>
-              <View style={styles.optionRow}>
-                <Text style={{ color: colors.foreground }}>Shuffle</Text>
-                <Switch value={shuffle} onValueChange={setShuffle} />
-              </View>
-              <View style={styles.optionRow}>
-                <Text style={{ color: colors.foreground }}>Pause between (s)</Text>
-                <TextInput
-                  value={pauseSec}
-                  onChangeText={(t) => setPauseSec(t.replace(/[^0-9]/g, ''))}
-                  keyboardType="number-pad"
-                  style={[styles.numInput, { color: colors.foreground, backgroundColor: colors.inputBackground, borderColor: colors.border }]}
-                />
-              </View>
-              <View style={styles.optionRow}>
-                <View style={{ flex: 1, paddingRight: spacing.md }}>
-                  <Text style={{ color: colors.foreground }}>Pause from start</Text>
-                  <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>Measure the gap from each pattern’s start, not its end.</Text>
-                </View>
-                <Switch value={pauseFromStart} onValueChange={setPauseFromStart} />
-              </View>
-              <View style={styles.optionRow}>
-                <Text style={{ color: colors.foreground }}>Re-home every (patterns)</Text>
-                <TextInput
-                  value={autoHome}
-                  onChangeText={(t) => setAutoHome(t.replace(/[^0-9]/g, ''))}
-                  keyboardType="number-pad"
-                  style={[styles.numInput, { color: colors.foreground, backgroundColor: colors.inputBackground, borderColor: colors.border }]}
-                />
-              </View>
-
-              <View>
-                <Text style={{ color: colors.foreground, marginBottom: spacing.sm }}>Clear before each pattern</Text>
-                <View style={styles.clearChips}>
-                  {CLEAR_MODES.map((c) => {
-                    const active = c.mode === clearMode
-                    return (
-                      <Pressable
-                        key={c.mode}
-                        onPress={() => setClearMode(c.mode)}
-                        style={[styles.clearChip, { backgroundColor: active ? colors.primary : colors.card, borderColor: active ? colors.primary : colors.border }]}
-                      >
-                        <Text style={{ color: active ? '#fff' : colors.foreground, fontSize: font.size.sm, fontWeight: font.weight.medium }}>{c.label}</Text>
-                      </Pressable>
-                    )
-                  })}
-                </View>
-              </View>
-
-              <View style={styles.itemsHeader}>
-                <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>
-                  {items.length} pattern{items.length === 1 ? '' : 's'}
-                </Text>
-                <Button title="Add patterns" icon="add" variant="secondary" onPress={openPicker} />
-              </View>
-
-              {items.map((it, i) => (
-                <View key={`${it}-${i}`} style={[styles.itemRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, width: 22, textAlign: 'center' }}>{i + 1}</Text>
-                  <View style={[styles.itemThumb, { backgroundColor: colors.background }]}>
-                    <PatternThumb name={it} size={36} />
-                  </View>
-                  <Text numberOfLines={1} style={{ flex: 1, color: colors.foreground }}>
-                    {patternLabel(it)}
+            <FlatList
+              data={items}
+              key={GRID_COLS}
+              numColumns={GRID_COLS}
+              keyExtractor={(p, i) => `${p}-${i}`}
+              contentContainerStyle={{ padding: spacing.md, gap: spacing.md, paddingBottom: 160 }}
+              columnWrapperStyle={{ gap: spacing.md }}
+              ListEmptyComponent={
+                <View style={styles.empty}>
+                  <MaterialIcons name="library-music" size={40} color={colors.mutedForeground} />
+                  <Text style={{ color: colors.mutedForeground, marginTop: spacing.sm, textAlign: 'center' }}>
+                    Empty playlist. Tap “Add patterns” to get started.
                   </Text>
-                  <IconButton icon="arrow-upward" size={20} color={colors.mutedForeground} disabled={i === 0} onPress={() => moveItem(i, -1)} />
-                  <IconButton icon="arrow-downward" size={20} color={colors.mutedForeground} disabled={i === items.length - 1} onPress={() => moveItem(i, 1)} />
-                  <IconButton icon="close" size={20} color={colors.destructive} onPress={() => removeItem(i)} />
                 </View>
-              ))}
-            </ScrollView>
+              }
+              renderItem={({ item, index }) => (
+                <View style={styles.gridCell}>
+                  <View style={[styles.gridThumb, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                    <PatternThumb name={item} size={GRID_THUMB - 4} />
+                    <Pressable onPress={() => removeItem(index)} hitSlop={8} style={[styles.removeBadge, { backgroundColor: colors.destructive }]}>
+                      <MaterialIcons name="close" size={13} color="#fff" />
+                    </Pressable>
+                  </View>
+                  <Text numberOfLines={1} style={{ color: colors.foreground, fontSize: font.size.xs, fontWeight: font.weight.medium, maxWidth: '100%', textAlign: 'center' }}>
+                    {patternLabel(item)}
+                  </Text>
+                </View>
+              )}
+            />
 
-            <View style={[styles.editorActions, { borderTopColor: colors.border }]}>
-              <Button title="Save" icon="check" loading={busy} onPress={save} flex />
+            {/* Floating playback controls */}
+            <View style={styles.floatWrap} pointerEvents="box-none">
+              <View style={[styles.pill, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Pressable
+                  onPress={() => updatePref({ shuffle: !pref.shuffle })}
+                  style={[styles.pillBtn, pref.shuffle && { backgroundColor: colors.primary + '22' }]}
+                >
+                  <MaterialIcons name="shuffle" size={20} color={pref.shuffle ? colors.primary : colors.mutedForeground} />
+                </Pressable>
+                <Pressable
+                  onPress={() => updatePref({ loop: !pref.loop })}
+                  style={[styles.pillBtn, pref.loop && { backgroundColor: colors.primary + '22' }]}
+                >
+                  <MaterialIcons name="repeat" size={20} color={pref.loop ? colors.primary : colors.mutedForeground} />
+                </Pressable>
+
+                <View style={[styles.pillDivider, { backgroundColor: colors.border }]} />
+
+                <Pressable onPress={() => updatePref({ pauseTime: Math.max(0, pref.pauseTime - pauseStep) })} style={styles.stepBtn}>
+                  <MaterialIcons name="remove" size={18} color={colors.foreground} />
+                </Pressable>
+                <Pressable
+                  onPress={() => updatePref({ pauseUnit: pref.pauseUnit === 'sec' ? 'min' : pref.pauseUnit === 'min' ? 'hr' : 'sec' })}
+                  style={styles.pauseValue}
+                >
+                  <Text style={{ color: colors.foreground, fontSize: font.size.sm, fontWeight: font.weight.semibold }}>
+                    {pref.pauseTime}{UNIT_SUFFIX[pref.pauseUnit]}
+                  </Text>
+                  <MaterialIcons name="swap-vert" size={12} color={colors.mutedForeground} />
+                </Pressable>
+                <Pressable onPress={() => updatePref({ pauseTime: pref.pauseTime + pauseStep })} style={styles.stepBtn}>
+                  <MaterialIcons name="add" size={18} color={colors.foreground} />
+                </Pressable>
+
+                <View style={[styles.pillDivider, { backgroundColor: colors.border }]} />
+
+                <Pressable
+                  onPress={() => setClearOpen(true)}
+                  style={[styles.pillBtn, pref.clearMode !== 'none' && { backgroundColor: colors.primary + '22' }]}
+                >
+                  <MaterialIcons name="cleaning-services" size={20} color={pref.clearMode !== 'none' ? colors.primary : colors.mutedForeground} />
+                </Pressable>
+              </View>
+
+              <Pressable
+                onPress={run}
+                disabled={busy || items.length === 0}
+                style={({ pressed }) => [
+                  styles.playBig,
+                  { backgroundColor: items.length === 0 ? colors.border : colors.primary, opacity: pressed ? 0.85 : 1 },
+                ]}
+              >
+                {busy ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <MaterialIcons name="play-arrow" size={28} color="#fff" />
+                )}
+              </Pressable>
             </View>
           </View>
 
-          {/* Pattern picker — nested inside the editor Modal so it presents on top
-              (a sibling Modal would silently fail to appear over the editor). */}
+          {/* Clear-pattern selector — nested inside the detail Modal so it presents
+              on top (a sibling Modal would silently fail to appear). */}
+          <Modal visible={clearOpen} transparent animationType="slide" onRequestClose={() => setClearOpen(false)}>
+            <Pressable style={styles.modalBackdrop} onPress={() => setClearOpen(false)}>
+              <Pressable style={[styles.clearSheet, { backgroundColor: colors.background, borderColor: colors.border }]} onPress={() => {}}>
+                <View style={styles.editorHeader}>
+                  <View style={{ width: 32 }} />
+                  <Text style={{ color: colors.foreground, fontSize: font.size.lg, fontWeight: font.weight.semibold }}>Clear before each pattern</Text>
+                  <IconButton icon="close" size={26} color={colors.foreground} onPress={() => setClearOpen(false)} />
+                </View>
+                <ScrollView contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}>
+                  {CLEAR_MODES.map((c) => {
+                    const active = c.mode === pref.clearMode
+                    return (
+                      <Pressable
+                        key={c.mode}
+                        onPress={() => {
+                          updatePref({ clearMode: c.mode })
+                          setClearOpen(false)
+                        }}
+                        style={[styles.clearOption, { backgroundColor: colors.card, borderColor: active ? colors.primary : colors.border }]}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: colors.foreground, fontSize: font.size.md, fontWeight: font.weight.medium }}>{c.label}</Text>
+                          <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: 2 }}>{CLEAR_DESC[c.mode]}</Text>
+                        </View>
+                        {active ? <MaterialIcons name="check-circle" size={22} color={colors.primary} /> : null}
+                      </Pressable>
+                    )
+                  })}
+                </ScrollView>
+              </Pressable>
+            </Pressable>
+          </Modal>
+
+          {/* Pattern picker — nested inside the detail Modal so it presents on top. */}
           <Modal visible={pickerOpen} transparent animationType="slide" onRequestClose={() => setPickerOpen(false)}>
             <View style={styles.modalBackdrop}>
               <View style={[styles.editorSheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
@@ -432,8 +571,8 @@ export function PlaylistsScreen() {
 
                 <FlatList
                   data={pickerVisible}
-                  key={PICKER_COLS}
-                  numColumns={PICKER_COLS}
+                  key={GRID_COLS}
+                  numColumns={GRID_COLS}
                   keyExtractor={(p) => p}
                   contentContainerStyle={{ padding: spacing.md, gap: spacing.md }}
                   columnWrapperStyle={{ gap: spacing.md }}
@@ -448,14 +587,14 @@ export function PlaylistsScreen() {
                   renderItem={({ item }) => {
                     const on = picked.has(item)
                     return (
-                      <Pressable onPress={() => togglePick(item)} style={styles.pickCell}>
+                      <Pressable onPress={() => togglePick(item)} style={styles.gridCell}>
                         <View
                           style={[
-                            styles.pickThumb,
+                            styles.gridThumb,
                             { backgroundColor: colors.card, borderColor: on ? colors.primary : 'transparent' },
                           ]}
                         >
-                          <PatternThumb name={item} size={PICKER_THUMB - 4} />
+                          <PatternThumb name={item} size={GRID_THUMB - 4} />
                           {on ? (
                             <View style={[styles.pickCheck, { backgroundColor: colors.primary }]}>
                               <MaterialIcons name="check" size={14} color="#fff" />
@@ -470,7 +609,7 @@ export function PlaylistsScreen() {
                   }}
                 />
                 <View style={[styles.editorActions, { borderTopColor: colors.border }]}>
-                  <Button title={`Add ${picked.size || ''}`.trim()} icon="check" disabled={picked.size === 0} onPress={confirmPicker} flex />
+                  <Button title="Save selection" icon="check" loading={busy} onPress={confirmPicker} flex />
                 </View>
               </View>
             </View>
@@ -483,28 +622,35 @@ export function PlaylistsScreen() {
 
 const styles = StyleSheet.create({
   activeBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, margin: spacing.md, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderLeftWidth: 3 },
-  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, paddingTop: spacing.sm },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, marginBottom: spacing.sm },
   rowName: { flex: 1, fontSize: font.size.md, fontWeight: font.weight.medium },
-  play: { width: 40, height: 40, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
-  empty: { alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
+  empty: { alignItems: 'center', justifyContent: 'center', paddingVertical: 60, width: '100%' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  centerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: spacing.lg },
+  createCard: { width: '100%', maxWidth: 420, borderRadius: radius.xl, borderWidth: 1, padding: spacing.lg, gap: spacing.md },
   editorSheet: { height: '88%', borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1 },
   editorHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.md },
+  detailSub: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: spacing.md, paddingBottom: spacing.sm },
   input: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 46, fontSize: font.size.md },
-  optionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  numInput: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 40, width: 90, textAlign: 'center', fontSize: font.size.md },
-  itemsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.sm },
-  clearChips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  clearChip: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.pill, borderWidth: 1 },
-  itemRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, padding: spacing.sm, paddingLeft: spacing.sm, borderRadius: radius.md, borderWidth: 1 },
   editorActions: { flexDirection: 'row', gap: spacing.md, padding: spacing.md, borderTopWidth: 1 },
+  gridCell: { flex: 1 / GRID_COLS, alignItems: 'center', gap: spacing.xs },
+  gridThumb: { width: GRID_THUMB, height: GRID_THUMB, borderRadius: GRID_THUMB / 2, borderWidth: 2, alignItems: 'center', justifyContent: 'center', overflow: 'visible' },
+  removeBadge: { position: 'absolute', top: -4, right: -4, width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  pickCheck: { position: 'absolute', top: 2, right: 2, width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  // Floating controls
+  floatWrap: { position: 'absolute', bottom: spacing.xxl + spacing.md, left: 0, right: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
+  pill: { flexDirection: 'row', alignItems: 'center', height: 52, borderRadius: radius.pill, borderWidth: 1, paddingHorizontal: 6, gap: 2, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 6 },
+  pillBtn: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
+  pillDivider: { width: 1, height: 28, marginHorizontal: 4 },
+  stepBtn: { width: 30, height: 38, alignItems: 'center', justifyContent: 'center' },
+  pauseValue: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', minWidth: 44, paddingHorizontal: 2 },
+  playBig: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 6 },
+  // Clear selector
+  clearSheet: { maxHeight: '70%', borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1 },
+  clearOption: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1 },
+  // Picker
   pickerControls: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.md, paddingBottom: spacing.sm },
   search: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 40 },
   searchInput: { flex: 1, fontSize: font.size.md, paddingVertical: 0 },
   selectAll: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 40 },
-  pickCell: { flex: 1 / PICKER_COLS, alignItems: 'center', gap: spacing.xs },
-  pickThumb: { width: PICKER_THUMB, height: PICKER_THUMB, borderRadius: PICKER_THUMB / 2, borderWidth: 2, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-  pickCheck: { position: 'absolute', top: 2, right: 2, width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  itemThumb: { width: 36, height: 36, borderRadius: 18, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
 })

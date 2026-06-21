@@ -218,6 +218,12 @@ export const board = {
    */
   setFeedLive: (base: string, mmPerMin: number) => hit(base, `/sand_feed?mm=${clampInt(mmPerMin, 10, 500)}`),
 
+  // ---- Manual positioning (between patterns; needs Idle + homed, else HTTP 409) ----
+  /** Jog the ball to the center (ρ=0). */
+  moveToCenter: (base: string) => hit(base, '/sand_goto?rho=0'),
+  /** Jog the ball to the perimeter (ρ=1). */
+  moveToPerimeter: (base: string) => hit(base, '/sand_goto?rho=1'),
+
   // ---- Playlists ----
   runPlaylist: (base: string, name: string) =>
     command(base, `$Playlist/Run=${name.replace(/\.txt$/i, '')}`),
@@ -242,12 +248,17 @@ export const board = {
   setPlaylistAutoHome: (base: string, every: number) => command(base, `$Playlist/AutoHome=${Math.max(0, Math.round(every))}`),
 
   // ---- LEDs (only effective if the table has `leds:` configured) ----
-  setLedEffect: (base: string, effect: string) => command(base, `$LED/Effect=${effect}`),
-  setLedPalette: (base: string, palette: string) => command(base, `$LED/Palette=${palette}`),
-  setLedColor: (base: string, hex: string) => command(base, `$LED/Color=${hexRRGGBB(hex)}`),
-  setLedColor2: (base: string, hex: string) => command(base, `$LED/Color2=${hexRRGGBB(hex)}`),
-  setLedBrightness: (base: string, value: number) => command(base, `$LED/Brightness=${clampInt(value, 0, 255)}`),
-  setLedSpeed: (base: string, value: number) => command(base, `$LED/Speed=${clampInt(value, 1, 255)}`),
+  // Use the LIVE setter ($Sand/Led=) rather than the persisted $LED/* settings:
+  // when idle it persists to NVS just the same, but while a pattern is RUNNING it
+  // applies as an in-memory override that beats the Run/Idle state hook (which
+  // would otherwise mask $LED/Effect) and is committed to NVS on return to idle.
+  // This is what lets the user actually turn the ring on/off / recolor mid-pattern.
+  setLedEffect: (base: string, effect: string) => command(base, `$Sand/Led=effect=${effect}`),
+  setLedPalette: (base: string, palette: string) => command(base, `$Sand/Led=palette=${palette}`),
+  setLedColor: (base: string, hex: string) => command(base, `$Sand/Led=color=${hexRRGGBB(hex)}`),
+  setLedColor2: (base: string, hex: string) => command(base, `$Sand/Led=color2=${hexRRGGBB(hex)}`),
+  setLedBrightness: (base: string, value: number) => command(base, `$Sand/Led=brightness=${clampInt(value, 0, 255)}`),
+  setLedSpeed: (base: string, value: number) => command(base, `$Sand/Led=speed=${clampInt(value, 1, 255)}`),
   /** Effect to force while the table is moving (Run/Jog/Home); "none" = don't override. */
   setLedRunEffect: (base: string, effect: string) => command(base, `$LED/RunEffect=${effect}`),
   /** Effect to force while the table is Idle/Hold; "none" = don't override. */

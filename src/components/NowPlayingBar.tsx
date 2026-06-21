@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Dimensions, FlatList, Modal, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native'
+import { Dimensions, FlatList, Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board } from '../api/board'
@@ -41,6 +41,12 @@ export function NowPlayingBar() {
   // Track when the current pattern started so we can show elapsed time and an
   // estimated remaining (the firmware reports only a 0..100 progress, no clock).
   const startRef = useRef<{ file: string | null; at: number }>({ file: null, at: Date.now() })
+  // Last pattern we had a file for, so we can keep showing it while idle/paused.
+  const lastFileRef = useRef<string | null>(null)
+  // After releasing the speed slider, keep showing the chosen value for a beat
+  // so it doesn't snap back to the stale board value before the next poll lands.
+  const speedHoldRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (speedHoldRef.current) clearTimeout(speedHoldRef.current) }, [])
   const currentFile = status?.currentFile ?? null
   useEffect(() => {
     startRef.current = { file: currentFile, at: Date.now() }
@@ -64,6 +70,16 @@ export function NowPlayingBar() {
     }
   }, [base, plName])
 
+  // Maximize the player into the full drawer when a playlist starts. Tracked on
+  // the rising edge of "a playlist is active"; prevPl starts null so opening the
+  // app onto an already-running playlist doesn't pop the drawer unprompted.
+  const playlistActive = !!status?.playlist
+  const prevPlaylistActive = useRef<boolean | null>(null)
+  useEffect(() => {
+    if (prevPlaylistActive.current === false && playlistActive) setExpanded(true)
+    prevPlaylistActive.current = playlistActive
+  }, [playlistActive])
+
   const swipe = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 10 && Math.abs(g.dy) > Math.abs(g.dx) * 1.5,
@@ -80,14 +96,29 @@ export function NowPlayingBar() {
     return null
   }
 
-  const name = pretty(status.currentFile)
-  const pct = status.percentage ?? 0
+  // During the between-patterns pause (state=Idle) the firmware reports no
+  // current file, so fall back to the pattern that just finished — keep its
+  // name + preview on screen instead of blanking to "Idle".
+  if (currentFile) lastFileRef.current = currentFile
+  const displayFile = currentFile ?? lastFileRef.current
+  const name = pretty(displayFile)
+
+  // The between-patterns pause drives the same progress bar: it fills from the
+  // elapsed share of the pause (pause_total − pause_remaining), and the time row
+  // shows elapsed / -remaining of the pause instead of pattern progress.
+  const pausing = status.pauseRemaining != null && status.pauseTotal != null
+  const pauseElapsedMs = pausing ? (status.pauseTotal! - status.pauseRemaining!) * 1000 : 0
+  const pauseRemainMs = pausing ? status.pauseRemaining! * 1000 : 0
+
+  const pct = pausing
+    ? Math.round(((status.pauseTotal! - status.pauseRemaining!) / status.pauseTotal!) * 100)
+    : status.percentage ?? 0
 
   // Elapsed / estimated remaining. Only meaningful while a pattern is actually
   // progressing; remaining is a linear extrapolation, hence "~".
-  const hasProgress = status.percentage != null && !status.isHoming && !status.isClearing
-  const elapsedMs = startRef.current.file === currentFile ? Date.now() - startRef.current.at : 0
-  const remainingMs = hasProgress && pct > 1 && pct < 100 ? (elapsedMs * (100 - pct)) / pct : null
+  const hasProgress = pausing || (status.percentage != null && !status.isHoming && !status.isClearing)
+  const elapsedMs = pausing ? pauseElapsedMs : startRef.current.file === currentFile ? Date.now() - startRef.current.at : 0
+  const remainingMs = pausing ? pauseRemainMs : hasProgress && pct > 1 && pct < 100 ? (elapsedMs * (100 - pct)) / pct : null
 
   // Up-next from the playlist file (bare ".thr" name).
   const upNextFile =
@@ -166,69 +197,89 @@ export function NowPlayingBar() {
     </Modal>
   )
 
-  if (expanded) {
-    return (
-      <View {...swipe.panHandlers} style={[styles.expandedWrap, { paddingBottom: insets.bottom + spacing.lg, backgroundColor: colors.background }]}>
-        <View style={styles.expandedHeader}>
-          <IconButton icon="expand-more" size={28} color={colors.foreground} onPress={() => setExpanded(false)} />
-          <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>{subtitle}</Text>
-          {status.playlist ? (
-            <IconButton icon="queue-music" size={26} color={colors.foreground} onPress={() => setQueueOpen(true)} />
-          ) : (
-            <View style={{ width: 28 }} />
-          )}
-        </View>
-
-        <View style={{ alignItems: 'center', marginVertical: spacing.md }}>
-          <PatternThumb name={patternKey(status.currentFile)} size={vizSize} />
-        </View>
-
-        <Text numberOfLines={1} style={[styles.bigTitle, { color: colors.foreground }]}>{name || 'Idle'}</Text>
-        {upNextFile ? (
-          <Pressable onPress={() => setQueueOpen(true)} style={styles.upNextRow}>
-            <View style={[styles.upNextThumb, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <PatternThumb name={upNextFile} size={96} />
+  const expandedDrawer = (
+    <Modal visible={expanded} transparent animationType="slide" onRequestClose={() => setExpanded(false)}>
+      <View style={styles.modalBackdrop}>
+        <Pressable style={{ flex: 1 }} onPress={() => setExpanded(false)} />
+        <View style={[styles.expandedSheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
+          <View {...swipe.panHandlers}>
+            <View style={[styles.grabber, { backgroundColor: colors.border }]} />
+            <View style={styles.expandedHeader}>
+              <IconButton icon="expand-more" size={28} color={colors.foreground} onPress={() => setExpanded(false)} />
+              <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>{subtitle}</Text>
+              {status.playlist ? (
+                <IconButton icon="queue-music" size={26} color={colors.foreground} onPress={() => setQueueOpen(true)} />
+              ) : (
+                <View style={{ width: 28 }} />
+              )}
             </View>
-            <Text numberOfLines={1} style={[styles.upNext, { color: colors.mutedForeground }]}>
-              Up next: {pretty(upNextFile)}
-            </Text>
-          </Pressable>
-        ) : null}
-
-        <ProgressBar pct={pct} elapsedMs={hasProgress ? elapsedMs : null} remainingMs={remainingMs} />
-        <Controls big />
-
-        <View style={[styles.speedWrap, { borderTopColor: colors.border }]}>
-          <View style={styles.speedHeader}>
-            <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>Speed</Text>
-            <Text style={{ color: colors.foreground, fontSize: font.size.sm, fontWeight: font.weight.medium }}>
-              {speedDrag ?? status.speed} mm/min{status.feedOverride !== 100 ? ` · ${status.feedOverride}%` : ''}
-            </Text>
           </View>
-          <Slider
-            value={status.speed}
-            min={50}
-            max={500}
-            step={50}
-            onChange={(v) => setSpeedDrag(v)}
-            onComplete={(v) => {
-              setSpeedDrag(null)
-              board
-                .setFeedLive(base, v)
-                .then(() => setTimeout(refresh, 350))
-                .catch(() => {})
-            }}
-          />
+
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: insets.bottom + spacing.lg }}
+          >
+            <View style={{ alignItems: 'center', marginVertical: spacing.md }}>
+              <PatternThumb name={patternKey(displayFile)} size={vizSize} />
+            </View>
+
+            <Text numberOfLines={1} style={[styles.bigTitle, { color: colors.foreground }]}>{name || 'Idle'}</Text>
+            {upNextFile ? (
+              <Pressable onPress={() => setQueueOpen(true)} style={styles.upNextRow}>
+                <View style={[styles.upNextThumb, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <PatternThumb name={upNextFile} size={96} />
+                </View>
+                <Text numberOfLines={1} style={[styles.upNext, { color: colors.mutedForeground }]}>
+                  Up next: {pretty(upNextFile)}
+                </Text>
+              </Pressable>
+            ) : null}
+
+            <ProgressBar pct={pct} elapsedMs={hasProgress ? elapsedMs : null} remainingMs={remainingMs} />
+            <Controls big />
+
+            <View style={[styles.speedWrap, { borderTopColor: colors.border }]}>
+              <View style={styles.speedHeader}>
+                <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>Speed</Text>
+                <Text style={{ color: colors.foreground, fontSize: font.size.sm, fontWeight: font.weight.medium }}>
+                  {speedDrag ?? status.speed} mm/min{status.feedOverride !== 100 ? ` · ${status.feedOverride}%` : ''}
+                </Text>
+              </View>
+              <Slider
+                value={speedDrag ?? status.speed}
+                min={50}
+                max={500}
+                step={50}
+                onChange={(v) => {
+                  if (speedHoldRef.current) clearTimeout(speedHoldRef.current)
+                  setSpeedDrag(v)
+                }}
+                onComplete={(v) => {
+                  // Hold the chosen value until the board's status has caught up
+                  // (refresh fires ~350ms after the write), then release to the live
+                  // value — so the thumb stays put instead of snapping back.
+                  setSpeedDrag(v)
+                  board
+                    .setFeedLive(base, v)
+                    .then(() => setTimeout(refresh, 350))
+                    .catch(() => {})
+                  if (speedHoldRef.current) clearTimeout(speedHoldRef.current)
+                  speedHoldRef.current = setTimeout(() => setSpeedDrag(null), 1200)
+                }}
+              />
+            </View>
+          </ScrollView>
+          {queueModal}
         </View>
-        {queueModal}
       </View>
-    )
-  }
+    </Modal>
+  )
 
   return (
     <View {...swipe.panHandlers} style={[styles.barWrap, { bottom: insets.bottom + TAB_BAR }]}>
+      {expandedDrawer}
       <Pressable onPress={() => setExpanded(true)} style={[styles.bar, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <PatternThumb name={patternKey(status.currentFile)} size={46} />
+        <PatternThumb name={patternKey(displayFile)} size={46} />
         <View style={{ flex: 1 }}>
           <Text numberOfLines={1} style={[styles.title, { color: colors.foreground }]}>{name || 'Idle'}</Text>
           <Text numberOfLines={1} style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{subtitle}</Text>
@@ -271,8 +322,9 @@ const styles = StyleSheet.create({
   miniFill: { height: 3, borderRadius: 2 },
   controls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.md },
   playBtn: { borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center' },
-  expandedWrap: { position: 'absolute', left: 0, right: 0, bottom: 0, top: 0, paddingTop: 60, paddingHorizontal: spacing.lg, justifyContent: 'center' },
-  expandedHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  expandedSheet: { height: '88%', borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1 },
+  grabber: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginTop: spacing.sm, marginBottom: spacing.xs },
+  expandedHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg },
   bigTitle: { fontSize: font.size.xl, fontWeight: font.weight.bold, textAlign: 'center' },
   upNextRow: { alignItems: 'center', justifyContent: 'center', gap: spacing.xs, marginTop: spacing.md },
   upNextThumb: { width: 96, height: 96, borderRadius: 48, borderWidth: 1, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },

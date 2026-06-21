@@ -17,6 +17,12 @@ export interface RawStatus {
     name: string
     clearing: boolean
     quiet: boolean
+    /** Seconds left in the between-patterns pause, counting down live; -1 when
+     * not in that pause. Absent on older firmware. */
+    pause_remaining?: number
+    /** Full length of the current between-patterns pause in seconds (fixed for
+     * its duration; already accounts for PauseFromStart); -1 when not pausing. */
+    pause_total?: number
   }
   /** Only present when the table has LEDs configured (`has_led`). */
   led?: {
@@ -37,6 +43,10 @@ export interface Status {
   theta: number
   rho: number
   playlist: { index: number; total: number; name: string | null } | null
+  /** Seconds left in the between-patterns pause, or null when not pausing. */
+  pauseRemaining: number | null
+  /** Full length of the current between-patterns pause in seconds, or null. */
+  pauseTotal: number | null
   /** Still Sands quiet hours currently suppressing motion. */
   isQuiet: boolean
   /** LED state, or null if the table has no LEDs configured. */
@@ -60,6 +70,10 @@ export function translateStatus(raw: RawStatus): Status {
         : Math.round(raw.progress)
 
   const plActive = raw.playlist?.active ?? false
+  const rawPause = raw.playlist?.pause_remaining ?? -1
+  const pauseRemaining = rawPause >= 0 ? rawPause : null
+  const rawPauseTotal = raw.playlist?.pause_total ?? -1
+  const pauseTotal = rawPauseTotal > 0 ? rawPauseTotal : null
 
   return {
     currentFile: raw.file || null,
@@ -75,6 +89,8 @@ export function translateStatus(raw: RawStatus): Status {
     playlist: plActive
       ? { index: raw.playlist.index, total: raw.playlist.total, name: raw.playlist.name || null }
       : null,
+    pauseRemaining,
+    pauseTotal,
     isQuiet: raw.playlist?.quiet ?? false,
     led: raw.led ? { effect: raw.led.effect, brightness: raw.led.brightness } : null,
     state,
@@ -85,7 +101,9 @@ export function translateStatus(raw: RawStatus): Status {
 /** Is the table doing something we should show the Now Playing bar for? */
 export function isActive(s: Status | null): boolean {
   if (!s) return false
-  return s.isRunning || s.isPaused || s.isHoming || s.isClearing || !!s.currentFile || !!s.playlist
+  // pauseRemaining keeps the bar up during the between-patterns gap, where the
+  // firmware reports state=Idle with no file (and may drop playlist.active).
+  return s.isRunning || s.isPaused || s.isHoming || s.isClearing || s.pauseRemaining != null || !!s.currentFile || !!s.playlist
 }
 
 /**

@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { PanResponder, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import Svg, { Circle, Defs, G, Path, RadialGradient, Stop } from 'react-native-svg'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board, LED_EFFECTS, LED_PALETTES, ledEffectInputs } from '../api/board'
 import { useBoards } from '../stores/useBoards'
@@ -23,6 +24,46 @@ const HOOK_OPTIONS = [{ value: 'none', label: "Don't override" }, ...LED_EFFECTS
 
 const HEX_RE = /^#?[0-9a-fA-F]{6}$/
 
+const WHEEL_SIZE = 240
+
+/**
+ * Rate-limit live updates (e.g. dragging the color wheel) so we preview on the
+ * table without flooding the firmware. `run` fires on the leading edge then at
+ * most once per `ms`; `flush` cancels any pending call and fires immediately
+ * (use it on release so the final value always lands).
+ */
+function useThrottledSend(ms: number) {
+  const last = useRef(0)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pending = useRef<(() => void) | null>(null)
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
+  const run = useCallback((fn: () => void) => {
+    const wait = ms - (Date.now() - last.current)
+    if (wait <= 0) {
+      last.current = Date.now()
+      fn()
+    } else {
+      pending.current = fn
+      if (!timer.current) {
+        timer.current = setTimeout(() => {
+          timer.current = null
+          last.current = Date.now()
+          const f = pending.current
+          pending.current = null
+          f?.()
+        }, wait)
+      }
+    }
+  }, [ms])
+  const flush = useCallback((fn: () => void) => {
+    if (timer.current) { clearTimeout(timer.current); timer.current = null }
+    pending.current = null
+    last.current = Date.now()
+    fn()
+  }, [])
+  return useMemo(() => ({ run, flush }), [run, flush])
+}
+
 export function LedScreen() {
   const colors = useTheme((s) => s.colors)
   const base = useBoards((s) => s.getActiveBase())
@@ -37,9 +78,19 @@ export function LedScreen() {
   const [runEffect, setRunEffect] = useState('none')
   const [idleEffect, setIdleEffect] = useState('none')
   const [hasLed, setHasLed] = useState<boolean | null>(null)
+  // Disabled while dragging the color wheel so the page doesn't scroll under it.
+  const [scrollEnabled, setScrollEnabled] = useState(true)
+  // Throttle live color previews while dragging the wheel (final value is flushed
+  // on release) so we don't fire a command on every move.
+  const colorThrottle = useThrottledSend(500)
+  const color2Throttle = useThrottledSend(500)
 
   // Remember the last "on" effect so the power button can restore it.
   const lastOnRef = useRef('rainbow')
+  // When the user last touched the brightness slider, so the 1s status poll
+  // doesn't clobber the value mid-drag / right after release (same idea as the
+  // table speed slider holding through the poll).
+  const brightnessTouchedRef = useRef(0)
 
   const loadSettings = useCallback(async () => {
     if (!base) return
@@ -67,7 +118,7 @@ export function LedScreen() {
   useEffect(() => {
     if (status?.led) {
       setEffect(status.led.effect)
-      setBrightness(status.led.brightness)
+      if (Date.now() - brightnessTouchedRef.current > 1500) setBrightness(status.led.brightness)
       if (status.led.effect !== 'off') lastOnRef.current = status.led.effect
     }
   }, [status?.led?.effect, status?.led?.brightness])
@@ -104,7 +155,7 @@ export function LedScreen() {
 
   return (
     <Screen title="DW LEDs">
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160, gap: spacing.lg }}>
+      <ScrollView scrollEnabled={scrollEnabled} contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160, gap: spacing.lg }}>
         <View style={[styles.banner, { backgroundColor: bannerColor + '22', borderColor: bannerColor + '55' }]}>
           <MaterialIcons name={bannerOk ? 'check-circle' : 'error-outline'} size={20} color={bannerColor} />
           <Text style={{ color: bannerColor, fontSize: font.size.sm, flex: 1, fontWeight: font.weight.medium }}>
@@ -151,8 +202,13 @@ export function LedScreen() {
               value={color}
               onChange={(hex) => {
                 setColor(hex)
-                send(() => board.setLedColor(base, hex))
+                colorThrottle.run(() => board.setLedColor(base, hex).catch(() => {}))
               }}
+              onCommit={(hex) => {
+                setColor(hex)
+                colorThrottle.flush(() => send(() => board.setLedColor(base, hex)))
+              }}
+              onActiveChange={(active) => setScrollEnabled(!active)}
             />
           ) : null}
           {inputs.color2 ? (
@@ -161,14 +217,26 @@ export function LedScreen() {
               value={color2}
               onChange={(hex) => {
                 setColor2(hex)
-                send(() => board.setLedColor2(base, hex))
+                color2Throttle.run(() => board.setLedColor2(base, hex).catch(() => {}))
               }}
+              onCommit={(hex) => {
+                setColor2(hex)
+                color2Throttle.flush(() => send(() => board.setLedColor2(base, hex)))
+              }}
+              onActiveChange={(active) => setScrollEnabled(!active)}
             />
           ) : null}
         </Card>
 
         <Card>
-          <SliderRow label="Brightness" value={brightness} min={0} max={255} onChange={setBrightness} onComplete={(v) => send(() => board.setLedBrightness(base, v))} />
+          <SliderRow
+            label="Brightness"
+            value={brightness}
+            min={0}
+            max={255}
+            onChange={(v) => { brightnessTouchedRef.current = Date.now(); setBrightness(v) }}
+            onComplete={(v) => { brightnessTouchedRef.current = Date.now(); send(() => board.setLedBrightness(base, v)) }}
+          />
           <View style={{ height: spacing.lg }} />
           <SliderRow label="Speed" value={speed} min={1} max={255} onChange={setSpeed} onComplete={(v) => send(() => board.setLedSpeed(base, v))} />
         </Card>
@@ -186,28 +254,161 @@ export function LedScreen() {
   )
 }
 
-function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (hex: string) => void }) {
+// ---- color math (HSV<->hex) for the wheel ----
+function hsvToRgb(h: number, s: number, v: number): [number, number, number] {
+  const c = v * s
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1))
+  const m = v - c
+  let r = 0, g = 0, b = 0
+  if (h < 60) [r, g, b] = [c, x, 0]
+  else if (h < 120) [r, g, b] = [x, c, 0]
+  else if (h < 180) [r, g, b] = [0, c, x]
+  else if (h < 240) [r, g, b] = [0, x, c]
+  else if (h < 300) [r, g, b] = [x, 0, c]
+  else [r, g, b] = [c, 0, x]
+  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)]
+}
+function rgbToHsv(r: number, g: number, b: number): [number, number, number] {
+  r /= 255; g /= 255; b /= 255
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min
+  let h = 0
+  if (d) {
+    if (max === r) h = ((g - b) / d) % 6
+    else if (max === g) h = (b - r) / d + 2
+    else h = (r - g) / d + 4
+    h *= 60
+    if (h < 0) h += 360
+  }
+  return [h, max === 0 ? 0 : d / max, max]
+}
+function hexToRgb(hex: string): [number, number, number] {
+  const n = parseInt(hex.replace(/^#/, ''), 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+function rgbToHex(r: number, g: number, b: number): string {
+  return '#' + [r, g, b].map((x) => x.toString(16).padStart(2, '0')).join('').toUpperCase()
+}
+
+/**
+ * HSV color wheel: hue around the circle, saturation = radius. Picks at full
+ * value (V=1) — the global Brightness slider handles dimming. Drag reports live
+ * changes via `onChange`; the released value via `onComplete` (so we only push
+ * to the board on release, not every move).
+ */
+function ColorWheel({ size, value, onChange, onComplete, onActiveChange }: { size: number; value: string; onChange: (hex: string) => void; onComplete: (hex: string) => void; onActiveChange?: (active: boolean) => void }) {
+  const R = size / 2
+  const [hr, hg, hb] = hexToRgb(value)
+  const [h, s] = rgbToHsv(hr, hg, hb)
+  const rad = (h * Math.PI) / 180
+  const tx = R + s * R * Math.cos(rad)
+  const ty = R + s * R * Math.sin(rad)
+
+  // Static hue wedges (full saturation); a radial white overlay fades them to
+  // white at the center for the saturation axis. Memoized so only the thumb
+  // re-renders while dragging.
+  const wedges = useMemo(() => {
+    const arr: { d: string; fill: string }[] = []
+    const step = 6
+    for (let a = 0; a < 360; a += step) {
+      const a0 = (a * Math.PI) / 180
+      const a1 = ((a + step + 0.6) * Math.PI) / 180
+      const x0 = R + R * Math.cos(a0), y0 = R + R * Math.sin(a0)
+      const x1 = R + R * Math.cos(a1), y1 = R + R * Math.sin(a1)
+      const [r, g, b] = hsvToRgb((a + step / 2) % 360, 1, 1)
+      arr.push({ d: `M${R} ${R} L${x0} ${y0} A${R} ${R} 0 0 1 ${x1} ${y1} Z`, fill: rgbToHex(r, g, b) })
+    }
+    return arr
+  }, [R])
+
+  // Keep the latest callbacks in a ref so the once-created PanResponder always
+  // calls the current ones.
+  const cb = useRef({ onChange, onComplete, onActiveChange })
+  cb.current = { onChange, onComplete, onActiveChange }
+  const pick = useRef((x: number, y: number, done: boolean) => {})
+  pick.current = (x, y, done) => {
+    const dx = x - R, dy = y - R
+    let deg = (Math.atan2(dy, dx) * 180) / Math.PI
+    if (deg < 0) deg += 360
+    const sat = Math.min(1, Math.hypot(dx, dy) / R)
+    const [r, g, b] = hsvToRgb(deg, sat, 1)
+    const hex = rgbToHex(r, g, b)
+    done ? cb.current.onComplete(hex) : cb.current.onChange(hex)
+  }
+
+  const pan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponderCapture: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponderCapture: () => true,
+      // Don't hand the gesture back to the enclosing ScrollView when it tries to
+      // scroll — keep dragging the wheel instead of scrolling the page.
+      onPanResponderTerminationRequest: () => false,
+      onShouldBlockNativeResponder: () => true,
+      onPanResponderGrant: (e) => { cb.current.onActiveChange?.(true); pick.current(e.nativeEvent.locationX, e.nativeEvent.locationY, false) },
+      onPanResponderMove: (e) => pick.current(e.nativeEvent.locationX, e.nativeEvent.locationY, false),
+      onPanResponderRelease: (e) => { pick.current(e.nativeEvent.locationX, e.nativeEvent.locationY, true); cb.current.onActiveChange?.(false) },
+      onPanResponderTerminate: () => cb.current.onActiveChange?.(false),
+    })
+  ).current
+
+  return (
+    <View {...pan.panHandlers} style={{ width: size, height: size }}>
+      <View pointerEvents="none">
+        <Svg width={size} height={size}>
+          <Defs>
+            <RadialGradient id="sat" cx="50%" cy="50%" r="50%">
+              <Stop offset="0%" stopColor="#fff" stopOpacity={1} />
+              <Stop offset="100%" stopColor="#fff" stopOpacity={0} />
+            </RadialGradient>
+          </Defs>
+          <G>
+            {wedges.map((w, i) => (
+              <Path key={i} d={w.d} fill={w.fill} />
+            ))}
+          </G>
+          <Circle cx={R} cy={R} r={R} fill="url(#sat)" />
+          {/* selection thumb */}
+          <Circle cx={tx} cy={ty} r={11} fill={value} stroke="#fff" strokeWidth={3} />
+          <Circle cx={tx} cy={ty} r={12.5} fill="none" stroke="rgba(0,0,0,0.35)" strokeWidth={1} />
+        </Svg>
+      </View>
+    </View>
+  )
+}
+
+function ColorField({ label, value, onChange, onCommit, onActiveChange }: { label: string; value: string; onChange: (hex: string) => void; onCommit: (hex: string) => void; onActiveChange?: (active: boolean) => void }) {
   const colors = useTheme((s) => s.colors)
   const [hex, setHex] = useState(value.replace(/^#/, ''))
   useEffect(() => setHex(value.replace(/^#/, '')), [value])
 
   const commitHex = () => {
-    if (HEX_RE.test(hex)) onChange(`#${hex.replace(/^#/, '')}`)
+    if (HEX_RE.test(hex)) onCommit(`#${hex.replace(/^#/, '')}`)
     else setHex(value.replace(/^#/, ''))
   }
 
   return (
-    <View style={{ marginTop: spacing.md }}>
+    <View style={{ marginTop: spacing.lg }}>
       <View style={styles.colorHeader}>
-        <Text style={[styles.label, { color: colors.foreground }]}>{label}</Text>
-        <View style={[styles.colorPreview, { backgroundColor: value, borderColor: colors.border }]} />
+        <Text style={[styles.label, { color: colors.foreground, marginBottom: 0 }]}>{label}</Text>
+        <View style={styles.colorValue}>
+          <View style={[styles.colorPreview, { backgroundColor: value, borderColor: colors.border }]} />
+          <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, fontVariant: ['tabular-nums'] }}>{value.toUpperCase()}</Text>
+        </View>
       </View>
+
+      <View style={styles.wheelWrap}>
+        <ColorWheel size={WHEEL_SIZE} value={value} onChange={onChange} onComplete={onCommit} onActiveChange={onActiveChange} />
+      </View>
+
+      <Text style={[styles.presetLabel, { color: colors.mutedForeground }]}>Presets</Text>
       <View style={styles.swatches}>
         {SWATCHES.map((c) => {
           const active = c.toUpperCase() === value.toUpperCase()
-          return <Pressable key={c} onPress={() => onChange(c)} style={[styles.swatch, { backgroundColor: c, borderColor: active ? colors.foreground : colors.border, borderWidth: active ? 3 : 1 }]} />
+          return <Pressable key={c} onPress={() => onCommit(c)} style={[styles.swatch, { backgroundColor: c, borderColor: active ? colors.foreground : colors.border, borderWidth: active ? 3 : 1 }]} />
         })}
       </View>
+
       <View style={[styles.hexRow, { borderColor: colors.border, backgroundColor: colors.inputBackground }]}>
         <Text style={{ color: colors.mutedForeground, fontSize: font.size.md }}>#</Text>
         <TextInput
@@ -246,9 +447,12 @@ const styles = StyleSheet.create({
   hint: { fontSize: font.size.xs },
   power: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, height: 48, borderRadius: radius.md },
   colorHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  colorPreview: { width: 28, height: 28, borderRadius: 14, borderWidth: 1 },
+  colorValue: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  colorPreview: { width: 24, height: 24, borderRadius: 12, borderWidth: 1 },
+  wheelWrap: { alignItems: 'center', marginTop: spacing.md, marginBottom: spacing.lg },
+  presetLabel: { fontSize: font.size.xs, fontWeight: font.weight.medium, marginBottom: spacing.sm, textTransform: 'uppercase', letterSpacing: 0.5 },
   swatches: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  swatch: { width: 38, height: 38, borderRadius: 19 },
+  swatch: { width: 34, height: 34, borderRadius: 17 },
   hexRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: spacing.md, borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 44 },
   sliderLabelRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: spacing.xs },
 })

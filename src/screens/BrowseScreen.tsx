@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, Alert, Dimensions, FlatList, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, Alert, Dimensions, FlatList, Modal, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board, type ClearMode } from '../api/board'
 import { useBoards } from '../stores/useBoards'
@@ -20,13 +20,6 @@ import { radius, spacing, font } from '../theme'
 const COLS = 3
 const THUMB = Math.floor((Dimensions.get('window').width - spacing.md * 2 - spacing.md * (COLS - 1)) / COLS)
 
-type Filter = 'all' | 'on' | 'off'
-
-const FILTERS: { key: Filter; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'on', label: 'On table' },
-  { key: 'off', label: 'Not on table' },
-]
 
 // dw "Pre-Execution Action" choices (a clear sequenced before the pattern runs).
 const PRE_EXEC: { mode: ClearMode; label: string }[] = [
@@ -56,7 +49,6 @@ export function BrowseScreen() {
 
   const [query, setQuery] = useState('')
   const [asc, setAsc] = useState(true)
-  const [filter, setFilter] = useState<Filter>('all')
   const [selected, setSelected] = useState<string | null>(null)
   // Pre-Execution Action is a remembered preference (persisted across launches).
   const clearMode = usePrefs((s) => s.clearMode)
@@ -90,13 +82,10 @@ export function BrowseScreen() {
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase()
     let list = allNames
-    if (filter !== 'all') {
-      list = list.filter((p) => (filter === 'on' ? onTableSet.has(p) : !onTableSet.has(p)))
-    }
     if (q) list = list.filter((p) => p.toLowerCase().includes(q))
     list = [...list].sort((a, b) => a.localeCompare(b) * (asc ? 1 : -1))
     return list
-  }, [allNames, query, asc, filter, onTableSet])
+  }, [allNames, query, asc])
 
   const run = async (file: string) => {
     if (!base) return
@@ -239,21 +228,6 @@ export function BrowseScreen() {
         </Pressable>
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow} contentContainerStyle={{ gap: spacing.xs, paddingHorizontal: spacing.md }}>
-        {FILTERS.map(({ key, label }) => {
-          const on = filter === key
-          return (
-            <Pressable
-              key={key}
-              onPress={() => setFilter(key)}
-              style={[styles.filterChip, { borderColor: on ? colors.primary : colors.border, backgroundColor: on ? colors.primary : colors.card }]}
-            >
-              <Text style={{ color: on ? '#fff' : colors.foreground, fontSize: font.size.sm }}>{label}</Text>
-            </Pressable>
-          )
-        })}
-      </ScrollView>
-
       <FlatList
         data={visible}
         key={COLS}
@@ -378,8 +352,6 @@ const styles = StyleSheet.create({
   searchInput: { flex: 1, fontSize: font.size.md, paddingVertical: 0 },
   sortBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: radius.pill, borderWidth: 1, paddingHorizontal: spacing.md, height: 44 },
   iconBtn: { alignItems: 'center', justifyContent: 'center', borderRadius: radius.pill, borderWidth: 1, width: 44, height: 44 },
-  filterRow: { flexGrow: 0, paddingTop: spacing.sm },
-  filterChip: { paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: radius.pill, borderWidth: 1, justifyContent: 'center' },
   tile: { flex: 1 / COLS, alignItems: 'center', gap: spacing.xs, marginBottom: spacing.md },
   tileThumb: { width: THUMB, height: THUMB, borderRadius: THUMB / 2, borderWidth: 2, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
   tileName: { fontSize: font.size.xs, fontWeight: font.weight.medium, maxWidth: '100%', textAlign: 'center' },

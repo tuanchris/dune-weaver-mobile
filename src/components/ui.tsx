@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, FlatList, Modal, PanResponder, Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
 import { useTheme } from '../stores/useTheme'
@@ -185,6 +185,10 @@ export function Slider({
   const widthRef = useRef(0)
   const leftRef = useRef(0)
   const [drag, setDrag] = useState<number | null>(null)
+  // After release, keep showing the chosen value for a beat so the thumb doesn't
+  // snap back to a stale `value` prop before the board's status poll catches up.
+  const holdRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (holdRef.current) clearTimeout(holdRef.current) }, [])
   const display = drag ?? value
   const frac = max > min ? (Math.max(min, Math.min(max, display)) - min) / (max - min) : 0
 
@@ -202,6 +206,7 @@ export function Slider({
       onStartShouldSetPanResponder: () => !disabled,
       onMoveShouldSetPanResponder: () => !disabled,
       onPanResponderGrant: (e) => {
+        if (holdRef.current) { clearTimeout(holdRef.current); holdRef.current = null }
         leftRef.current = e.nativeEvent.pageX - e.nativeEvent.locationX
         const v = fromX(e.nativeEvent.locationX)
         setDrag(v)
@@ -214,10 +219,16 @@ export function Slider({
       },
       onPanResponderRelease: (e) => {
         const v = fromX(e.nativeEvent.pageX - leftRef.current)
-        setDrag(null)
         onComplete?.(v)
+        // Hold the released value briefly, then fall back to the live `value` prop
+        // (which the board's poll should have caught up to by then).
+        if (holdRef.current) clearTimeout(holdRef.current)
+        holdRef.current = setTimeout(() => setDrag(null), 1200)
       },
-      onPanResponderTerminate: () => setDrag(null),
+      onPanResponderTerminate: () => {
+        if (holdRef.current) { clearTimeout(holdRef.current); holdRef.current = null }
+        setDrag(null)
+      },
     })
   ).current
 
@@ -229,10 +240,13 @@ export function Slider({
       onLayout={(e) => (widthRef.current = e.nativeEvent.layout.width)}
       style={[styles.sliderHit, { opacity: disabled ? 0.5 : 1 }]}
     >
-      <View style={[styles.sliderTrack, { backgroundColor: colors.cardElevated }]}>
+      {/* pointerEvents="none" so the track/thumb never become the touch target —
+          otherwise the grant event's locationX is measured relative to the tapped
+          child (e.g. the thumb), snapping the value to the wrong spot. */}
+      <View pointerEvents="none" style={[styles.sliderTrack, { backgroundColor: colors.cardElevated }]}>
         <View style={[styles.sliderFill, { width: `${frac * 100}%`, backgroundColor: fill }]} />
       </View>
-      <View style={[styles.sliderThumb, { left: `${frac * 100}%`, backgroundColor: fill, borderColor: colors.background }]} />
+      <View pointerEvents="none" style={[styles.sliderThumb, { left: `${frac * 100}%`, backgroundColor: fill, borderColor: colors.background }]} />
     </View>
   )
 }
