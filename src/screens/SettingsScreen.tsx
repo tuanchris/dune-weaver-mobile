@@ -1,16 +1,29 @@
-import React, { useCallback, useEffect, useState } from 'react'
-import { Alert, ScrollView, StyleSheet, Text, TextInput, View, Pressable } from 'react-native'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { Image, ScrollView, StyleSheet, Switch, Text, TextInput, View, Pressable } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
 import Constants from 'expo-constants'
-import { board, normalizeBase, testBoard } from '../api/board'
+import { board, normalizeBase, testBoard, CLEAR_MODES, type ClearMode } from '../api/board'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
+import { useBranding, DEFAULT_BRAND } from '../stores/useBranding'
 import { toast } from '../stores/useToast'
-import { Button, Card, CardTitle, IconButton } from '../components/ui'
+import { Button, Card, CardTitle, IconButton, Select } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { useDiscovery, type DiscoveredTable } from '../lib/discovery'
+import { playlistName } from '../lib/playlists'
+import { pickLogo, clearLogo } from '../lib/branding'
 import { radius, spacing, font } from '../theme'
+
+// dw-style clear-pattern labels for the auto-play selector.
+const CLEAR_LABELS: Record<ClearMode, string> = {
+  none: 'None',
+  adaptive: 'Adaptive',
+  in: 'Clear from center',
+  out: 'Clear from perimeter',
+  sideway: 'Clear sideways',
+  random: 'Random',
+}
 
 export function SettingsScreen() {
   const colors = useTheme((s) => s.colors)
@@ -20,10 +33,42 @@ export function SettingsScreen() {
   const [name, setName] = useState('')
   const [host, setHost] = useState('')
   const [testing, setTesting] = useState(false)
-  const [settings, setSettings] = useState<Record<string, string> | null>(null)
+  // Auto-play on boot: which playlist runs after the table powers on + homes,
+  // plus the boot-run options (separate from the manual-run $Playlist/* settings).
+  const [autostart, setAutostart] = useState('')
+  const [playlistNames, setPlaylistNames] = useState<string[]>([])
+  const [bootLoop, setBootLoop] = useState(true)
+  const [bootShuffle, setBootShuffle] = useState(false)
+  const [bootPauseVal, setBootPauseVal] = useState('0')
+  const [bootPauseUnit, setBootPauseUnit] = useState<'sec' | 'min' | 'hr'>('sec')
+  const [bootPauseFromStart, setBootPauseFromStart] = useState(false)
+  const [bootClear, setBootClear] = useState<ClearMode>('none')
+  // Remember the last playlist so the Enable toggle can restore it.
+  const lastPlaylistRef = useRef('')
 
   const { available: discoveryAvailable, scanning, tables: found, start, stop } = useDiscovery()
   const knownBases = new Set(boards.map((b) => b.base))
+
+  // App branding (custom name + logo), stored locally on this device.
+  const brand = useBranding((s) => s.name)
+  const setBrandName = useBranding((s) => s.setName)
+  const brandLogo = useBranding((s) => s.logoUri)
+  const setBrandLogo = useBranding((s) => s.setLogo)
+  const chooseLogo = async () => {
+    try {
+      const uri = await pickLogo()
+      if (uri) {
+        setBrandLogo(uri)
+        toast.success('Logo updated')
+      }
+    } catch (e) {
+      toast.error((e as Error).message || 'Could not load that image')
+    }
+  }
+  const removeLogo = () => {
+    clearLogo()
+    setBrandLogo(null)
+  }
 
   const addDiscovered = (t: DiscoveredTable) => {
     if (knownBases.has(t.base)) {
@@ -35,13 +80,72 @@ export function SettingsScreen() {
   }
 
   const loadSettings = useCallback(async () => {
-    if (!base) return setSettings(null)
+    if (!base) {
+      setAutostart('')
+      setPlaylistNames([])
+      return
+    }
     try {
-      setSettings(await board.settings(base))
+      const s = await board.settings(base)
+      setAutostart(s['Playlist/Autostart'] ?? '')
+      setBootLoop((s['Playlist/AutostartMode'] ?? 'loop').toLowerCase() !== 'single')
+      setBootShuffle((s['Playlist/AutostartShuffle'] ?? '').toUpperCase() === 'ON' || s['Playlist/AutostartShuffle'] === '1')
+      setBootPauseFromStart((s['Playlist/AutostartPauseFromStart'] ?? '').toUpperCase() === 'ON' || s['Playlist/AutostartPauseFromStart'] === '1')
+      setBootClear(CLEAR_MODES.find((c) => c.mode === s['Playlist/AutostartClear'])?.mode ?? 'none')
+      // Derive a friendly unit from the stored seconds.
+      const secs = parseInt(s['Playlist/AutostartPause'] ?? '0', 10) || 0
+      if (secs && secs % 3600 === 0) {
+        setBootPauseUnit('hr')
+        setBootPauseVal(String(secs / 3600))
+      } else if (secs && secs % 60 === 0) {
+        setBootPauseUnit('min')
+        setBootPauseVal(String(secs / 60))
+      } else {
+        setBootPauseUnit('sec')
+        setBootPauseVal(String(secs))
+      }
     } catch {
-      setSettings(null)
+      // keep whatever we had
+    }
+    try {
+      setPlaylistNames((await board.playlists(base)).map(playlistName))
+    } catch {
+      // keep whatever we had
     }
   }, [base])
+
+  const pauseToSeconds = (val: string, unit: 'sec' | 'min' | 'hr') => {
+    const v = Number(val) || 0
+    return unit === 'hr' ? Math.round(v * 3600) : unit === 'min' ? Math.round(v * 60) : Math.round(v)
+  }
+
+  // Apply a boot-setting change optimistically; roll back (reload) on failure.
+  const saveBoot = (apply: () => Promise<void>) => {
+    apply().catch(() => {
+      toast.error('Could not save auto-play setting')
+      loadSettings()
+    })
+  }
+
+  const setBootPlaylist = (next: string) => {
+    if (!base) return
+    setAutostart(next)
+    saveBoot(() => board.setPlaylistAutostart(base, next))
+  }
+
+  const toggleAutoplay = (on: boolean) => {
+    if (on) {
+      const pl = autostart || lastPlaylistRef.current || playlistNames[0] || ''
+      if (!pl) {
+        toast.error('Create a playlist first')
+        return
+      }
+      setBootPlaylist(pl)
+    } else {
+      if (autostart) lastPlaylistRef.current = autostart
+      setBootPlaylist('')
+    }
+  }
 
   useEffect(() => {
     loadSettings()
@@ -66,22 +170,6 @@ export function SettingsScreen() {
     } finally {
       setTesting(false)
     }
-  }
-
-  const reboot = () => {
-    if (!base) return
-    Alert.alert('Restart table', 'Reboot the controller? It needs ~25–30s to rejoin Wi-Fi.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Restart',
-        style: 'destructive',
-        onPress: () =>
-          board
-            .reboot(base)
-            .then(() => toast.success('Rebooting…'))
-            .catch(() => toast.error('Could not reboot')),
-      },
-    ])
   }
 
   return (
@@ -166,21 +254,111 @@ export function SettingsScreen() {
           </View>
         </Card>
 
-        <Card>
-          <CardTitle>Table settings</CardTitle>
-          {settings ? (
-            Object.entries(settings).map(([k, v]) => (
-              <View key={k} style={styles.kv}>
-                <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>{k}</Text>
-                <Text style={{ color: colors.foreground, fontSize: font.size.sm, fontWeight: font.weight.medium }}>{v}</Text>
+        {base ? (
+          <Card>
+            <CardTitle>Auto-play on boot</CardTitle>
+            <View style={styles.bootRow}>
+              <View style={{ flex: 1, paddingRight: spacing.md }}>
+                <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>Enable auto-play</Text>
+                <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>Automatically start a playlist after the table powers on and homes.</Text>
               </View>
-            ))
-          ) : (
-            <Text style={{ color: colors.mutedForeground }}>—</Text>
-          )}
-          {base ? (
-            <Button title="Restart table" icon="restart-alt" variant="secondary" style={{ marginTop: spacing.md }} onPress={reboot} />
-          ) : null}
+              <Switch value={!!autostart} onValueChange={toggleAutoplay} />
+            </View>
+
+            {autostart ? (
+              <View style={{ marginTop: spacing.md, gap: spacing.md }}>
+                <View>
+                  <Text style={[styles.bootLabel, { color: colors.foreground }]}>Startup playlist</Text>
+                  <Select
+                    value={autostart}
+                    options={[
+                      ...playlistNames.map((n) => ({ value: n, label: n })),
+                      ...(autostart && !playlistNames.includes(autostart) ? [{ value: autostart, label: autostart }] : []),
+                    ]}
+                    onChange={setBootPlaylist}
+                  />
+                </View>
+
+                <View>
+                  <Text style={[styles.bootLabel, { color: colors.foreground }]}>Run mode</Text>
+                  <Select
+                    value={bootLoop ? 'loop' : 'single'}
+                    options={[
+                      { value: 'single', label: 'Single (play once)' },
+                      { value: 'loop', label: 'Loop (repeat forever)' },
+                    ]}
+                    onChange={(v) => { const loop = v === 'loop'; setBootLoop(loop); saveBoot(() => board.setPlaylistAutostartMode(base, loop ? 'loop' : 'single')) }}
+                  />
+                </View>
+
+                <View>
+                  <Text style={[styles.bootLabel, { color: colors.foreground }]}>Pause between patterns</Text>
+                  <View style={{ flexDirection: 'row', gap: spacing.sm, alignItems: 'center' }}>
+                    <TextInput
+                      value={bootPauseVal}
+                      onChangeText={(t) => setBootPauseVal(t.replace(/[^0-9]/g, ''))}
+                      onEndEditing={() => saveBoot(() => board.setPlaylistAutostartPause(base, pauseToSeconds(bootPauseVal, bootPauseUnit)))}
+                      keyboardType="number-pad"
+                      style={[styles.numInput, { color: colors.foreground, backgroundColor: colors.inputBackground, borderColor: colors.border }]}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Select
+                        value={bootPauseUnit}
+                        options={[{ value: 'sec', label: 'seconds' }, { value: 'min', label: 'minutes' }, { value: 'hr', label: 'hours' }]}
+                        onChange={(u) => { setBootPauseUnit(u); saveBoot(() => board.setPlaylistAutostartPause(base, pauseToSeconds(bootPauseVal, u))) }}
+                      />
+                    </View>
+                  </View>
+                </View>
+
+                <View>
+                  <Text style={[styles.bootLabel, { color: colors.foreground }]}>Clear before each pattern</Text>
+                  <Select
+                    value={bootClear}
+                    options={CLEAR_MODES.map((c) => ({ value: c.mode, label: CLEAR_LABELS[c.mode] }))}
+                    onChange={(m) => { setBootClear(m); saveBoot(() => board.setPlaylistAutostartClear(base, m)) }}
+                  />
+                </View>
+
+                <View style={styles.bootRow}>
+                  <View style={{ flex: 1, paddingRight: spacing.md }}>
+                    <Text style={{ color: colors.foreground }}>Pause from start</Text>
+                    <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>Measure the gap from each pattern’s start, not its end.</Text>
+                  </View>
+                  <Switch value={bootPauseFromStart} onValueChange={(v) => { setBootPauseFromStart(v); saveBoot(() => board.setPlaylistAutostartPauseFromStart(base, v)) }} />
+                </View>
+
+                <View style={styles.bootRow}>
+                  <View style={{ flex: 1, paddingRight: spacing.md }}>
+                    <Text style={{ color: colors.foreground }}>Shuffle</Text>
+                    <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>Randomize the pattern order.</Text>
+                  </View>
+                  <Switch value={bootShuffle} onValueChange={(v) => { setBootShuffle(v); saveBoot(() => board.setPlaylistAutostartShuffle(base, v)) }} />
+                </View>
+              </View>
+            ) : null}
+          </Card>
+        ) : null}
+
+        <Card>
+          <CardTitle>App branding</CardTitle>
+          <View style={styles.brandRow}>
+            <Image source={brandLogo ? { uri: brandLogo } : require('../../assets/dw-logo.png')} style={[styles.brandPreview, { borderColor: colors.border }]} />
+            <View style={{ flex: 1, gap: spacing.sm }}>
+              <Button title={brandLogo ? 'Change logo' : 'Choose logo'} icon="image" variant="secondary" onPress={chooseLogo} />
+              {brandLogo ? <Button title="Remove logo" icon="close" variant="secondary" onPress={removeLogo} /> : null}
+            </View>
+          </View>
+          <TextInput
+            value={brand}
+            onChangeText={setBrandName}
+            placeholder={DEFAULT_BRAND}
+            placeholderTextColor={colors.mutedForeground}
+            style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground, marginTop: spacing.md }]}
+          />
+          <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.sm }}>
+            Shown in the app header and welcome screen. Stored on this device only.
+          </Text>
         </Card>
 
         <Text style={{ color: colors.mutedForeground, textAlign: 'center', fontSize: font.size.xs }}>
@@ -198,5 +376,9 @@ const styles = StyleSheet.create({
   foundRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, borderRadius: radius.md, borderWidth: 1 },
   addForm: { gap: spacing.sm, marginTop: spacing.md },
   input: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 46, fontSize: font.size.md },
-  kv: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5, gap: spacing.md },
+  brandRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  brandPreview: { width: 64, height: 64, borderRadius: 14, borderWidth: 1 },
+  bootLabel: { fontSize: font.size.sm, fontWeight: font.weight.medium, marginBottom: spacing.sm, marginTop: spacing.sm },
+  bootRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 36 },
+  numInput: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 40, width: 90, textAlign: 'center', fontSize: font.size.md },
 })

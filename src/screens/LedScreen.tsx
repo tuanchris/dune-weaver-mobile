@@ -179,6 +179,19 @@ export function LedScreen() {
         </Card>
 
         <Card>
+          <SliderRow
+            label="Brightness"
+            value={brightness}
+            min={0}
+            max={255}
+            onChange={(v) => { brightnessTouchedRef.current = Date.now(); setBrightness(v) }}
+            onComplete={(v) => { brightnessTouchedRef.current = Date.now(); send(() => board.setLedBrightness(base, v)) }}
+          />
+          <View style={{ height: spacing.lg }} />
+          <SliderRow label="Speed" value={speed} min={1} max={255} onChange={setSpeed} onComplete={(v) => send(() => board.setLedSpeed(base, v))} />
+        </Card>
+
+        <Card>
           <CardTitle>Effect</CardTitle>
           <Select value={effect} options={EFFECT_OPTIONS} onChange={applyEffect} />
 
@@ -226,19 +239,6 @@ export function LedScreen() {
               onActiveChange={(active) => setScrollEnabled(!active)}
             />
           ) : null}
-        </Card>
-
-        <Card>
-          <SliderRow
-            label="Brightness"
-            value={brightness}
-            min={0}
-            max={255}
-            onChange={(v) => { brightnessTouchedRef.current = Date.now(); setBrightness(v) }}
-            onComplete={(v) => { brightnessTouchedRef.current = Date.now(); send(() => board.setLedBrightness(base, v)) }}
-          />
-          <View style={{ height: spacing.lg }} />
-          <SliderRow label="Speed" value={speed} min={1} max={255} onChange={setSpeed} onComplete={(v) => send(() => board.setLedSpeed(base, v))} />
         </Card>
 
         <Card>

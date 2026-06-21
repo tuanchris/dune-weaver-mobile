@@ -16,6 +16,7 @@
       "bundleIdentifier": "com.joonsolutions.duneweaver",
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "Dune Weaver finds and connects to your sand table on the local network to control patterns.",
+        "NSPhotoLibraryUsageDescription": "Dune Weaver lets you pick a photo to use as a custom app logo.",
         "NSBonjourServices": [
           "_http._tcp."
         ],

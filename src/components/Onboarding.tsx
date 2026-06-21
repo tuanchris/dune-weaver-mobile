@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react'
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { normalizeBase, testBoard } from '../api/board'
 import { useBoards } from '../stores/useBoards'
+import { useBranding, brandName } from '../stores/useBranding'
 import { useTheme } from '../stores/useTheme'
 import { toast } from '../stores/useToast'
 import { useDiscovery, type DiscoveredTable } from '../lib/discovery'
@@ -13,6 +14,8 @@ import { radius, spacing, font } from '../theme'
 export function Onboarding() {
   const colors = useTheme((s) => s.colors)
   const addBoard = useBoards((s) => s.addBoard)
+  const brand = useBranding((s) => s.name)
+  const logoUri = useBranding((s) => s.logoUri)
   const [name, setName] = useState('')
   const [host, setHost] = useState('')
   const [busy, setBusy] = useState(false)
@@ -52,8 +55,8 @@ export function Onboarding() {
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.wrap} keyboardShouldPersistTaps="handled">
-          <MaterialIcons name="blur-circular" size={64} color={colors.primary} />
-          <Text style={[styles.title, { color: colors.foreground }]}>Dune Weaver</Text>
+          <Image source={logoUri ? { uri: logoUri } : require('../../assets/dw-logo.png')} style={styles.brandLogo} />
+          <Text style={[styles.title, { color: colors.foreground }]}>{brandName(brand)}</Text>
           <Text style={[styles.sub, { color: colors.mutedForeground }]}>
             Connect to your sand table on the local network.
           </Text>
@@ -124,6 +127,7 @@ export function Onboarding() {
 
 const styles = StyleSheet.create({
   wrap: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl, gap: spacing.md },
+  brandLogo: { width: 72, height: 72, borderRadius: 16 },
   title: { fontSize: font.size.xxl, fontWeight: font.weight.bold },
   sub: { fontSize: font.size.md, textAlign: 'center', marginBottom: spacing.lg },
   form: { alignSelf: 'stretch', gap: spacing.md },

@@ -1,4 +1,3 @@
-import { File, Paths } from 'expo-file-system'
 import { board } from '../api/board'
 import { patternKey } from '../stores/useLibrary'
 import { assertSdIdle } from './sd'
@@ -44,26 +43,15 @@ export async function loadPlaylist(base: string, filename: string): Promise<stri
 }
 
 /**
- * Create/overwrite a playlist on the board: write the pattern list as a .txt to
- * a temp file, upload it to /playlists/<name>.txt. Items are bare ".thr" names.
+ * Create/overwrite a playlist on the board: upload the pattern list as a .txt to
+ * /playlists/<name>.txt. Items are bare ".thr" names. The content is sent inline
+ * (text multipart) — no temp file — see board.uploadTextFile.
  */
 export async function savePlaylist(base: string, name: string, items: string[]): Promise<string> {
   assertSdIdle()
   const fname = fileName(name)
   const content = items.map((n) => `/patterns/${patternKey(n)}`).join('\n') + '\n'
-
-  const tmp = new File(Paths.cache, fname)
-  if (tmp.exists) tmp.delete()
-  tmp.write(content)
-  try {
-    await board.uploadFile(base, tmp.uri, `${DIR}${fname}`, tmp.size)
-  } finally {
-    try {
-      if (tmp.exists) tmp.delete()
-    } catch {
-      // ignore temp cleanup failure
-    }
-  }
+  await board.uploadTextFile(base, `${DIR}${fname}`, content)
   return fname
 }
 

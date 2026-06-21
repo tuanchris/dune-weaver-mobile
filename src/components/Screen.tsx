@@ -5,11 +5,12 @@ import { board } from '../api/board'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
+import { useBranding, brandName } from '../stores/useBranding'
 import { toast } from '../stores/useToast'
 import { IconButton } from './ui'
 import { spacing, font, radius } from '../theme'
 
-const logo = require('../../assets/icon.png')
+const defaultLogo = require('../../assets/dw-logo.png')
 
 /**
  * App chrome shared by every screen, mirroring the dw web UI:
@@ -31,6 +32,8 @@ export function Screen({
   const base = useBoards((s) => s.getActiveBase())
   const status = useStatus((s) => s.status)
   const connected = !!status?.connected
+  const brand = useBranding((s) => s.name)
+  const logoUri = useBranding((s) => s.logoUri)
 
   const power = () => {
     if (!base) return
@@ -52,8 +55,8 @@ export function Screen({
     <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: colors.background }}>
       <View style={styles.headerWrap}>
         <View style={[styles.pill, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <Image source={logo} style={styles.logo} />
-          <Text numberOfLines={1} style={[styles.brand, { color: colors.foreground }]}>Dune Weaver</Text>
+          <Image source={logoUri ? { uri: logoUri } : defaultLogo} style={styles.logo} />
+          <Text numberOfLines={1} style={[styles.brand, { color: colors.foreground }]}>{brandName(brand)}</Text>
           <View style={[styles.dot, { backgroundColor: connected ? colors.success : colors.mutedForeground }]} />
           <View style={{ flex: 1 }} />
           <IconButton icon={mode === 'dark' ? 'light-mode' : 'dark-mode'} size={20} color={colors.mutedForeground} onPress={toggle} />

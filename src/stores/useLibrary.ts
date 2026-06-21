@@ -166,7 +166,10 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
     set({ tableLoading: true })
     try {
       const list = await board.patterns(base)
-      set({ tablePatterns: list, tableLoaded: true })
+      // Normalize to keys relative to /patterns (strip /sd//patterns/ prefixes)
+      // so on-table names dedupe against the bundled manifest and don't surface a
+      // bogus "patterns" folder. Dedupe after normalizing.
+      set({ tablePatterns: [...new Set(list.map((p) => patternKey(p)))], tableLoaded: true })
     } catch {
       // keep whatever we had; a later manual refresh can retry
     } finally {

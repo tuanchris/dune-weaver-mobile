@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, Alert, Dimensions, FlatList, Modal, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, Alert, Dimensions, FlatList, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board, type ClearMode } from '../api/board'
 import { useBoards } from '../stores/useBoards'
@@ -35,6 +35,29 @@ function prettyName(file: string): string {
   return (file.replace(/\.thr$/i, '').split('/').pop() ?? file)
 }
 
+/** Subfolder a pattern lives in ("custom_patterns/x.thr" -> "custom_patterns"); "" for top level. */
+function folderOf(name: string): string {
+  const i = name.lastIndexOf('/')
+  return i > 0 ? name.slice(0, i) : ''
+}
+
+/** Display label for a folder chip ("custom_patterns" -> "custom patterns"). */
+function folderLabel(folder: string): string {
+  return (folder.split('/').pop() ?? folder).replace(/_/g, ' ')
+}
+
+// Fuzzy-ish search matching dw: lowercase, collapse spaces/underscores/dashes,
+// then substring. So "sea star" matches "sea_star" and "Sea-Star".
+function normalizeForSearch(s: string): string {
+  return s.toLowerCase().replace(/[\s_-]+/g, ' ').trim()
+}
+function fuzzyMatch(target: string, query: string): boolean {
+  return normalizeForSearch(target).includes(normalizeForSearch(query))
+}
+
+const ALL_FOLDERS = '__all__'
+const TOP_LEVEL = '__top__'
+
 export function BrowseScreen() {
   const colors = useTheme((s) => s.colors)
   const base = useBoards((s) => s.getActiveBase())
@@ -49,6 +72,7 @@ export function BrowseScreen() {
 
   const [query, setQuery] = useState('')
   const [asc, setAsc] = useState(true)
+  const [folder, setFolder] = useState<string>(ALL_FOLDERS)
   const [selected, setSelected] = useState<string | null>(null)
   // Pre-Execution Action is a remembered preference (persisted across launches).
   const clearMode = usePrefs((s) => s.clearMode)
@@ -79,13 +103,31 @@ export function BrowseScreen() {
 
   const onTableSet = useMemo(() => new Set(patterns), [patterns])
 
+  // Distinct subfolders present in the library. Only worth showing the filter
+  // when patterns actually live in subfolders (e.g. custom_patterns/).
+  const folders = useMemo(() => {
+    const set = new Set<string>()
+    for (const n of allNames) set.add(folderOf(n))
+    return [...set].filter((f) => f !== '').sort((a, b) => a.localeCompare(b))
+  }, [allNames])
+  const hasTopLevel = useMemo(() => allNames.some((n) => folderOf(n) === ''), [allNames])
+  const showFolderFilter = folders.length > 0
+
+  // Reset the folder filter if its folder disappears (e.g. on table reload).
+  useEffect(() => {
+    if (folder !== ALL_FOLDERS && folder !== TOP_LEVEL && !folders.includes(folder)) setFolder(ALL_FOLDERS)
+  }, [folders, folder])
+
   const visible = useMemo(() => {
-    const q = query.trim().toLowerCase()
+    const q = query.trim()
     let list = allNames
-    if (q) list = list.filter((p) => p.toLowerCase().includes(q))
-    list = [...list].sort((a, b) => a.localeCompare(b) * (asc ? 1 : -1))
+    if (folder !== ALL_FOLDERS) {
+      list = list.filter((p) => (folder === TOP_LEVEL ? folderOf(p) === '' : folderOf(p) === folder))
+    }
+    if (q) list = list.filter((p) => fuzzyMatch(p.replace(/\.thr$/i, ''), q))
+    list = [...list].sort((a, b) => prettyName(a).localeCompare(prettyName(b)) * (asc ? 1 : -1))
     return list
-  }, [allNames, query, asc])
+  }, [allNames, query, asc, folder])
 
   const run = async (file: string) => {
     if (!base) return
@@ -228,6 +270,32 @@ export function BrowseScreen() {
         </Pressable>
       </View>
 
+      {showFolderFilter ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.folderRow}
+          contentContainerStyle={{ gap: spacing.xs, paddingHorizontal: spacing.md }}
+        >
+          {[
+            { key: ALL_FOLDERS, label: 'All' },
+            ...(hasTopLevel ? [{ key: TOP_LEVEL, label: 'Top level' }] : []),
+            ...folders.map((f) => ({ key: f, label: folderLabel(f) })),
+          ].map(({ key, label }) => {
+            const on = folder === key
+            return (
+              <Pressable
+                key={key}
+                onPress={() => setFolder(key)}
+                style={[styles.folderChip, { borderColor: on ? colors.primary : colors.border, backgroundColor: on ? colors.primary : colors.card }]}
+              >
+                <Text style={{ color: on ? '#fff' : colors.foreground, fontSize: font.size.sm }}>{label}</Text>
+              </Pressable>
+            )
+          })}
+        </ScrollView>
+      ) : null}
+
       <FlatList
         data={visible}
         key={COLS}
@@ -347,6 +415,8 @@ function EmptyState({ icon, text }: { icon: keyof typeof MaterialIcons.glyphMap;
 
 const styles = StyleSheet.create({
   searchRow: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.md, paddingTop: spacing.sm },
+  folderRow: { flexGrow: 0, paddingTop: spacing.sm },
+  folderChip: { paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: radius.pill, borderWidth: 1, justifyContent: 'center' },
   control: { shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
   search: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderRadius: radius.pill, borderWidth: 1, paddingHorizontal: spacing.md, height: 44 },
   searchInput: { flex: 1, fontSize: font.size.md, paddingVertical: 0 },

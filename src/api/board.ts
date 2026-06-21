@@ -187,6 +187,54 @@ async function uploadFile(
   }
 }
 
+/** UTF-8 byte length of a string (the firmware's `<path>S` size field). */
+function utf8Len(s: string): number {
+  let n = 0
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    if (c < 0x80) n += 1
+    else if (c < 0x800) n += 2
+    else if (c >= 0xd800 && c <= 0xdbff) { n += 4; i++ } // surrogate pair -> 4 bytes
+    else n += 3
+  }
+  return n
+}
+
+/**
+ * Upload small TEXT content (a playlist .txt) to the SD card. Builds the
+ * multipart/form-data body by hand and sends it as a string — RN's FormData
+ * file part needs a readable file:// uri (which fails for our temp files with
+ * "unsupported data form part"); inlining the text avoids that entirely. Same
+ * shape the firmware expects: the "<sdPath>S" size field precedes the file part,
+ * whose filename is the full SD destination path.
+ */
+async function uploadTextFile(base: string, sdPath: string, content: string, timeoutMs = 30000): Promise<void> {
+  const boundary = `----dwform${Date.now().toString(16)}`
+  const head =
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="${sdPath}S"\r\n\r\n` +
+    `${utf8Len(content)}\r\n` +
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="file"; filename="${sdPath}"\r\n` +
+    `Content-Type: application/octet-stream\r\n\r\n`
+  const body = `${head}${content}\r\n--${boundary}--\r\n`
+  const { signal, cancel } = withTimeout(timeoutMs)
+  try {
+    const res = await fetch(`${base}/upload`, {
+      method: 'POST',
+      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+      body,
+      signal,
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      throw new Error(`HTTP ${res.status}: ${text}`)
+    }
+  } finally {
+    cancel()
+  }
+}
+
 export const board = {
   // ---- Reads ----
   status: (base: string, timeoutMs = 4000) => getJson<RawStatus>(base, '/sand_status', timeoutMs),
@@ -246,6 +294,16 @@ export const board = {
   setPlaylistClearPattern: (base: string, mode: ClearMode) => command(base, `$Playlist/ClearPattern=${mode}`),
   /** Re-home every n patterns while a playlist runs (0 = never). */
   setPlaylistAutoHome: (base: string, every: number) => command(base, `$Playlist/AutoHome=${Math.max(0, Math.round(every))}`),
+  /** Playlist to auto-run on boot once the table reaches Idle ("" = off).
+   * `name` is the bare playlist name. */
+  setPlaylistAutostart: (base: string, name: string) => command(base, `$Playlist/Autostart=${name}`),
+  // Boot-run options — separate from the manual-run $Playlist/* settings (applied
+  // only to the on-boot auto-play, so the two never bleed into each other).
+  setPlaylistAutostartMode: (base: string, mode: 'single' | 'loop') => command(base, `$Playlist/AutostartMode=${mode}`),
+  setPlaylistAutostartShuffle: (base: string, on: boolean) => command(base, `$Playlist/AutostartShuffle=${on ? 'ON' : 'OFF'}`),
+  setPlaylistAutostartPause: (base: string, seconds: number) => command(base, `$Playlist/AutostartPause=${Math.max(0, Math.round(seconds))}`),
+  setPlaylistAutostartPauseFromStart: (base: string, on: boolean) => command(base, `$Playlist/AutostartPauseFromStart=${on ? 'ON' : 'OFF'}`),
+  setPlaylistAutostartClear: (base: string, mode: ClearMode) => command(base, `$Playlist/AutostartClear=${mode}`),
 
   // ---- LEDs (only effective if the table has `leds:` configured) ----
   // Use the LIVE setter ($Sand/Led=) rather than the persisted $LED/* settings:
@@ -277,6 +335,7 @@ export const board = {
 
   // ---- SD file ops (upload / delete) ----
   uploadFile,
+  uploadTextFile,
   /** Delete a file on the SD card, e.g. dir "/playlists/", filename "Old.txt". */
   deleteSdFile: (base: string, dir: string, filename: string) =>
     hit(base, `/upload?path=${encodeURIComponent(dir)}&action=delete&filename=${encodeURIComponent(filename)}`),
