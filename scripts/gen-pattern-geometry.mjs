@@ -86,9 +86,14 @@ function main() {
     // in app storage instead (generated on import, or ingested in Settings),
     // keeping the app binary small. See PatternThumb's resolution order.
     if (isTopLevel) {
+      // dw's cached_images are named "<name>.thr.webp". We copy them to a SINGLE
+      // extension "<name>.webp": the embedded ".thr" (also a Metro assetExt)
+      // makes the dev server mis-encode the asset path and spam ENOENT scandir
+      // errors. The manifest KEY stays "<name>.thr" so previewSource lookups by
+      // pattern filename are unchanged.
       const webpSrc = path.join(PREVIEW_SRC, `${rel}.webp`)
       if (fs.existsSync(webpSrc)) {
-        const destRel = `${rel}.webp`
+        const destRel = `${rel.replace(/\.thr$/i, '')}.webp`
         const dest = path.join(PREVIEW_OUT, destRel)
         fs.mkdirSync(path.dirname(dest), { recursive: true })
         fs.copyFileSync(webpSrc, dest)
