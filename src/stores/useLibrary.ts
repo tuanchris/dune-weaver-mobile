@@ -3,11 +3,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Asset } from 'expo-asset'
 import { File } from 'expo-file-system'
 // @ts-ignore - shared plain-ESM module (Metro resolves .mjs; allowJs covers TS)
-import { parseThr, toXY } from '../lib/thrGeometry.mjs'
-import { THR, GEOM, PREVIEW } from '../../assets/pattern-manifest'
+import { thrToXY } from '../lib/thrGeometry.mjs'
+import { THR, PREVIEW } from '../../assets/pattern-manifest'
 import { board } from '../api/board'
-import { useBoards } from './useBoards'
-import { isSdBusy } from '../lib/sd'
 
 const KEY = 'dw_library_v1'
 
@@ -29,7 +27,6 @@ export interface LibraryPattern {
 }
 
 const THR_MAP = THR as Record<string, number>
-const GEOM_MAP = GEOM as Record<string, number>
 
 /** Resolve any pattern reference to its bare "<name>.thr" filename key. */
 export function bareName(name: string | null | undefined): string {
@@ -83,10 +80,10 @@ export function bundledNames(): string[] {
 }
 
 /**
- * Every pattern the app ships a bundled preview for, keyed by its path relative
- * to /patterns (e.g. "custom_patterns/x.thr") — the full ~1080 library mirrored
- * from the dw repo. Used so the whole catalog is browsable with images even
- * before the on-table manifest loads.
+ * Every pattern the app ships a bundled preview for — the ~100 DEFAULT
+ * (top-level) patterns, keyed by filename. Custom pattern previews are no longer
+ * bundled (they live in app storage), so they surface in Browse once the
+ * on-table manifest loads / they're imported, not from this list.
  */
 export function previewNames(): string[] {
   return Object.keys(PREVIEW as Record<string, number>)
@@ -262,23 +259,16 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
     if (s.xyCache[key] || s.loading[key]) return
     set((st) => ({ loading: { ...st.loading, [key]: true } }))
     try {
+      // Only render geometry we hold locally — a bundled default or an imported
+      // full-res .thr. We NEVER read pattern content back from the firmware, so a
+      // custom on-table pattern with no local copy stays unresolved (it shows its
+      // ingested preview image if one exists, else a placeholder).
       const resolved = await s.resolveThr(key)
-      let text: string
-      if (resolved) {
-        text = await new File(resolved.uri).text()
-      } else if (GEOM_MAP[key] != null) {
-        // Bundled compact geometry for a nested custom pattern.
-        const asset = Asset.fromModule(GEOM_MAP[key])
-        await asset.downloadAsync()
-        text = await new File(asset.localUri ?? asset.uri).text()
-      } else {
-        // Last resort — read the theta-rho off the SD card. Skip while the table
-        // is running (content reads are motion-gated).
-        const base = useBoards.getState().getActiveBase()
-        if (!base || isSdBusy()) return
-        text = await board.patternText(base, key)
-      }
-      const xy = toXY(parseThr(text)) as Point[]
+      if (!resolved) return
+      // Imported files are full-resolution on disk; bundled defaults are already
+      // decimated. thrToXY decimates as needed so the render path stays bounded.
+      const text = await new File(resolved.uri).text()
+      const xy = thrToXY(text) as Point[]
       get().setXY(key, xy)
     } catch {
       // leave uncached -> placeholder

@@ -21,6 +21,7 @@ import { useTheme } from './src/stores/useTheme'
 import { useLibrary } from './src/stores/useLibrary'
 import { usePrefs } from './src/stores/usePrefs'
 import { useBranding } from './src/stores/useBranding'
+import { usePreviews } from './src/stores/usePreviews'
 import { syncClock } from './src/lib/clock'
 
 const Tab = createBottomTabNavigator()
@@ -39,6 +40,7 @@ export default function App() {
   const hydrateLibrary = useLibrary((s) => s.hydrate)
   const hydratePrefs = usePrefs((s) => s.hydrate)
   const hydrateBranding = useBranding((s) => s.hydrate)
+  const hydratePreviews = usePreviews((s) => s.hydrate)
   const hydrated = useBoards((s) => s.hydrated)
   const boards = useBoards((s) => s.boards)
   const activeId = useBoards((s) => s.activeId)
@@ -53,7 +55,8 @@ export default function App() {
     hydrateLibrary()
     hydratePrefs()
     hydrateBranding()
-  }, [hydrateTheme, hydrateBoards, hydrateLibrary, hydratePrefs, hydrateBranding])
+    hydratePreviews()
+  }, [hydrateTheme, hydrateBoards, hydrateLibrary, hydratePrefs, hydrateBranding, hydratePreviews])
 
   // Point the status poller at the active board whenever it changes, and read
   // the on-table pattern manifest once for that board (heavy SD read — we don't

@@ -79,6 +79,7 @@ export function BrowseScreen() {
   const setClearMode = usePrefs((s) => s.setClearMode)
   const [running, setRunning] = useState(false)
   const [pushing, setPushing] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importPreview, setImportPreview] = useState<ImportedThr | null>(null)
 
@@ -175,8 +176,21 @@ export function BrowseScreen() {
     try {
       const result = await importThr()
       if (!result) return // cancelled
-      setXY(result.name, result.xy) // preview immediately
-      setImportPreview(result)
+      const { imported, failed } = result
+      if (imported.length === 0) {
+        toast.error(failed.length ? `No valid .thr files (skipped ${failed.length})` : 'No valid .thr files')
+        return
+      }
+      // A single clean pick keeps the preview/confirm sheet (with push option).
+      if (imported.length === 1 && failed.length === 0) {
+        setXY(imported[0].name, imported[0].xy) // preview immediately
+        setImportPreview(imported[0])
+        return
+      }
+      // Multiple files: add them all to the library directly, then summarize.
+      for (const p of imported) addImported(p.name, p.thrUri, p.sizeBytes, p.xy)
+      const added = `Added ${imported.length} pattern${imported.length > 1 ? 's' : ''} to library`
+      toast.success(failed.length ? `${added}, skipped ${failed.length} invalid` : added)
     } catch (e) {
       toast.error((e as Error).message || 'Import failed')
     } finally {
@@ -196,6 +210,7 @@ export function BrowseScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
+          setDeleting(true)
           try {
             if (onTable && base) {
               assertSdIdle()
@@ -207,6 +222,8 @@ export function BrowseScreen() {
             setSelected(null)
           } catch (e) {
             toast.error(`Delete failed: ${(e as Error).message}`)
+          } finally {
+            setDeleting(false)
           }
         },
       },
@@ -235,6 +252,10 @@ export function BrowseScreen() {
 
   const selOnTable = selected ? onTableSet.has(selected) : false
   const selInLibrary = selected ? useLibrary.getState().has(selected) : false
+  // A table-bound action (play/send/delete) is in flight — block dismissing the
+  // sheet and every other action until it finishes so we can't fire overlapping
+  // SD operations or lose the in-progress feedback.
+  const busy = running || pushing || deleting
 
   return (
     <Screen title="Browse Patterns">
@@ -324,14 +345,14 @@ export function BrowseScreen() {
       />
 
       {/* Pattern detail sheet — mirrors the dw pattern dialog */}
-      <Modal visible={!!selected} transparent animationType="slide" onRequestClose={() => setSelected(null)}>
-        <Pressable style={styles.modalBackdrop} onPress={() => setSelected(null)}>
+      <Modal visible={!!selected} transparent animationType="slide" onRequestClose={() => !busy && setSelected(null)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => !busy && setSelected(null)}>
           <Pressable style={[styles.detailSheet, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => {}}>
             <View style={styles.detailHeader}>
               <Text numberOfLines={1} style={[styles.detailTitle, { color: colors.foreground }]}>
                 {selected ? prettyName(selected) : ''}
               </Text>
-              <IconButton icon="close" size={26} color={colors.foreground} onPress={() => setSelected(null)} />
+              <IconButton icon="close" size={26} color={colors.foreground} disabled={busy} onPress={() => setSelected(null)} />
             </View>
             <View style={[styles.detailRule, { backgroundColor: colors.border }]} />
 
@@ -349,7 +370,8 @@ export function BrowseScreen() {
                       <Pressable
                         key={mode}
                         onPress={() => setClearMode(mode)}
-                        style={[styles.preExecBtn, { borderColor: on ? colors.primary : colors.border, backgroundColor: on ? colors.primary : colors.cardElevated }]}
+                        disabled={busy}
+                        style={[styles.preExecBtn, { borderColor: on ? colors.primary : colors.border, backgroundColor: on ? colors.primary : colors.cardElevated, opacity: busy ? 0.5 : 1 }]}
                       >
                         <Text style={{ color: on ? '#fff' : colors.foreground, fontSize: font.size.sm, fontWeight: font.weight.medium, textAlign: 'center' }}>{label}</Text>
                       </Pressable>
@@ -361,7 +383,7 @@ export function BrowseScreen() {
 
             <View style={styles.detailActions}>
               {selOnTable ? (
-                <Button title="Play" icon="play-arrow" loading={running} onPress={() => selected && run(selected)} />
+                <Button title="Play" icon="play-arrow" loading={running} disabled={busy} onPress={() => selected && run(selected)} />
               ) : null}
               {selInLibrary ? (
                 <Button
@@ -369,11 +391,12 @@ export function BrowseScreen() {
                   icon="cloud-upload"
                   variant="secondary"
                   loading={pushing}
+                  disabled={busy}
                   onPress={() => selected && doPush(selected)}
                 />
               ) : null}
               {selected && (selOnTable || imported.some((p) => p.name === bareName(selected))) ? (
-                <Button title="Delete" icon="delete-outline" variant="ghost" onPress={() => selected && del(selected)} />
+                <Button title="Delete" icon="delete-outline" variant="ghost" loading={deleting} disabled={busy} onPress={() => selected && del(selected)} />
               ) : null}
               {!selOnTable && !selInLibrary ? (
                 <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, textAlign: 'center' }}>Not in your library or on the table.</Text>

@@ -158,39 +158,6 @@ function command(base: string, plain: string): Promise<void> {
   return hit(base, `/command?plain=${encodeURIComponent(plain)}`)
 }
 
-/**
- * Upload a local file to the board's SD card via the firmware's /upload route
- * (used for both .thr patterns and .txt playlists).
- *  - `fileUri` is a local file:// uri.
- *  - `sdPath` is the FULL SD path, e.g. "/patterns/My Pattern.thr" or
- *    "/playlists/Evening.txt". The firmware uses the multipart filename as the
- *    destination, so we set the file part's `name` to it. The "<sdPath>S" text
- *    field carries the byte size (firmware space-check + verify); it must
- *    precede the file part.
- * Do NOT set Content-Type — RN's fetch sets the multipart boundary itself.
- */
-async function uploadFile(
-  base: string,
-  fileUri: string,
-  sdPath: string,
-  sizeBytes: number,
-  timeoutMs = 30000
-): Promise<void> {
-  const form = new FormData()
-  form.append(`${sdPath}S`, String(sizeBytes))
-  form.append('file', { uri: fileUri, name: sdPath, type: 'application/octet-stream' } as any)
-  const { signal, cancel } = withTimeout(timeoutMs)
-  try {
-    const res = await fetch(`${base}/upload`, { method: 'POST', body: form, signal })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new Error(`HTTP ${res.status}: ${text}`)
-    }
-  } finally {
-    cancel()
-  }
-}
-
 /** UTF-8 byte length of a string (the firmware's `<path>S` size field). */
 function utf8Len(s: string): number {
   let n = 0
@@ -205,12 +172,13 @@ function utf8Len(s: string): number {
 }
 
 /**
- * Upload small TEXT content (a playlist .txt) to the SD card. Builds the
- * multipart/form-data body by hand and sends it as a string — RN's FormData
- * file part needs a readable file:// uri (which fails for our temp files with
- * "unsupported data form part"); inlining the text avoids that entirely. Same
- * shape the firmware expects: the "<sdPath>S" size field precedes the file part,
- * whose filename is the full SD destination path.
+ * Upload TEXT content to the SD card — both .thr patterns and .txt playlists
+ * (both are plain text). Builds the multipart/form-data body by hand and sends
+ * it as a string — RN's FormData file part needs an `{uri}` object that throws
+ * "unsupported formdata part implementation" on this RN version; inlining the
+ * text avoids that entirely. Same shape the firmware expects: the "<sdPath>S"
+ * size field precedes the file part, whose filename is the full SD destination
+ * path.
  */
 async function uploadTextFile(base: string, sdPath: string, content: string, timeoutMs = 30000): Promise<void> {
   const boundary = `----dwform${Date.now().toString(16)}`
@@ -287,8 +255,6 @@ export const board = {
    * "/playlists/..." resolves to the on-board flash filesystem instead.
    */
   playlistText: (base: string, filename: string) => getText(base, `/sd/playlists/${filename}`),
-  /** Raw text of a pattern file on the SD card, e.g. "star.thr". */
-  patternText: (base: string, filename: string) => getText(base, `/sd/patterns/${filename}`),
   setPlaylistMode: (base: string, mode: 'single' | 'loop') => command(base, `$Playlist/Mode=${mode}`),
   setPlaylistShuffle: (base: string, on: boolean) => command(base, `$Playlist/Shuffle=${on ? 'ON' : 'OFF'}`),
   setPlaylistPause: (base: string, seconds: number) => command(base, `$Playlist/PauseTime=${Math.round(seconds)}`),
@@ -298,6 +264,12 @@ export const board = {
   setPlaylistClearPattern: (base: string, mode: ClearMode) => command(base, `$Playlist/ClearPattern=${mode}`),
   /** Re-home every n patterns while a playlist runs (0 = never). */
   setPlaylistAutoHome: (base: string, every: number) => command(base, `$Playlist/AutoHome=${Math.max(0, Math.round(every))}`),
+  /** Homing mode: 'sensor' (homes both axes via sensors) or 'crash' (drives to a
+   * physical stop, then zeroes theta/rho). Idle-gated by the firmware. */
+  setHomingMode: (base: string, mode: 'sensor' | 'crash') => command(base, `$Sand/HomingMode=${mode}`),
+  /** Sensor-homing angular offset in degrees, so the radial arm points East.
+   * Idle-gated by the firmware. */
+  setThetaOffset: (base: string, deg: number) => command(base, `$Sand/ThetaOffset=${Math.round(deg)}`),
   /** Playlist to auto-run on boot once the table reaches Idle ("" = off).
    * `name` is the bare playlist name. */
   setPlaylistAutostart: (base: string, name: string) => command(base, `$Playlist/Autostart=${name}`),
@@ -365,7 +337,6 @@ export const board = {
   reboot: (base: string) => command(base, '$Bye'),
 
   // ---- SD file ops (upload / delete) ----
-  uploadFile,
   uploadTextFile,
   /** Delete a file on the SD card, e.g. dir "/playlists/", filename "Old.txt". */
   deleteSdFile: (base: string, dir: string, filename: string) =>

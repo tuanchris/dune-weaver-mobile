@@ -1,6 +1,7 @@
 import React from 'react'
 import { Image } from 'react-native'
 import { previewSource, bareName, useLibrary } from '../stores/useLibrary'
+import { usePreviews, previewKey } from '../stores/usePreviews'
 import { useTheme } from '../stores/useTheme'
 import { PolarPattern } from './PolarPattern'
 
@@ -19,9 +20,14 @@ export function PatternThumb({ name, size }: { name: string; size: number }) {
   // bundled webps without re-rendering every launch.
   const key = bareName(name)
   const cached = useLibrary((s) => s.patterns.find((p) => p.name === key)?.previewUri)
+  // User-ingested preview image (Settings → import previews), matched by name.
+  const ingested = usePreviews((s) => s.map[previewKey(name)])
   const src = previewSource(name)
   if (src.kind === 'webp') {
     return <Image source={src.module} style={{ width: size, height: size, tintColor: ink }} resizeMode="contain" />
+  }
+  if (ingested) {
+    return <Image source={{ uri: ingested }} style={{ width: size, height: size, tintColor: ink }} resizeMode="contain" />
   }
   if (cached) {
     return <Image source={{ uri: cached }} style={{ width: size, height: size, tintColor: ink }} resizeMode="contain" />

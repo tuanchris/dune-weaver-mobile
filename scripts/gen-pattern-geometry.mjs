@@ -1,12 +1,12 @@
 // Build-time: bundle the pattern library for the app from the sibling
 // dune-weaver repo. Emits, into assets/:
-//   previews/<relpath>.webp  -> the pre-rendered preview from dune-weaver's
-//                               patterns/cached_images, for EVERY pattern in the
-//                               library (top-level + nested custom_patterns/...).
-//                               Keyed by the pattern's path RELATIVE to /patterns
-//                               — exactly what the firmware's /sand_patterns
-//                               manifest returns (e.g. "custom_patterns/x.thr"),
-//                               so the app shows a bundled image with no SD read.
+//   previews/<name>.webp     -> the pre-rendered preview from dune-weaver's
+//                               patterns/cached_images, for the DEFAULT
+//                               (top-level) patterns ONLY (~100). Custom
+//                               (nested custom_patterns/...) previews are NOT
+//                               bundled — they live in app storage (generated on
+//                               import, or ingested in Settings) to keep the
+//                               binary small. Keyed by the pattern's filename.
 //   thr/<name>.thr           -> the DECIMATED theta-rho for the TOP-LEVEL built-in
 //                               patterns only (these are the ones the app can push
 //                               to a table + animate). Custom patterns already live
@@ -32,12 +32,6 @@ const PREVIEW_SRC = path.join(SRC, 'cached_images')
 const OUT = path.join(PROJECT, 'assets')
 const THR_OUT = path.join(OUT, 'thr')
 const PREVIEW_OUT = path.join(OUT, 'previews')
-const GEOM_OUT = path.join(OUT, 'geom')
-
-// Compact theta-rho for the NESTED custom patterns (the built-ins already bundle
-// full-res .thr). Just enough points to draw the Now-Playing path + position the
-// progress ball smoothly — keeps the bundle small (~600 pts vs MAX_POINTS).
-const GEOM_POINTS = 600
 
 /** Escape a string for use inside a single-quoted require() path / key. */
 function q(s) {
@@ -72,18 +66,14 @@ function main() {
 
   rmrf(THR_OUT)
   rmrf(PREVIEW_OUT)
-  rmrf(GEOM_OUT)
   fs.mkdirSync(THR_OUT, { recursive: true })
   fs.mkdirSync(PREVIEW_OUT, { recursive: true })
-  fs.mkdirSync(GEOM_OUT, { recursive: true })
 
   const rels = findThr(SRC).sort((a, b) => a.localeCompare(b))
 
   const thrEntries = [] // top-level only: { name }
-  const geomEntries = [] // nested customs: { key, file } (file = relpath under geom/)
-  const previewEntries = [] // all: { key, file } (file = relpath under previews/)
+  const previewEntries = [] // top-level only: { key, file } (file = relpath under previews/)
   let thrBytes = 0
-  let geomBytes = 0
   let webpBytes = 0
   let noPreview = 0
   let thrSkipped = 0
@@ -91,26 +81,30 @@ function main() {
   for (const rel of rels) {
     const isTopLevel = !rel.includes('/')
 
-    // Preview: copy the pre-rendered webp for EVERY pattern, mirroring its path.
-    const webpSrc = path.join(PREVIEW_SRC, `${rel}.webp`)
-    if (fs.existsSync(webpSrc)) {
-      const destRel = `${rel}.webp`
-      const dest = path.join(PREVIEW_OUT, destRel)
-      fs.mkdirSync(path.dirname(dest), { recursive: true })
-      fs.copyFileSync(webpSrc, dest)
-      webpBytes += fs.statSync(webpSrc).size
-      previewEntries.push({ key: rel, file: destRel })
-    } else {
-      noPreview++
+    // Preview: bundle the pre-rendered webp for the DEFAULT (top-level) patterns
+    // ONLY (~100). Custom (nested) pattern previews are NOT bundled — they live
+    // in app storage instead (generated on import, or ingested in Settings),
+    // keeping the app binary small. See PatternThumb's resolution order.
+    if (isTopLevel) {
+      const webpSrc = path.join(PREVIEW_SRC, `${rel}.webp`)
+      if (fs.existsSync(webpSrc)) {
+        const destRel = `${rel}.webp`
+        const dest = path.join(PREVIEW_OUT, destRel)
+        fs.mkdirSync(path.dirname(dest), { recursive: true })
+        fs.copyFileSync(webpSrc, dest)
+        webpBytes += fs.statSync(webpSrc).size
+        previewEntries.push({ key: rel, file: destRel })
+      } else {
+        noPreview++
+      }
     }
 
-    // Geometry. Top-level built-ins bundle full-res .thr (pushable + animated).
-    // Nested customs (already on the SD) bundle only a COMPACT theta-rho, used to
-    // draw the Now-Playing path and position the progress ball.
-    try {
-      const raw = fs.readFileSync(path.join(SRC, rel), 'utf8')
-      if (isTopLevel) {
-        const decimated = decimateThrText(raw, MAX_POINTS)
+    // Geometry: bundle the full-res (decimated) .thr for the DEFAULT (top-level)
+    // patterns only — these are pushable + animated. Custom pattern geometry is
+    // NOT bundled; it's read from the SD card on demand (see useLibrary.ensureXY).
+    if (isTopLevel) {
+      try {
+        const decimated = decimateThrText(fs.readFileSync(path.join(SRC, rel), 'utf8'), MAX_POINTS)
         if (decimated.trim().length === 0) {
           thrSkipped++
         } else {
@@ -118,35 +112,24 @@ function main() {
           thrBytes += Buffer.byteLength(decimated)
           thrEntries.push({ name: rel })
         }
-      } else {
-        const compact = decimateThrText(raw, GEOM_POINTS)
-        if (compact.trim().length > 0) {
-          const dest = path.join(GEOM_OUT, rel)
-          fs.mkdirSync(path.dirname(dest), { recursive: true })
-          fs.writeFileSync(dest, compact)
-          geomBytes += Buffer.byteLength(compact)
-          geomEntries.push({ key: rel, file: rel })
-        }
+      } catch (e) {
+        console.warn(`skip thr ${rel}: ${e.message}`)
+        thrSkipped++
       }
-    } catch (e) {
-      console.warn(`skip geom ${rel}: ${e.message}`)
-      thrSkipped++
     }
   }
 
   // Emit the manifest module of static require()s.
   const thrLines = thrEntries.map((e) => `  '${q(e.name)}': require('./thr/${q(e.name)}'),`)
-  const geomLines = geomEntries.map((e) => `  '${q(e.key)}': require('./geom/${q(e.file)}'),`)
   const previewLines = previewEntries.map((e) => `  '${q(e.key)}': require('./previews/${q(e.file)}'),`)
 
   const manifest =
     `// AUTO-GENERATED by scripts/gen-pattern-geometry.mjs — do not edit.\n` +
-    `// PREVIEW: pre-rendered webp for every library pattern, keyed by its path\n` +
-    `// relative to /patterns (matches the firmware's /sand_patterns manifest).\n` +
-    `// THR: full-res decimated geometry for top-level built-ins (push + animation).\n` +
-    `// GEOM: compact theta-rho for nested custom patterns (Now-Playing path + ball).\n\n` +
+    `// Only the DEFAULT (top-level) ~100 patterns are bundled. Custom patterns'\n` +
+    `// previews + geometry are not bundled — they live in app storage / read from SD.\n` +
+    `// PREVIEW: pre-rendered webp for the default patterns, keyed by filename.\n` +
+    `// THR: full-res decimated theta-rho for the default patterns (push + animation).\n\n` +
     `export const THR = {\n${thrLines.join('\n')}\n}\n\n` +
-    `export const GEOM = {\n${geomLines.join('\n')}\n}\n\n` +
     `export const PREVIEW = {\n${previewLines.join('\n')}\n}\n\n` +
     `export const NAMES = Object.keys(THR)\n`
 
@@ -154,8 +137,7 @@ function main() {
 
   console.log(
     `Bundled ${previewEntries.length} previews (${(webpBytes / 1024 / 1024).toFixed(1)} MB), ` +
-      `${thrEntries.length} built-in .thr (${(thrBytes / 1024 / 1024).toFixed(2)} MB), ` +
-      `${geomEntries.length} compact geom (${(geomBytes / 1024 / 1024).toFixed(1)} MB).`
+      `${thrEntries.length} built-in .thr (${(thrBytes / 1024 / 1024).toFixed(2)} MB).`
   )
   if (noPreview) console.log(`${noPreview} pattern(s) had no preview image.`)
   if (thrSkipped) console.log(`Skipped ${thrSkipped} top-level .thr.`)

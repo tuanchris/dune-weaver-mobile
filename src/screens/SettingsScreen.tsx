@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Image, ScrollView, StyleSheet, Switch, Text, TextInput, View, Pressable } from 'react-native'
+import { Alert, Image, ScrollView, StyleSheet, Switch, Text, TextInput, View, Pressable } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
 import Constants from 'expo-constants'
 import { board, normalizeBase, testBoard, CLEAR_MODES, type ClearMode } from '../api/board'
@@ -7,7 +7,9 @@ import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
 import { useBranding, DEFAULT_BRAND } from '../stores/useBranding'
+import { usePreviews } from '../stores/usePreviews'
 import { toast } from '../stores/useToast'
+import { importPreviews } from '../lib/importPreviews'
 import { Button, Card, CardTitle, IconButton, Select } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { StillSands } from '../components/StillSands'
@@ -15,6 +17,12 @@ import { useDiscovery, type DiscoveredTable } from '../lib/discovery'
 import { playlistName } from '../lib/playlists'
 import { pickLogo, clearLogo } from '../lib/branding'
 import { radius, spacing, font } from '../theme'
+
+// Homing modes the firmware exposes via $Sand/HomingMode (mirrors dw).
+const HOMING_MODES: { mode: 'crash' | 'sensor'; label: string; desc: string }[] = [
+  { mode: 'crash', label: 'Crash homing', desc: 'Y axis moves until a physical stop, then theta and rho are set to 0.' },
+  { mode: 'sensor', label: 'Sensor homing', desc: 'Homes both X and Y axes using sensors.' },
+]
 
 // dw-style clear-pattern labels for the auto-play selector.
 const CLEAR_LABELS: Record<ClearMode, string> = {
@@ -44,6 +52,16 @@ export function SettingsScreen() {
   const [bootPauseUnit, setBootPauseUnit] = useState<'sec' | 'min' | 'hr'>('sec')
   const [bootPauseFromStart, setBootPauseFromStart] = useState(false)
   const [bootClear, setBootClear] = useState<ClearMode>('none')
+  // Homing mode ($Sand/HomingMode) + sensor offset ($Sand/ThetaOffset, degrees).
+  // Both are idle-gated by the firmware, so we only allow changes when idle.
+  const [homingMode, setHomingMode] = useState<'crash' | 'sensor'>('sensor')
+  const [thetaOffset, setThetaOffset] = useState('0')
+  // Auto-home during playlists ($Playlist/AutoHome=<n>, 0 = off): re-home every N
+  // patterns to correct mechanical drift over long runs.
+  const [autoHomeEnabled, setAutoHomeEnabled] = useState(false)
+  const [autoHomeEvery, setAutoHomeEvery] = useState('5')
+  // The firmware rejects homing-mode/offset writes unless the table is Idle.
+  const tableIdle = useStatus((s) => (s.status?.state ?? 'Idle') === 'Idle')
   // Remember the last playlist so the Enable toggle can restore it.
   const lastPlaylistRef = useRef('')
 
@@ -71,6 +89,40 @@ export function SettingsScreen() {
     setBrandLogo(null)
   }
 
+  // User-ingested pattern previews (matched to patterns by file name).
+  const previewCount = usePreviews((s) => Object.keys(s.map).length)
+  const addPreviews = usePreviews((s) => s.addMany)
+  const clearPreviews = usePreviews((s) => s.clear)
+  const [importingPreviews, setImportingPreviews] = useState(false)
+
+  const doImportPreviews = async () => {
+    setImportingPreviews(true)
+    try {
+      const res = await importPreviews()
+      if (!res) return // cancelled
+      const { entries, failed } = res
+      addPreviews(entries)
+      if (entries.length === 0) {
+        toast.error(failed.length ? `No usable images (skipped ${failed.length})` : 'No images selected')
+        return
+      }
+      const added = `Imported ${entries.length} preview${entries.length > 1 ? 's' : ''}`
+      toast.success(failed.length ? `${added}, skipped ${failed.length}` : added)
+    } catch (e) {
+      toast.error((e as Error).message || 'Import failed')
+    } finally {
+      setImportingPreviews(false)
+    }
+  }
+
+  const confirmClearPreviews = () => {
+    if (previewCount === 0) return
+    Alert.alert('Clear previews', `Remove all ${previewCount} imported preview image${previewCount > 1 ? 's' : ''}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Clear', style: 'destructive', onPress: () => { clearPreviews(); toast.success('Previews cleared') } },
+    ])
+  }
+
   const addDiscovered = (t: DiscoveredTable) => {
     if (knownBases.has(t.base)) {
       toast.error('Already added')
@@ -93,6 +145,11 @@ export function SettingsScreen() {
       setBootShuffle((s['Playlist/AutostartShuffle'] ?? '').toUpperCase() === 'ON' || s['Playlist/AutostartShuffle'] === '1')
       setBootPauseFromStart((s['Playlist/AutostartPauseFromStart'] ?? '').toUpperCase() === 'ON' || s['Playlist/AutostartPauseFromStart'] === '1')
       setBootClear(CLEAR_MODES.find((c) => c.mode === s['Playlist/AutostartClear'])?.mode ?? 'none')
+      const ah = parseInt(s['Playlist/AutoHome'] ?? '0', 10) || 0
+      setAutoHomeEnabled(ah > 0)
+      if (ah > 0) setAutoHomeEvery(String(ah))
+      setHomingMode((s['Sand/HomingMode'] ?? 'sensor').toLowerCase() === 'crash' ? 'crash' : 'sensor')
+      setThetaOffset(String(parseInt(s['Sand/ThetaOffset'] ?? '0', 10) || 0))
       // Derive a friendly unit from the stored seconds.
       const secs = parseInt(s['Playlist/AutostartPause'] ?? '0', 10) || 0
       if (secs && secs % 3600 === 0) {
@@ -146,6 +203,45 @@ export function SettingsScreen() {
       if (autostart) lastPlaylistRef.current = autostart
       setBootPlaylist('')
     }
+  }
+
+  // Homing-mode change (idle-gated). Optimistic; revert + reload on rejection.
+  const changeHomingMode = (mode: 'crash' | 'sensor') => {
+    if (!base || mode === homingMode) return
+    const prev = homingMode
+    setHomingMode(mode)
+    board.setHomingMode(base, mode).catch(() => {
+      toast.error(tableIdle ? 'Could not save homing mode' : 'Stop the pattern to change homing mode')
+      setHomingMode(prev)
+      loadSettings()
+    })
+  }
+  const commitThetaOffset = () => {
+    if (!base) return
+    const deg = (((Math.round(Number(thetaOffset) || 0)) % 360) + 360) % 360 // 0..359
+    setThetaOffset(String(deg))
+    board.setThetaOffset(base, deg).catch(() => {
+      toast.error(tableIdle ? 'Could not save sensor offset' : 'Stop the pattern to change sensor offset')
+      loadSettings()
+    })
+  }
+
+  // Push an AutoHome change; roll back (reload) on failure.
+  const commitAutoHome = (every: number) => {
+    if (!base) return
+    board.setPlaylistAutoHome(base, every).catch(() => {
+      toast.error('Could not save homing setting')
+      loadSettings()
+    })
+  }
+  const toggleAutoHome = (on: boolean) => {
+    setAutoHomeEnabled(on)
+    commitAutoHome(on ? Math.max(1, Number(autoHomeEvery) || 5) : 0)
+  }
+  const commitAutoHomeEvery = () => {
+    const n = Math.max(1, Number(autoHomeEvery) || 1)
+    setAutoHomeEvery(String(n))
+    if (autoHomeEnabled) commitAutoHome(n)
   }
 
   useEffect(() => {
@@ -341,7 +437,103 @@ export function SettingsScreen() {
           </Card>
         ) : null}
 
+        {base ? (
+          <Card>
+            <CardTitle>Homing</CardTitle>
+
+            <Text style={[styles.bootLabel, { color: colors.foreground }]}>Homing mode</Text>
+            {HOMING_MODES.map(({ mode, label, desc }) => {
+              const on = homingMode === mode
+              return (
+                <Pressable
+                  key={mode}
+                  onPress={() => changeHomingMode(mode)}
+                  disabled={!tableIdle}
+                  style={[styles.homingOpt, { borderColor: on ? colors.primary : colors.border, backgroundColor: on ? colors.cardElevated : 'transparent', opacity: tableIdle ? 1 : 0.5 }]}
+                >
+                  <MaterialIcons name={on ? 'radio-button-checked' : 'radio-button-unchecked'} size={20} color={on ? colors.primary : colors.mutedForeground} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>{label}</Text>
+                    <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{desc}</Text>
+                  </View>
+                </Pressable>
+              )
+            })}
+
+            {homingMode === 'sensor' ? (
+              <View style={{ marginTop: spacing.sm }}>
+                <Text style={[styles.bootLabel, { color: colors.foreground }]}>Sensor offset (degrees)</Text>
+                <TextInput
+                  value={thetaOffset}
+                  onChangeText={(t) => setThetaOffset(t.replace(/[^0-9]/g, ''))}
+                  onEndEditing={commitThetaOffset}
+                  editable={tableIdle}
+                  keyboardType="number-pad"
+                  style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground, opacity: tableIdle ? 1 : 0.5 }]}
+                />
+                <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.sm }}>
+                  Angle the radial arm is offset by — pick a value so it points East.
+                </Text>
+              </View>
+            ) : null}
+
+            {!tableIdle ? (
+              <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.sm }}>
+                Homing mode and offset can only change while the table is idle.
+              </Text>
+            ) : null}
+
+            <View style={{ height: 1, backgroundColor: colors.border, marginVertical: spacing.md }} />
+
+            <View style={styles.bootRow}>
+              <View style={{ flex: 1, paddingRight: spacing.md }}>
+                <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>Auto-home during playlists</Text>
+                <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>Re-home the table every so often while a playlist runs to correct mechanical drift.</Text>
+              </View>
+              <Switch value={autoHomeEnabled} onValueChange={toggleAutoHome} />
+            </View>
+            {autoHomeEnabled ? (
+              <View style={{ marginTop: spacing.md }}>
+                <Text style={[styles.bootLabel, { color: colors.foreground }]}>Home after every</Text>
+                <View style={{ flexDirection: 'row', gap: spacing.sm, alignItems: 'center' }}>
+                  <TextInput
+                    value={autoHomeEvery}
+                    onChangeText={(t) => setAutoHomeEvery(t.replace(/[^0-9]/g, ''))}
+                    onEndEditing={commitAutoHomeEvery}
+                    keyboardType="number-pad"
+                    style={[styles.numInput, { color: colors.foreground, backgroundColor: colors.inputBackground, borderColor: colors.border }]}
+                  />
+                  <Text style={{ color: colors.mutedForeground }}>patterns</Text>
+                </View>
+              </View>
+            ) : null}
+            <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.md }}>
+              Tip: home the table manually any time from the Control tab.
+            </Text>
+          </Card>
+        ) : null}
+
         {base ? <StillSands base={base} /> : null}
+
+        <Card>
+          <CardTitle>Pattern previews</CardTitle>
+          <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginBottom: spacing.md }}>
+            Import preview images for your custom patterns. They’re matched to patterns by file name (e.g. “star.thr.webp” → the “star.thr” pattern). Use black-on-transparent exports like the built-in library — full-colour images get tinted.
+          </Text>
+          <Button
+            title="Import preview images"
+            icon="add-photo-alternate"
+            variant="secondary"
+            loading={importingPreviews}
+            onPress={doImportPreviews}
+          />
+          {previewCount > 0 ? (
+            <View style={styles.previewMeta}>
+              <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>{previewCount} imported</Text>
+              <IconButton icon="delete-outline" size={22} color={colors.mutedForeground} onPress={confirmClearPreviews} />
+            </View>
+          ) : null}
+        </Card>
 
         <Card>
           <CardTitle>App branding</CardTitle>
@@ -380,6 +572,8 @@ const styles = StyleSheet.create({
   addForm: { gap: spacing.sm, marginTop: spacing.md },
   input: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 46, fontSize: font.size.md },
   brandRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  previewMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.sm },
+  homingOpt: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, borderRadius: radius.md, borderWidth: 1, marginBottom: spacing.sm },
   brandPreview: { width: 64, height: 64, borderRadius: 14, borderWidth: 1 },
   bootLabel: { fontSize: font.size.sm, fontWeight: font.weight.medium, marginBottom: spacing.sm, marginTop: spacing.sm },
   bootRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 36 },

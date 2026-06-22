@@ -1,6 +1,7 @@
-import React from 'react'
-import { Alert, Image, StyleSheet, Text, View } from 'react-native'
+import React, { useState } from 'react'
+import { Alert, Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { MaterialIcons } from '@expo/vector-icons'
 import { board } from '../api/board'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
@@ -30,10 +31,17 @@ export function Screen({
   const toggle = useTheme((s) => s.toggle)
   const mode = useTheme((s) => s.mode)
   const base = useBoards((s) => s.getActiveBase())
+  const boards = useBoards((s) => s.boards)
+  const activeId = useBoards((s) => s.activeId)
+  const setActive = useBoards((s) => s.setActive)
   const status = useStatus((s) => s.status)
   const connected = !!status?.connected
   const brand = useBranding((s) => s.name)
   const logoUri = useBranding((s) => s.logoUri)
+
+  const active = boards.find((b) => b.id === activeId) ?? null
+  const multiTable = boards.length > 1
+  const [switcherOpen, setSwitcherOpen] = useState(false)
 
   const power = () => {
     if (!base) return
@@ -57,12 +65,52 @@ export function Screen({
         <View style={[styles.pill, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <Image source={logoUri ? { uri: logoUri } : defaultLogo} style={styles.logo} />
           <Text numberOfLines={1} style={[styles.brand, { color: colors.foreground }]}>{brandName(brand)}</Text>
-          <View style={[styles.dot, { backgroundColor: connected ? colors.success : colors.mutedForeground }]} />
           <View style={{ flex: 1 }} />
+          {/* Active table + connection. Tap to switch when more than one is set up. */}
+          <Pressable
+            onPress={() => multiTable && setSwitcherOpen(true)}
+            disabled={!multiTable}
+            hitSlop={8}
+            style={({ pressed }) => [styles.tableChip, { opacity: pressed && multiTable ? 0.6 : 1 }]}
+          >
+            <View style={[styles.dot, { backgroundColor: connected ? colors.success : colors.mutedForeground }]} />
+            {active ? (
+              <Text numberOfLines={1} style={[styles.tableName, { color: colors.mutedForeground }]}>{active.name}</Text>
+            ) : null}
+            {multiTable ? <MaterialIcons name="expand-more" size={18} color={colors.mutedForeground} /> : null}
+          </Pressable>
           <IconButton icon={mode === 'dark' ? 'light-mode' : 'dark-mode'} size={20} color={colors.mutedForeground} onPress={toggle} />
           <IconButton icon="restart-alt" size={20} color={colors.destructive} onPress={power} disabled={!base} />
         </View>
       </View>
+
+      {/* Table switcher — opened from the header chip when multiple tables exist. */}
+      <Modal visible={switcherOpen} transparent animationType="fade" onRequestClose={() => setSwitcherOpen(false)}>
+        <Pressable style={styles.switchBackdrop} onPress={() => setSwitcherOpen(false)}>
+          <Pressable style={[styles.switchSheet, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => {}}>
+            <Text style={[styles.switchTitle, { color: colors.mutedForeground }]}>Switch table</Text>
+            {boards.map((b) => {
+              const on = b.id === activeId
+              return (
+                <Pressable
+                  key={b.id}
+                  onPress={() => {
+                    if (b.id !== activeId) setActive(b.id)
+                    setSwitcherOpen(false)
+                  }}
+                  style={[styles.switchRow, { borderColor: on ? colors.primary : colors.border, backgroundColor: on ? colors.cardElevated : 'transparent' }]}
+                >
+                  <MaterialIcons name={on ? 'radio-button-checked' : 'radio-button-unchecked'} size={20} color={on ? colors.primary : colors.mutedForeground} />
+                  <View style={{ flex: 1 }}>
+                    <Text numberOfLines={1} style={{ color: colors.foreground, fontWeight: font.weight.medium }}>{b.name}</Text>
+                    <Text numberOfLines={1} style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{b.base}</Text>
+                  </View>
+                </Pressable>
+              )
+            })}
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {title ? (
         <View style={styles.titleRow}>
@@ -95,6 +143,12 @@ const styles = StyleSheet.create({
   logo: { width: 30, height: 30, borderRadius: 15 },
   brand: { fontSize: font.size.lg, fontWeight: font.weight.bold, flexShrink: 1 },
   dot: { width: 9, height: 9, borderRadius: 5 },
+  tableChip: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, maxWidth: 150, marginRight: spacing.xs },
+  tableName: { fontSize: font.size.sm, fontWeight: font.weight.medium, flexShrink: 1 },
+  switchBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: spacing.xl },
+  switchSheet: { borderRadius: radius.xl, borderWidth: 1, padding: spacing.lg, gap: spacing.sm },
+  switchTitle: { fontSize: font.size.xs, fontWeight: font.weight.semibold, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: spacing.xs },
+  switchRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, borderRadius: radius.md, borderWidth: 1 },
   titleRow: {
     flexDirection: 'row',
     alignItems: 'center',
