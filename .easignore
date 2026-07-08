@@ -1,0 +1,42 @@
+# Used by EAS Build INSTEAD of .gitignore. Mirrors .gitignore but intentionally
+# KEEPS the generated pattern library (assets/thr, assets/previews,
+# assets/pattern-manifest.js) — the app bundles those and they cannot be
+# regenerated on EAS servers (gen-geometry needs the sibling dune-weaver repo).
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native — EAS runs prebuild itself from app.json/plugins; never upload these
+/ios
+/android
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo

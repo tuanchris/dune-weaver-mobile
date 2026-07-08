@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { ActivityIndicator, Alert, Dimensions, FlatList, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board, type ClearMode } from '../api/board'
 import { useBoards } from '../stores/useBoards'
@@ -15,6 +16,8 @@ import { PatternThumb } from '../components/PatternThumb'
 import { PolarPattern } from '../components/PolarPattern'
 import { Button, IconButton } from '../components/ui'
 import { Screen } from '../components/Screen'
+import { EmptyState } from '../components/EmptyState'
+import { prettyName } from '../lib/patternName'
 import { radius, spacing, font } from '../theme'
 
 const COLS = 3
@@ -29,11 +32,6 @@ const PRE_EXEC: { mode: ClearMode; label: string }[] = [
   { mode: 'sideway', label: 'Clear Sideway' },
   { mode: 'none', label: 'None' },
 ]
-
-function prettyName(file: string): string {
-  // Strip the .thr extension and any folder prefix (e.g. "custom_patterns/x").
-  return (file.replace(/\.thr$/i, '').split('/').pop() ?? file)
-}
 
 /** Subfolder a pattern lives in ("custom_patterns/x.thr" -> "custom_patterns"); "" for top level. */
 function folderOf(name: string): string {
@@ -79,6 +77,8 @@ export function BrowseScreen() {
   const setClearMode = usePrefs((s) => s.setClearMode)
   const [running, setRunning] = useState(false)
   const [pushing, setPushing] = useState(false)
+  // 0..1 while an upload is in flight — drives the progress bar in the detail sheet.
+  const [pushPct, setPushPct] = useState<number | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importPreview, setImportPreview] = useState<ImportedThr | null>(null)
@@ -150,8 +150,9 @@ export function BrowseScreen() {
     const replace = onTableSet.has(name)
     const go = async () => {
       setPushing(true)
+      setPushPct(0)
       try {
-        await pushToTable(base, name)
+        await pushToTable(base, name, setPushPct)
         toast.success(`Sent ${prettyName(name)} to table`)
         setSelected(null)
         useLibrary.getState().addTablePattern(bareName(name))
@@ -159,6 +160,7 @@ export function BrowseScreen() {
         toast.error(`Upload failed: ${(e as Error).message}`)
       } finally {
         setPushing(false)
+        setPushPct(null)
       }
     }
     if (replace) {
@@ -236,6 +238,9 @@ export function BrowseScreen() {
     addImported(p.name, p.thrUri, p.sizeBytes, p.xy)
     setImportPreview(null)
     if (push && base) {
+      // Open the pattern detail sheet first so the upload progress bar is
+      // visible for the (possibly long) transfer.
+      setSelected(p.name)
       await doPush(p.name)
     } else {
       toast.success(`Added ${prettyName(p.name)} to library`)
@@ -381,6 +386,17 @@ export function BrowseScreen() {
               </View>
             ) : null}
 
+            {pushPct != null ? (
+              <View style={styles.pushProgress}>
+                <View style={[styles.pushTrack, { backgroundColor: colors.border }]}>
+                  <View style={[styles.pushFill, { width: `${Math.round(pushPct * 100)}%`, backgroundColor: colors.primary }]} />
+                </View>
+                <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, textAlign: 'center', marginTop: 4 }}>
+                  {pushPct >= 1 ? 'Waiting for the table to finish writing…' : `Sending to table · ${Math.round(pushPct * 100)}%`}
+                </Text>
+              </View>
+            ) : null}
+
             <View style={styles.detailActions}>
               {selOnTable ? (
                 <Button title="Play" icon="play-arrow" loading={running} disabled={busy} onPress={() => selected && run(selected)} />
@@ -402,6 +418,8 @@ export function BrowseScreen() {
                 <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, textAlign: 'center' }}>Not in your library or on the table.</Text>
               ) : null}
             </View>
+            {/* Spacer sized to the modal window's bottom inset (Android nav bar / iOS home indicator) */}
+            <SafeAreaView edges={['bottom']} />
           </Pressable>
         </Pressable>
       </Modal>
@@ -419,20 +437,11 @@ export function BrowseScreen() {
               <Button title="Add" icon="library-add" variant="secondary" onPress={() => confirmImport(false)} flex />
               <Button title="Add & send" icon="cloud-upload" loading={pushing} onPress={() => confirmImport(true)} flex />
             </View>
+            <SafeAreaView edges={['bottom']} />
           </Pressable>
         </Pressable>
       </Modal>
     </Screen>
-  )
-}
-
-function EmptyState({ icon, text }: { icon: keyof typeof MaterialIcons.glyphMap; text: string }) {
-  const colors = useTheme((s) => s.colors)
-  return (
-    <View style={styles.empty}>
-      <MaterialIcons name={icon} size={40} color={colors.mutedForeground} />
-      <Text style={{ color: colors.mutedForeground, marginTop: spacing.sm, textAlign: 'center' }}>{text}</Text>
-    </View>
   )
 }
 
@@ -448,7 +457,6 @@ const styles = StyleSheet.create({
   tile: { flex: 1 / COLS, alignItems: 'center', gap: spacing.xs, marginBottom: spacing.md },
   tileThumb: { width: THUMB, height: THUMB, borderRadius: THUMB / 2, borderWidth: 2, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
   tileName: { fontSize: font.size.xs, fontWeight: font.weight.medium, maxWidth: '100%', textAlign: 'center' },
-  empty: { alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   sheet: { borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1, padding: spacing.xl, alignItems: 'center', gap: spacing.md },
   sheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#888', marginBottom: spacing.sm },
@@ -463,4 +471,7 @@ const styles = StyleSheet.create({
   preExecGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   preExecBtn: { width: '48%', minHeight: 46, borderRadius: radius.md, borderWidth: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.sm },
   detailActions: { gap: spacing.sm },
+  pushProgress: { marginBottom: spacing.md },
+  pushTrack: { height: 6, borderRadius: 3, overflow: 'hidden' },
+  pushFill: { height: 6, borderRadius: 3 },
 })

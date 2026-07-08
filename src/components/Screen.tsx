@@ -15,7 +15,7 @@ const defaultLogo = require('../../assets/dw-logo.png')
 
 /**
  * App chrome shared by every screen, mirroring the dw web UI:
- *  - a floating pill "brand" header (logo · Dune Weaver · connection dot · theme/power)
+ *  - a floating pill "brand" header (logo · active table name · connection dot · theme/power)
  *  - a large page title row below it, with an optional right-aligned action.
  */
 export function Screen({
@@ -64,21 +64,18 @@ export function Screen({
       <View style={styles.headerWrap}>
         <View style={[styles.pill, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <Image source={logoUri ? { uri: logoUri } : defaultLogo} style={styles.logo} />
-          <Text numberOfLines={1} style={[styles.brand, { color: colors.foreground }]}>{brandName(brand)}</Text>
-          <View style={{ flex: 1 }} />
-          {/* Active table + connection. Tap to switch when more than one is set up. */}
+          {/* Active table name doubles as the brand. Connection dot beside it; tap to switch when more than one is set up. */}
           <Pressable
             onPress={() => multiTable && setSwitcherOpen(true)}
             disabled={!multiTable}
             hitSlop={8}
             style={({ pressed }) => [styles.tableChip, { opacity: pressed && multiTable ? 0.6 : 1 }]}
           >
-            <View style={[styles.dot, { backgroundColor: connected ? colors.success : colors.mutedForeground }]} />
-            {active ? (
-              <Text numberOfLines={1} style={[styles.tableName, { color: colors.mutedForeground }]}>{active.name}</Text>
-            ) : null}
+            <View style={[styles.dot, { backgroundColor: connected ? colors.success : colors.destructive }]} />
+            <Text numberOfLines={1} style={[styles.brand, { color: colors.foreground }]}>{active?.name ?? brandName(brand)}</Text>
             {multiTable ? <MaterialIcons name="expand-more" size={18} color={colors.mutedForeground} /> : null}
           </Pressable>
+          <View style={{ flex: 1 }} />
           <IconButton icon={mode === 'dark' ? 'light-mode' : 'dark-mode'} size={20} color={colors.mutedForeground} onPress={toggle} />
           <IconButton icon="restart-alt" size={20} color={colors.destructive} onPress={power} disabled={!base} />
         </View>
@@ -98,12 +95,12 @@ export function Screen({
                     if (b.id !== activeId) setActive(b.id)
                     setSwitcherOpen(false)
                   }}
-                  style={[styles.switchRow, { borderColor: on ? colors.primary : colors.border, backgroundColor: on ? colors.cardElevated : 'transparent' }]}
+                  style={[styles.switchRow, { borderColor: on ? colors.primary : colors.border, backgroundColor: on ? colors.primary : colors.cardElevated }]}
                 >
-                  <MaterialIcons name={on ? 'radio-button-checked' : 'radio-button-unchecked'} size={20} color={on ? colors.primary : colors.mutedForeground} />
+                  <MaterialIcons name={on ? 'radio-button-checked' : 'radio-button-unchecked'} size={20} color={on ? colors.primaryForeground : colors.mutedForeground} />
                   <View style={{ flex: 1 }}>
-                    <Text numberOfLines={1} style={{ color: colors.foreground, fontWeight: font.weight.medium }}>{b.name}</Text>
-                    <Text numberOfLines={1} style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{b.base}</Text>
+                    <Text numberOfLines={1} style={{ color: on ? colors.primaryForeground : colors.foreground, fontWeight: font.weight.medium }}>{b.name}</Text>
+                    <Text numberOfLines={1} style={{ color: on ? colors.primaryForeground : colors.mutedForeground, fontSize: font.size.xs, opacity: on ? 0.8 : 1 }}>{b.base}</Text>
                   </View>
                 </Pressable>
               )
@@ -143,8 +140,7 @@ const styles = StyleSheet.create({
   logo: { width: 30, height: 30, borderRadius: 15 },
   brand: { fontSize: font.size.lg, fontWeight: font.weight.bold, flexShrink: 1 },
   dot: { width: 9, height: 9, borderRadius: 5 },
-  tableChip: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, maxWidth: 150, marginRight: spacing.xs },
-  tableName: { fontSize: font.size.sm, fontWeight: font.weight.medium, flexShrink: 1 },
+  tableChip: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexShrink: 1 },
   switchBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: spacing.xl },
   switchSheet: { borderRadius: radius.xl, borderWidth: 1, padding: spacing.lg, gap: spacing.sm },
   switchTitle: { fontSize: font.size.xs, fontWeight: font.weight.semibold, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: spacing.xs },

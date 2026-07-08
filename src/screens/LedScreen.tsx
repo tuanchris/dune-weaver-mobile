@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Modal, PanResponder, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import Svg, { Circle, Defs, G, Path, RadialGradient, Stop } from 'react-native-svg'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board, LED_EFFECTS, LED_PALETTES, ledEffectInputs } from '../api/board'
@@ -9,6 +10,7 @@ import { useTheme } from '../stores/useTheme'
 import { toast } from '../stores/useToast'
 import { Card, CardTitle, IconButton, Select, Slider } from '../components/ui'
 import { Screen } from '../components/Screen'
+import { EmptyState } from '../components/EmptyState'
 import { radius, spacing, font } from '../theme'
 
 // A curated swatch grid (no native color-picker dep). Bare RRGGBB.
@@ -92,8 +94,6 @@ export function LedScreen() {
   const [runEffect, setRunEffect] = useState('none')
   const [idleEffect, setIdleEffect] = useState('none')
   const [hasLed, setHasLed] = useState<boolean | null>(null)
-  // Disabled while dragging the color wheel so the page doesn't scroll under it.
-  const [scrollEnabled, setScrollEnabled] = useState(true)
   // Throttle live color previews while dragging the wheel (final value is flushed
   // on release) so we don't fire a command on every move.
   const colorThrottle = useThrottledSend(500)
@@ -174,10 +174,7 @@ export function LedScreen() {
   if (!base) {
     return (
       <Screen title="DW LEDs">
-        <View style={styles.empty}>
-          <MaterialIcons name="lightbulb-outline" size={40} color={colors.mutedForeground} />
-          <Text style={{ color: colors.mutedForeground, marginTop: spacing.sm }}>No table connected. Add one in Settings.</Text>
-        </View>
+        <EmptyState icon="lightbulb-outline" text="No table connected. Add one in Settings." />
       </Screen>
     )
   }
@@ -187,7 +184,7 @@ export function LedScreen() {
 
   return (
     <Screen title="DW LEDs">
-      <ScrollView scrollEnabled={scrollEnabled} contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160, gap: spacing.lg }}>
+      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160, gap: spacing.lg }}>
         <View style={[styles.banner, { backgroundColor: bannerColor + '22', borderColor: bannerColor + '55' }]}>
           <MaterialIcons name={bannerOk ? 'check-circle' : 'error-outline'} size={20} color={bannerColor} />
           <Text style={{ color: bannerColor, fontSize: font.size.sm, flex: 1, fontWeight: font.weight.medium }}>
@@ -403,7 +400,7 @@ function rgbToHex(r: number, g: number, b: number): string {
  * changes via `onChange`; the released value via `onComplete` (so we only push
  * to the board on release, not every move).
  */
-function ColorWheel({ size, value, onChange, onComplete, onActiveChange }: { size: number; value: string; onChange: (hex: string) => void; onComplete: (hex: string) => void; onActiveChange?: (active: boolean) => void }) {
+function ColorWheel({ size, value, onChange, onComplete }: { size: number; value: string; onChange: (hex: string) => void; onComplete: (hex: string) => void }) {
   const R = size / 2
   const [hr, hg, hb] = hexToRgb(value)
   const [h, s] = rgbToHsv(hr, hg, hb)
@@ -430,8 +427,8 @@ function ColorWheel({ size, value, onChange, onComplete, onActiveChange }: { siz
 
   // Keep the latest callbacks in a ref so the once-created PanResponder always
   // calls the current ones.
-  const cb = useRef({ onChange, onComplete, onActiveChange })
-  cb.current = { onChange, onComplete, onActiveChange }
+  const cb = useRef({ onChange, onComplete })
+  cb.current = { onChange, onComplete }
   const pick = useRef((x: number, y: number, done: boolean) => {})
   pick.current = (x, y, done) => {
     const dx = x - R, dy = y - R
@@ -453,10 +450,9 @@ function ColorWheel({ size, value, onChange, onComplete, onActiveChange }: { siz
       // scroll — keep dragging the wheel instead of scrolling the page.
       onPanResponderTerminationRequest: () => false,
       onShouldBlockNativeResponder: () => true,
-      onPanResponderGrant: (e) => { cb.current.onActiveChange?.(true); pick.current(e.nativeEvent.locationX, e.nativeEvent.locationY, false) },
+      onPanResponderGrant: (e) => pick.current(e.nativeEvent.locationX, e.nativeEvent.locationY, false),
       onPanResponderMove: (e) => pick.current(e.nativeEvent.locationX, e.nativeEvent.locationY, false),
-      onPanResponderRelease: (e) => { pick.current(e.nativeEvent.locationX, e.nativeEvent.locationY, true); cb.current.onActiveChange?.(false) },
-      onPanResponderTerminate: () => cb.current.onActiveChange?.(false),
+      onPanResponderRelease: (e) => pick.current(e.nativeEvent.locationX, e.nativeEvent.locationY, true),
     })
   ).current
 
@@ -488,7 +484,7 @@ function ColorWheel({ size, value, onChange, onComplete, onActiveChange }: { siz
 // A compact tappable row (label · swatch · hex) that opens a bottom-sheet
 // overlay with the wheel, presets, and hex input — so the wheel only takes up
 // space when you're actually picking a color.
-function ColorField({ label, value, onChange, onCommit }: { label: string; value: string; onChange: (hex: string) => void; onCommit: (hex: string) => void; onActiveChange?: (active: boolean) => void }) {
+function ColorField({ label, value, onChange, onCommit }: { label: string; value: string; onChange: (hex: string) => void; onCommit: (hex: string) => void }) {
   const colors = useTheme((s) => s.colors)
   const [open, setOpen] = useState(false)
   const [hex, setHex] = useState(value.replace(/^#/, ''))
@@ -547,6 +543,8 @@ function ColorField({ label, value, onChange, onCommit }: { label: string; value
                 style={{ flex: 1, color: colors.foreground, fontSize: font.size.md, letterSpacing: 1 }}
               />
             </View>
+            {/* Spacer sized to the modal window's bottom inset (Android nav bar / iOS home indicator) */}
+            <SafeAreaView edges={['bottom']} />
           </Pressable>
         </Pressable>
       </Modal>
@@ -568,14 +566,12 @@ function SliderRow({ label, value, min, max, onChange, onComplete }: { label: st
 }
 
 const styles = StyleSheet.create({
-  empty: { alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
   banner: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1 },
   label: { fontSize: font.size.sm, fontWeight: font.weight.medium, marginBottom: spacing.sm },
   ballHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   sectionHead: { borderTopWidth: 1, paddingTop: spacing.md, marginTop: spacing.xs },
   hint: { fontSize: font.size.xs },
   power: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, height: 48, borderRadius: radius.md },
-  colorHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   colorValue: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   colorPreview: { width: 24, height: 24, borderRadius: 12, borderWidth: 1 },
   colorTrigger: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: radius.md, borderWidth: 1, paddingLeft: spacing.md, paddingRight: spacing.sm, height: 50 },

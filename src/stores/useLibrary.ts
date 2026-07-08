@@ -69,16 +69,6 @@ export function previewSource(name: string | null | undefined): PreviewSource {
   return mod != null ? { kind: 'webp', module: mod } : { kind: 'svg' }
 }
 
-/** True if a bundled default exists for this name. */
-export function isBundled(name: string | null | undefined): boolean {
-  return bareName(name) in (THR as Record<string, number>)
-}
-
-/** All bundled default pattern filenames. */
-export function bundledNames(): string[] {
-  return Object.keys(THR as Record<string, number>)
-}
-
 /**
  * Every pattern the app ships a bundled preview for — the ~100 DEFAULT
  * (top-level) patterns, keyed by filename. Custom pattern previews are no longer

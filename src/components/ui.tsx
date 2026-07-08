@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, FlatList, Modal, PanResponder, Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { useTheme } from '../stores/useTheme'
 import { radius, spacing, font } from '../theme'
@@ -130,6 +131,7 @@ export function Select<T extends string>({
             <FlatList
               data={options}
               keyExtractor={(o) => o.value}
+              style={{ flexShrink: 1 }}
               contentContainerStyle={{ paddingBottom: 24 }}
               renderItem={({ item }) => {
                 const active = item.value === value
@@ -149,6 +151,8 @@ export function Select<T extends string>({
                 )
               }}
             />
+            {/* Spacer sized to the modal window's bottom inset (Android nav bar / iOS home indicator) */}
+            <SafeAreaView edges={['bottom']} />
           </Pressable>
         </Pressable>
       </Modal>

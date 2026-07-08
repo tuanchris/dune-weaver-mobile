@@ -1,6 +1,7 @@
 import { File } from 'expo-file-system'
 import { board } from '../api/board'
 import { useLibrary, bareName } from '../stores/useLibrary'
+import { useStatus } from '../stores/useStatus'
 import { assertSdIdle } from './sd'
 
 /**
@@ -12,11 +13,19 @@ import { assertSdIdle } from './sd'
  * Throws if the pattern isn't available locally, the table is running (no SD
  * access mid-job), or the upload fails.
  */
-export async function pushToTable(base: string, name: string): Promise<void> {
+export async function pushToTable(base: string, name: string, onProgress?: (fraction: number) => void): Promise<void> {
   assertSdIdle()
   const key = bareName(name)
   const resolved = await useLibrary.getState().resolveThr(key)
   if (!resolved) throw new Error('Pattern not available locally')
   const text = await new File(resolved.uri).text()
-  await board.uploadTextFile(base, `/patterns/${key}`, text)
+  // Suspend the 1s status poller for the transfer — the board's web server is
+  // single-threaded, so polls queue against (and slow) a multi-MB upload.
+  const { suspend, resume } = useStatus.getState()
+  suspend()
+  try {
+    await board.uploadTextFile(base, `/patterns/${key}`, text, undefined, onProgress)
+  } finally {
+    resume()
+  }
 }

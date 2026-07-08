@@ -2,7 +2,16 @@
 // Read routes return JSON; action routes (/sand_*) return plain text "ok"
 // (do NOT JSON.parse them); /command?plain=... is fire-and-forget.
 
+import { fetch as binaryFetch } from 'expo/fetch' // WinterCG fetch: typed-array bodies (RN's can't)
 import type { RawStatus, RawTime } from './status'
+import { demoBoard, isDemoBase } from './demoBoard'
+
+/** GET/POST /updatefw response. "ready"/"busy" = probe (no file); "ok" =
+ * flashed, board reboots ~1s later; "failed" = rejected or bad image. */
+export interface UpdateFwResponse {
+  status: 'ready' | 'busy' | 'ok' | 'failed'
+  fw?: string
+}
 
 /** Clear-before-run modes accepted by the firmware's $Sand/Run command. */
 export type ClearMode = 'none' | 'adaptive' | 'in' | 'out' | 'sideway' | 'random'
@@ -81,7 +90,6 @@ export const LED_EFFECTS: LedEffectDef[] = [
 
 /** Palettes that recolor the auto-hue effects ($LED/Palette=). */
 export const LED_PALETTES = ['rainbow', 'ocean', 'lava', 'forest', 'party', 'cloud', 'heat', 'sunset'] as const
-export type LedPalette = (typeof LED_PALETTES)[number]
 
 /** Look up an effect's input requirements by name (defaults to none). */
 export function ledEffectInputs(name: string): LedInputs {
@@ -140,6 +148,22 @@ async function getText(base: string, path: string, timeoutMs = 8000): Promise<st
   }
 }
 
+/**
+ * Human-readable message from an error response. /upload failures carry a JSON
+ * body with `error.message` (and a `status` string) buried in a full directory
+ * listing — extract the message instead of dumping the listing into a toast.
+ */
+function httpErrorMessage(status: number, text: string): string {
+  try {
+    const body = JSON.parse(text) as { status?: string; error?: { message?: string } }
+    const msg = body.error?.message || body.status
+    if (msg && msg !== 'Ok') return `HTTP ${status}: ${msg}`
+  } catch {
+    // not JSON — fall through to the raw text
+  }
+  return `HTTP ${status}: ${text.slice(0, 200)}`
+}
+
 /** Fire an action/command route. Returns when the request succeeds; ignores body. */
 async function hit(base: string, path: string, timeoutMs = 6000): Promise<void> {
   const { signal, cancel } = withTimeout(timeoutMs)
@@ -147,7 +171,7 @@ async function hit(base: string, path: string, timeoutMs = 6000): Promise<void> 
     const res = await fetch(`${base}${path}`, { signal })
     if (!res.ok) {
       const text = await res.text().catch(() => '')
-      throw new Error(`HTTP ${res.status}: ${text}`)
+      throw new Error(httpErrorMessage(res.status, text))
     }
   } finally {
     cancel()
@@ -180,34 +204,127 @@ function utf8Len(s: string): number {
  * size field precedes the file part, whose filename is the full SD destination
  * path.
  */
-async function uploadTextFile(base: string, sdPath: string, content: string, timeoutMs = 30000): Promise<void> {
+async function uploadTextFile(
+  base: string,
+  sdPath: string,
+  content: string,
+  timeoutMs?: number,
+  onProgress?: (fraction: number) => void
+): Promise<void> {
+  const size = utf8Len(content)
+  // The board drains uploads slowly (single-threaded server, per-chunk delay,
+  // SD writes) — scale the abort timeout with size (~25 KB/s floor) so a
+  // multi-MB full-res pattern isn't cancelled mid-transfer.
+  const timeout = timeoutMs ?? 30000 + Math.round(size / 25)
   const boundary = `----dwform${Date.now().toString(16)}`
   const head =
     `--${boundary}\r\n` +
     `Content-Disposition: form-data; name="${sdPath}S"\r\n\r\n` +
-    `${utf8Len(content)}\r\n` +
+    `${size}\r\n` +
     `--${boundary}\r\n` +
     `Content-Disposition: form-data; name="file"; filename="${sdPath}"\r\n` +
     `Content-Type: application/octet-stream\r\n\r\n`
   const body = `${head}${content}\r\n--${boundary}--\r\n`
+  // XHR instead of fetch: RN's fetch cannot report upload progress, XHR's
+  // upload.onprogress can — and a multi-MB push takes tens of seconds, so the
+  // UI needs it. Behavior otherwise matches the old fetch path.
+  const attempt = (): Promise<{ ok: boolean; status: number; text: string }> =>
+    new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', `${base}/upload`)
+      xhr.timeout = timeout
+      xhr.setRequestHeader('Content-Type', `multipart/form-data; boundary=${boundary}`)
+      if (onProgress) {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable && e.total > 0) onProgress(Math.min(1, e.loaded / e.total))
+        }
+      }
+      xhr.onload = () => resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, text: xhr.responseText ?? '' })
+      xhr.onerror = () => reject(new Error('network request failed'))
+      xhr.ontimeout = () => reject(new Error('upload timed out'))
+      xhr.send(body)
+    })
+  let r = await attempt()
+  if (!r.ok && r.status !== 401 && r.status !== 507) {
+    // Most likely a missing target folder (a fresh or computer-wiped SD card
+    // has no /playlists or /patterns, and the firmware's fopen doesn't create
+    // parents) — create the folders and retry once.
+    await ensureSdDirs(base, sdPath)
+    r = await attempt()
+  }
+  if (!r.ok) throw new Error(httpErrorMessage(r.status, r.text))
+}
+
+/**
+ * Best-effort mkdir of every folder on sdPath's dirname ("/playlists/x.txt" ->
+ * createdir "playlists" at "/"). Failures are ignored — including "already
+ * exists", which the firmware reports as an HTTP 500 — because the retried
+ * upload is the real test.
+ */
+async function ensureSdDirs(base: string, sdPath: string): Promise<void> {
+  const segs = sdPath.split('/').filter(Boolean).slice(0, -1)
+  let parent = '/'
+  for (const seg of segs) {
+    const q = `path=${encodeURIComponent(parent)}&action=createdir&filename=${encodeURIComponent(seg)}&dontlist=yes`
+    await hit(base, `/upload?${q}`).catch(() => undefined)
+    parent += `${seg}/`
+  }
+}
+
+/**
+ * Probe /updatefw without a file: is the board willing to take an OTA update
+ * right now? The firmware answers 409 while a pattern runs, so parse the JSON
+ * on any status rather than throwing on !ok.
+ */
+async function updateProbe(base: string, timeoutMs = 6000): Promise<UpdateFwResponse> {
   const { signal, cancel } = withTimeout(timeoutMs)
   try {
-    const res = await fetch(`${base}/upload`, {
-      method: 'POST',
-      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
-      body,
-      signal,
-    })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new Error(`HTTP ${res.status}: ${text}`)
-    }
+    const res = await fetch(`${base}/updatefw`, { signal })
+    return (await res.json()) as UpdateFwResponse
   } finally {
     cancel()
   }
 }
 
-export const board = {
+/**
+ * Flash a firmware image over OTA (POST /updatefw). Same multipart shape as
+ * /upload — a "firmware.binS" size field, then the file part — but the body is
+ * BINARY, so it's built as a Uint8Array and sent via expo/fetch (RN's own
+ * fetch only takes string/FormData bodies). On "ok" the board reboots ~1s
+ * later; the caller then polls /sand_status until it's back.
+ */
+async function uploadFirmware(base: string, image: Uint8Array, timeoutMs = 180000): Promise<UpdateFwResponse> {
+  const boundary = `----dwfw${Date.now().toString(16)}`
+  const enc = new TextEncoder()
+  const head = enc.encode(
+    `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="firmware.binS"\r\n\r\n` +
+      `${image.length}\r\n` +
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="firmware.bin"; filename="firmware.bin"\r\n` +
+      `Content-Type: application/octet-stream\r\n\r\n`
+  )
+  const tail = enc.encode(`\r\n--${boundary}--\r\n`)
+  const body = new Uint8Array(head.length + image.length + tail.length)
+  body.set(head, 0)
+  body.set(image, head.length)
+  body.set(tail, head.length + image.length)
+
+  const { signal, cancel } = withTimeout(timeoutMs)
+  try {
+    const res = await binaryFetch(`${base}/updatefw`, {
+      method: 'POST',
+      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+      body,
+      signal,
+    })
+    return (await res.json()) as UpdateFwResponse
+  } finally {
+    cancel()
+  }
+}
+
+const realBoard = {
   // ---- Reads ----
   status: (base: string, timeoutMs = 4000) => getJson<RawStatus>(base, '/sand_status', timeoutMs),
   patterns: (base: string) => getJson<string[]>(base, '/sand_patterns'),
@@ -335,6 +452,10 @@ export const board = {
   unlock: (base: string) => command(base, '$X'),
   /** Reboot the controller ($Bye); it needs ~25-30s to rejoin Wi-Fi. */
   reboot: (base: string) => command(base, '$Bye'),
+  /** Ask whether an OTA firmware update can start ("ready" vs "busy"). */
+  updateProbe,
+  /** Flash a firmware image over OTA; the board reboots itself on success. */
+  uploadFirmware,
 
   // ---- SD file ops (upload / delete) ----
   uploadTextFile,
@@ -342,6 +463,28 @@ export const board = {
   deleteSdFile: (base: string, dir: string, filename: string) =>
     hit(base, `/upload?path=${encodeURIComponent(dir)}&action=delete&filename=${encodeURIComponent(filename)}`),
 }
+
+/**
+ * The board client used everywhere. Dispatches per-call by the FIRST argument
+ * (the board base): a `DEMO_BASE` routes to the in-memory `demoBoard` simulator,
+ * any real URL hits the firmware over HTTP. This keeps the demo table invisible
+ * to every screen/store — they all just call `board.x(base, …)` as before.
+ */
+export const board: typeof realBoard = new Proxy(realBoard, {
+  get(target, prop, receiver) {
+    const realValue = Reflect.get(target, prop, receiver)
+    if (typeof realValue !== 'function') return realValue
+    const demoFn = (demoBoard as Record<string, unknown>)[prop as string]
+    return (...args: unknown[]) => {
+      if (isDemoBase(args[0] as string)) {
+        return typeof demoFn === 'function'
+          ? (demoFn as (...a: unknown[]) => unknown)(...args)
+          : Promise.resolve() // action with no demo impl -> silent success
+      }
+      return (realValue as (...a: unknown[]) => unknown).apply(target, args)
+    }
+  },
+})
 
 /** Quick reachability test used when adding a board. */
 export async function testBoard(base: string): Promise<boolean> {

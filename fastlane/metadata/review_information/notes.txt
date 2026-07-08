@@ -1,0 +1,7 @@
+HOW TO REVIEW WITHOUT HARDWARE: On the first screen, tap "Try demo mode — no table needed." This loads a built-in simulated sand table so you can explore the entire app — browse and run patterns, watch the live progress trace, build playlists, and adjust the LED controls — with no physical device required. No login or account is needed anywhere.
+
+ABOUT THE APP: Dune Weaver is a remote control for a physical kinetic sand table running Dune Weaver Firmware. With a real table it communicates only over the local Wi-Fi network (direct HTTP to the device's firmware) — there is no cloud service and no user account. The app stores all data locally on the device and transmits nothing off the local network.
+
+If you connect to a real table instead of demo mode and the table is not on the same Wi-Fi, the control screens will show a "not connected" state — that is expected, not a bug. Please use demo mode for review.
+
+Questions: hello@duneweaver.com

@@ -28,6 +28,12 @@ export interface DiscoveredTable {
 
 const SCAN_TIMEOUT_MS = 12000
 
+// Use the embedded DNSSD (jmDNS/Bonjour) engine rather than Android's NsdManager
+// (the library default). NsdManager frequently discovers nothing and drops TXT
+// records; DNSSD is consistent cross-device but needs CHANGE_WIFI_MULTICAST_STATE
+// (declared in the manifest) so it can hold a multicast lock. No-op on iOS.
+const IMPL = 'DNSSD'
+
 const isIPv4 = (a: string) => /^\d{1,3}(\.\d{1,3}){3}$/.test(a)
 
 /** Does a resolved service look like a Dune Weaver table? */
@@ -51,6 +57,44 @@ function toTable(service: any): DiscoveredTable | null {
   return { key, name: service.name || address, host: service.host || '', address, port, base }
 }
 
+/**
+ * One-shot scan, no hook: browse for tables for `timeoutMs`, then resolve with
+ * whatever was found. Used by the auto-relocate flow when a saved table stops
+ * answering (DHCP moved it). Resolves [] when the zeroconf native module is
+ * unavailable (Expo Go).
+ */
+export function scanOnce(timeoutMs = 8000): Promise<DiscoveredTable[]> {
+  return new Promise((resolve) => {
+    if (!Zeroconf) {
+      resolve([])
+      return
+    }
+    const zc = new Zeroconf()
+    const found = new Map<string, DiscoveredTable>()
+    zc.on('resolved', (service: any) => {
+      if (!looksLikeTable(service)) return
+      const t = toTable(service)
+      if (t) found.set(t.key, t)
+    })
+    zc.on('error', () => {})
+    try {
+      zc.scan('http', 'tcp', 'local.', IMPL)
+    } catch {
+      resolve([])
+      return
+    }
+    setTimeout(() => {
+      try {
+        zc.stop(IMPL)
+        zc.removeDeviceListeners?.()
+      } catch {
+        // ignore
+      }
+      resolve([...found.values()])
+    }, timeoutMs)
+  })
+}
+
 export function useDiscovery() {
   const available = !!Zeroconf
   const [scanning, setScanning] = useState(false)
@@ -67,7 +111,7 @@ export function useDiscovery() {
     }
     setScanning(false)
     try {
-      zcRef.current?.stop()
+      zcRef.current?.stop(IMPL)
     } catch {
       // ignore
     }
@@ -98,7 +142,7 @@ export function useDiscovery() {
     setTables([])
     setScanning(true)
     try {
-      zc.scan('http', 'tcp', 'local.')
+      zc.scan('http', 'tcp', 'local.', IMPL)
     } catch {
       setScanning(false)
       return
@@ -112,7 +156,7 @@ export function useDiscovery() {
     () => () => {
       if (timerRef.current) clearTimeout(timerRef.current)
       try {
-        zcRef.current?.stop()
+        zcRef.current?.stop(IMPL)
         zcRef.current?.removeDeviceListeners?.()
       } catch {
         // ignore

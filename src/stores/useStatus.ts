@@ -11,6 +11,12 @@ interface StatusStore {
   setBase: (base: string | null) => void
   /** Force an immediate poll (e.g. right after an action) for snappy feedback. */
   refresh: () => Promise<void>
+  /** Pause polling but keep the last status on screen — for long uploads: the
+   * board's web server is single-threaded, so poll traffic queues against (and
+   * slows) an in-flight transfer. Balance with resume(). */
+  suspend: () => void
+  /** Restart polling after suspend(). No-op when no board is active. */
+  resume: () => void
 }
 
 let timer: ReturnType<typeof setTimeout> | null = null
@@ -64,5 +70,24 @@ export const useStatus = create<StatusStore>((set, get) => ({
     } catch {
       // next scheduled poll will reconcile
     }
+  },
+
+  suspend: () => {
+    generation++ // invalidates any in-flight pollOnce
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
+    }
+  },
+
+  resume: () => {
+    const base = get().base
+    if (!base) return
+    generation++
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
+    }
+    pollOnce(base, generation, set, get)
   },
 }))

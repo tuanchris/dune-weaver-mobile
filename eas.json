@@ -22,6 +22,17 @@
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "ascAppId": "6785920802",
+        "ascApiKeyPath": "/Users/tuannguyen/Downloads/AuthKey_SNJFP54RL8.p8",
+        "ascApiKeyId": "SNJFP54RL8",
+        "ascApiKeyIssuerId": "45f73103-150c-4b99-825c-389a396ffc53"
+      },
+      "android": {
+        "serviceAccountKeyPath": "/Users/tuannguyen/Downloads/dw-website-71b35-5e276d980e44.json",
+        "track": "production"
+      }
+    }
   }
 }

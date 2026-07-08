@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Alert, Image, ScrollView, StyleSheet, Switch, Text, TextInput, View, Pressable } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
-import Constants from 'expo-constants'
 import { board, normalizeBase, testBoard, CLEAR_MODES, type ClearMode } from '../api/board'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
@@ -13,9 +12,11 @@ import { importPreviews } from '../lib/importPreviews'
 import { Button, Card, CardTitle, IconButton, Select } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { StillSands } from '../components/StillSands'
+import { UpdatesCard } from '../components/UpdatesCard'
 import { useDiscovery, type DiscoveredTable } from '../lib/discovery'
 import { playlistName } from '../lib/playlists'
 import { pickLogo, clearLogo } from '../lib/branding'
+import { pauseToSeconds, secondsToPause } from '../lib/pauseUnits'
 import { radius, spacing, font } from '../theme'
 
 // Homing modes the firmware exposes via $Sand/HomingMode (mirrors dw).
@@ -36,12 +37,24 @@ const CLEAR_LABELS: Record<ClearMode, string> = {
 
 export function SettingsScreen() {
   const colors = useTheme((s) => s.colors)
-  const { boards, activeId, addBoard, removeBoard, setActive, getActiveBase } = useBoards()
+  const { boards, activeId, addBoard, removeBoard, renameBoard, updateBase, setActive, getActiveBase } = useBoards()
   const base = getActiveBase()
 
   const [name, setName] = useState('')
   const [host, setHost] = useState('')
   const [testing, setTesting] = useState(false)
+  // Inline rename of an existing table row.
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+  const startEdit = (id: string, current: string) => {
+    setEditingId(id)
+    setEditName(current)
+  }
+  const commitEdit = () => {
+    if (!editingId) return
+    renameBoard(editingId, editName)
+    setEditingId(null)
+  }
   // Auto-play on boot: which playlist runs after the table powers on + homes,
   // plus the boot-run options (separate from the manual-run $Playlist/* settings).
   const [autostart, setAutostart] = useState('')
@@ -128,7 +141,16 @@ export function SettingsScreen() {
       toast.error('Already added')
       return
     }
-    addBoard(t.name, t.base)
+    // Same table, new DHCP address? Match on the stored mDNS hostname (display
+    // name as fallback for boards saved before hostnames were stored) and
+    // repoint the existing entry instead of creating a duplicate.
+    const moved = boards.find((b) => (b.hostname ?? b.name).trim().toLowerCase() === t.name.trim().toLowerCase())
+    if (moved) {
+      updateBase(moved.id, t.base, t.name)
+      toast.success(`${moved.name} updated to ${t.address}`)
+      return
+    }
+    addBoard(t.name, t.base, t.name)
     toast.success(`Added ${t.name}`)
   }
 
@@ -151,17 +173,9 @@ export function SettingsScreen() {
       setHomingMode((s['Sand/HomingMode'] ?? 'sensor').toLowerCase() === 'crash' ? 'crash' : 'sensor')
       setThetaOffset(String(parseInt(s['Sand/ThetaOffset'] ?? '0', 10) || 0))
       // Derive a friendly unit from the stored seconds.
-      const secs = parseInt(s['Playlist/AutostartPause'] ?? '0', 10) || 0
-      if (secs && secs % 3600 === 0) {
-        setBootPauseUnit('hr')
-        setBootPauseVal(String(secs / 3600))
-      } else if (secs && secs % 60 === 0) {
-        setBootPauseUnit('min')
-        setBootPauseVal(String(secs / 60))
-      } else {
-        setBootPauseUnit('sec')
-        setBootPauseVal(String(secs))
-      }
+      const { unit, value } = secondsToPause(parseInt(s['Playlist/AutostartPause'] ?? '0', 10) || 0)
+      setBootPauseUnit(unit)
+      setBootPauseVal(String(value))
     } catch {
       // keep whatever we had
     }
@@ -171,11 +185,6 @@ export function SettingsScreen() {
       // keep whatever we had
     }
   }, [base])
-
-  const pauseToSeconds = (val: string, unit: 'sec' | 'min' | 'hr') => {
-    const v = Number(val) || 0
-    return unit === 'hr' ? Math.round(v * 3600) : unit === 'min' ? Math.round(v * 60) : Math.round(v)
-  }
 
   // Apply a boot-setting change optimistically; roll back (reload) on failure.
   const saveBoot = (apply: () => Promise<void>) => {
@@ -279,17 +288,37 @@ export function SettingsScreen() {
           ) : (
             boards.map((b) => {
               const active = b.id === activeId
+              const editing = editingId === b.id
               return (
                 <Pressable
                   key={b.id}
-                  onPress={() => setActive(b.id)}
+                  onPress={() => { if (!editing) setActive(b.id) }}
                   style={[styles.boardRow, { borderColor: active ? colors.primary : colors.border }]}
                 >
                   <MaterialIcons name={active ? 'radio-button-checked' : 'radio-button-unchecked'} size={20} color={active ? colors.primary : colors.mutedForeground} />
                   <View style={{ flex: 1 }}>
-                    <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>{b.name}</Text>
+                    {editing ? (
+                      <TextInput
+                        value={editName}
+                        onChangeText={setEditName}
+                        onSubmitEditing={commitEdit}
+                        onEndEditing={commitEdit}
+                        autoFocus
+                        returnKeyType="done"
+                        placeholder={b.base}
+                        placeholderTextColor={colors.mutedForeground}
+                        style={[styles.renameInput, { color: colors.foreground, backgroundColor: colors.inputBackground, borderColor: colors.border }]}
+                      />
+                    ) : (
+                      <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>{b.name}</Text>
+                    )}
                     <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{b.base}</Text>
                   </View>
+                  {editing ? (
+                    <IconButton icon="check" size={20} color={colors.primary} onPress={commitEdit} />
+                  ) : (
+                    <IconButton icon="edit" size={18} color={colors.mutedForeground} onPress={() => startEdit(b.id, b.name)} />
+                  )}
                   <IconButton icon="delete-outline" size={20} color={colors.mutedForeground} onPress={() => removeBoard(b.id)} />
                 </Pressable>
               )
@@ -394,7 +423,7 @@ export function SettingsScreen() {
                     <TextInput
                       value={bootPauseVal}
                       onChangeText={(t) => setBootPauseVal(t.replace(/[^0-9]/g, ''))}
-                      onEndEditing={() => saveBoot(() => board.setPlaylistAutostartPause(base, pauseToSeconds(bootPauseVal, bootPauseUnit)))}
+                      onEndEditing={() => saveBoot(() => board.setPlaylistAutostartPause(base, pauseToSeconds(Number(bootPauseVal) || 0, bootPauseUnit)))}
                       keyboardType="number-pad"
                       style={[styles.numInput, { color: colors.foreground, backgroundColor: colors.inputBackground, borderColor: colors.border }]}
                     />
@@ -402,7 +431,7 @@ export function SettingsScreen() {
                       <Select
                         value={bootPauseUnit}
                         options={[{ value: 'sec', label: 'seconds' }, { value: 'min', label: 'minutes' }, { value: 'hr', label: 'hours' }]}
-                        onChange={(u) => { setBootPauseUnit(u); saveBoot(() => board.setPlaylistAutostartPause(base, pauseToSeconds(bootPauseVal, u))) }}
+                        onChange={(u) => { setBootPauseUnit(u); saveBoot(() => board.setPlaylistAutostartPause(base, pauseToSeconds(Number(bootPauseVal) || 0, u))) }}
                       />
                     </View>
                   </View>
@@ -556,21 +585,19 @@ export function SettingsScreen() {
           </Text>
         </Card>
 
-        <Text style={{ color: colors.mutedForeground, textAlign: 'center', fontSize: font.size.xs }}>
-          Dune Weaver Mobile · v{Constants.expoConfig?.version ?? '1.0.0'}
-        </Text>
+        <UpdatesCard base={base} />
       </ScrollView>
     </Screen>
   )
 }
 
 const styles = StyleSheet.create({
-  cardTitle: { fontSize: font.size.md, fontWeight: font.weight.semibold, marginBottom: spacing.md },
   boardRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, borderRadius: radius.md, borderWidth: 1, marginBottom: spacing.sm },
   discover: { gap: spacing.sm, marginTop: spacing.sm },
   foundRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, borderRadius: radius.md, borderWidth: 1 },
   addForm: { gap: spacing.sm, marginTop: spacing.md },
   input: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 46, fontSize: font.size.md },
+  renameInput: { borderRadius: radius.sm, borderWidth: 1, paddingHorizontal: spacing.sm, height: 38, fontSize: font.size.md, fontWeight: font.weight.medium },
   brandRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   previewMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.sm },
   homingOpt: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, borderRadius: radius.md, borderWidth: 1, marginBottom: spacing.sm },

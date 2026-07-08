@@ -1,24 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Dimensions, FlatList, Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board } from '../api/board'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
-import { toast } from '../stores/useToast'
 import { isActive } from '../api/status'
 import { loadPlaylist } from '../lib/playlists'
+import { prettyName } from '../lib/patternName'
+import { useBoardAction } from '../lib/useBoardAction'
 import { PatternThumb } from './PatternThumb'
 import { patternKey } from '../stores/useLibrary'
-import { IconButton, Slider } from './ui'
+import { IconButton } from './ui'
+import { SpeedControl } from './SpeedControl'
 import { radius, spacing, font } from '../theme'
 
 const TAB_BAR = 58
-
-function pretty(file: string | null) {
-  return file ? file.split('/').pop()!.replace(/\.thr$/i, '') : ''
-}
 
 /** ms -> "M:SS" */
 function fmt(ms: number): string {
@@ -35,18 +33,13 @@ export function NowPlayingBar() {
   const [expanded, setExpanded] = useState(false)
   const [queueOpen, setQueueOpen] = useState(false)
   const [playlistItems, setPlaylistItems] = useState<{ name: string; items: string[] } | null>(null)
-  // Live value while dragging the speed slider (null = show the board's value).
-  const [speedDrag, setSpeedDrag] = useState<number | null>(null)
+  const { act } = useBoardAction(350)
 
   // Track when the current pattern started so we can show elapsed time and an
   // estimated remaining (the firmware reports only a 0..100 progress, no clock).
   const startRef = useRef<{ file: string | null; at: number }>({ file: null, at: Date.now() })
   // Last pattern we had a file for, so we can keep showing it while idle/paused.
   const lastFileRef = useRef<string | null>(null)
-  // After releasing the speed slider, keep showing the chosen value for a beat
-  // so it doesn't snap back to the stale board value before the next poll lands.
-  const speedHoldRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => () => { if (speedHoldRef.current) clearTimeout(speedHoldRef.current) }, [])
   const currentFile = status?.currentFile ?? null
   useEffect(() => {
     startRef.current = { file: currentFile, at: Date.now() }
@@ -101,7 +94,7 @@ export function NowPlayingBar() {
   // name + preview on screen instead of blanking to "Idle".
   if (currentFile) lastFileRef.current = currentFile
   const displayFile = currentFile ?? lastFileRef.current
-  const name = pretty(displayFile)
+  const name = prettyName(displayFile)
 
   // The between-patterns pause drives the same progress bar: it fills from the
   // elapsed share of the pause (pause_total − pause_remaining), and the time row
@@ -125,16 +118,6 @@ export function NowPlayingBar() {
     status.playlist && playlistItems?.name === plName ? playlistItems.items[status.playlist.index + 1] : undefined
   const upcoming =
     status.playlist && playlistItems?.name === plName ? playlistItems.items.slice(status.playlist.index + 1) : []
-
-  const act = async (fn: () => Promise<void>, msg: string) => {
-    try {
-      await fn()
-      toast.success(msg)
-      setTimeout(refresh, 350)
-    } catch {
-      toast.error('Action failed')
-    }
-  }
 
   const togglePause = () =>
     status.isPaused ? act(() => board.resume(base), 'Resumed') : act(() => board.pause(base), 'Paused')
@@ -167,7 +150,9 @@ export function NowPlayingBar() {
   const queueModal = (
     <Modal visible={queueOpen} transparent animationType="slide" onRequestClose={() => setQueueOpen(false)}>
       <View style={styles.modalBackdrop}>
-        <View style={[styles.queueSheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
+        {/* Native SafeAreaView: measures the Modal's own window, so the sheet
+            clears the Android nav bar (main-window insets don't apply here). */}
+        <SafeAreaView edges={['bottom']} style={[styles.queueSheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
           <View style={styles.queueHeader}>
             <IconButton icon="close" size={26} color={colors.foreground} onPress={() => setQueueOpen(false)} />
             <Text style={{ color: colors.foreground, fontSize: font.size.lg, fontWeight: font.weight.semibold }}>
@@ -178,7 +163,7 @@ export function NowPlayingBar() {
           <FlatList
             data={upcoming}
             keyExtractor={(it, i) => `${it}-${i}`}
-            contentContainerStyle={{ padding: spacing.md, paddingBottom: 40 }}
+            contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.lg }}
             ListEmptyComponent={
               <Text style={{ color: colors.mutedForeground, textAlign: 'center', marginTop: 40 }}>No upcoming patterns.</Text>
             }
@@ -188,11 +173,11 @@ export function NowPlayingBar() {
                 <View style={styles.queueThumb}>
                   <PatternThumb name={item} size={36} />
                 </View>
-                <Text numberOfLines={1} style={{ flex: 1, color: colors.foreground }}>{pretty(item)}</Text>
+                <Text numberOfLines={1} style={{ flex: 1, color: colors.foreground }}>{prettyName(item)}</Text>
               </View>
             )}
           />
-        </View>
+        </SafeAreaView>
       </View>
     </Modal>
   )
@@ -201,7 +186,7 @@ export function NowPlayingBar() {
     <Modal visible={expanded} transparent animationType="slide" onRequestClose={() => setExpanded(false)}>
       <View style={styles.modalBackdrop}>
         <Pressable style={{ flex: 1 }} onPress={() => setExpanded(false)} />
-        <View style={[styles.expandedSheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
+        <SafeAreaView edges={['bottom']} style={[styles.expandedSheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
           <View {...swipe.panHandlers}>
             <View style={[styles.grabber, { backgroundColor: colors.border }]} />
             <View style={styles.expandedHeader}>
@@ -217,7 +202,7 @@ export function NowPlayingBar() {
 
           <ScrollView
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: insets.bottom + spacing.lg }}
+            contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.lg }}
           >
             <View style={{ alignItems: 'center', marginVertical: spacing.md }}>
               <PatternThumb name={patternKey(displayFile)} size={vizSize} />
@@ -230,7 +215,7 @@ export function NowPlayingBar() {
                   <PatternThumb name={upNextFile} size={96} />
                 </View>
                 <Text numberOfLines={1} style={[styles.upNext, { color: colors.mutedForeground }]}>
-                  Up next: {pretty(upNextFile)}
+                  Up next: {prettyName(upNextFile)}
                 </Text>
               </Pressable>
             ) : null}
@@ -239,38 +224,15 @@ export function NowPlayingBar() {
             <Controls big />
 
             <View style={[styles.speedWrap, { borderTopColor: colors.border }]}>
-              <View style={styles.speedHeader}>
-                <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>Speed</Text>
-                <Text style={{ color: colors.foreground, fontSize: font.size.sm, fontWeight: font.weight.medium }}>
-                  {speedDrag ?? status.speed} mm/min{status.feedOverride !== 100 ? ` · ${status.feedOverride}%` : ''}
-                </Text>
-              </View>
-              <Slider
-                value={speedDrag ?? status.speed}
-                min={50}
-                max={500}
-                step={50}
-                onChange={(v) => {
-                  if (speedHoldRef.current) clearTimeout(speedHoldRef.current)
-                  setSpeedDrag(v)
-                }}
-                onComplete={(v) => {
-                  // Hold the chosen value until the board's status has caught up
-                  // (refresh fires ~350ms after the write), then release to the live
-                  // value — so the thumb stays put instead of snapping back.
-                  setSpeedDrag(v)
-                  board
-                    .setFeedLive(base, v)
-                    .then(() => setTimeout(refresh, 350))
-                    .catch(() => {})
-                  if (speedHoldRef.current) clearTimeout(speedHoldRef.current)
-                  speedHoldRef.current = setTimeout(() => setSpeedDrag(null), 1200)
-                }}
+              <SpeedControl
+                value={status.speed}
+                feedOverride={status.feedOverride}
+                onCommit={(v) => board.setFeedLive(base, v).then(() => setTimeout(refresh, 350)).catch(() => {})}
               />
             </View>
           </ScrollView>
           {queueModal}
-        </View>
+        </SafeAreaView>
       </View>
     </Modal>
   )
@@ -333,7 +295,6 @@ const styles = StyleSheet.create({
   fill: { height: 6, borderRadius: 3 },
   timeRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 5 },
   speedWrap: { marginTop: spacing.lg, paddingTop: spacing.md, borderTopWidth: 1, gap: spacing.sm },
-  speedHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   queueSheet: { height: '70%', borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1 },
   queueHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.md },

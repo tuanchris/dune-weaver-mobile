@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { ActivityIndicator, Alert, Dimensions, FlatList, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board, CLEAR_MODES, type ClearMode } from '../api/board'
 import { useBoards } from '../stores/useBoards'
@@ -9,9 +10,13 @@ import { toast } from '../stores/useToast'
 import { Button, IconButton } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { PatternThumb } from '../components/PatternThumb'
+import { EmptyState } from '../components/EmptyState'
 import { useLibrary } from '../stores/useLibrary'
 import { usePrefs, type PauseUnit, type PlaylistPref } from '../stores/usePrefs'
 import { loadPlaylist, savePlaylist, deletePlaylist, playlistName } from '../lib/playlists'
+import { prettyName } from '../lib/patternName'
+import { useBoardAction } from '../lib/useBoardAction'
+import { pauseToSeconds, secondsToPause } from '../lib/pauseUnits'
 import { SdBusyError } from '../lib/sd'
 import { radius, spacing, font } from '../theme'
 
@@ -31,10 +36,6 @@ const CLEAR_DESC: Record<ClearMode, string> = {
 const UNIT_SUFFIX: Record<PauseUnit, string> = { sec: 's', min: 'm', hr: 'h' }
 const DEFAULT_PREF: PlaylistPref = { loop: false, shuffle: false, pauseTime: 0, pauseUnit: 'sec', clearMode: 'none' }
 
-function patternLabel(file: string) {
-  return file.replace(/\.thr$/i, '').split('/').pop() ?? file
-}
-
 export function PlaylistsScreen() {
   const colors = useTheme((s) => s.colors)
   const base = useBoards((s) => s.getActiveBase())
@@ -43,7 +44,7 @@ export function PlaylistsScreen() {
 
   const [playlists, setPlaylists] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const { busy, setBusy, act } = useBoardAction()
 
   // Create-playlist modal (name only, like dw — empty playlist then open detail).
   const [createOpen, setCreateOpen] = useState(false)
@@ -102,25 +103,6 @@ export function PlaylistsScreen() {
     load()
   }, [load])
 
-  const act = async (fn: () => Promise<void>, msg: string) => {
-    setBusy(true)
-    try {
-      await fn()
-      toast.success(msg)
-      setTimeout(refreshStatus, 400)
-    } catch {
-      toast.error('Action failed')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const pauseSeconds = () => {
-    if (pref.pauseUnit === 'hr') return Math.round(pref.pauseTime * 3600)
-    if (pref.pauseUnit === 'min') return Math.round(pref.pauseTime * 60)
-    return Math.round(pref.pauseTime)
-  }
-
   // Load the saved playback options for a playlist. If it has none yet, fall
   // back to the board's current global settings (deriving a friendly pause unit
   // from the stored seconds) so the controls reflect reality the first time.
@@ -135,12 +117,13 @@ export function PlaylistsScreen() {
     try {
       const s = await board.settings(base)
       const secs = parseInt(s['Playlist/PauseTime'] ?? '0', 10) || 0
+      const { unit, value } = secondsToPause(secs)
       const seeded: PlaylistPref = {
         loop: (s['Playlist/Mode'] ?? '').toLowerCase() === 'loop',
         shuffle: (s['Playlist/Shuffle'] ?? '').toUpperCase() === 'ON' || s['Playlist/Shuffle'] === '1',
         clearMode: CLEAR_MODES.find((c) => c.mode === s['Playlist/ClearPattern'])?.mode ?? 'none',
-        pauseUnit: secs && secs % 3600 === 0 ? 'hr' : secs && secs % 60 === 0 ? 'min' : 'sec',
-        pauseTime: secs && secs % 3600 === 0 ? secs / 3600 : secs && secs % 60 === 0 ? secs / 60 : secs,
+        pauseUnit: unit,
+        pauseTime: value,
       }
       // Only adopt the board seed if the user hasn't already navigated away.
       setPref((p) => (p === DEFAULT_PREF ? seeded : p))
@@ -278,7 +261,7 @@ export function PlaylistsScreen() {
     try {
       await board.setPlaylistMode(base, pref.loop ? 'loop' : 'single')
       await board.setPlaylistShuffle(base, pref.shuffle)
-      await board.setPlaylistPause(base, pauseSeconds())
+      await board.setPlaylistPause(base, pauseToSeconds(pref.pauseTime, pref.pauseUnit))
       await board.setPlaylistClearPattern(base, pref.clearMode)
       await board.runPlaylist(base, current)
       toast.success(`Started ${name}`)
@@ -319,10 +302,7 @@ export function PlaylistsScreen() {
   if (!base) {
     return (
       <Screen>
-        <View style={styles.empty}>
-          <MaterialIcons name="cable" size={40} color={colors.mutedForeground} />
-          <Text style={{ color: colors.mutedForeground, marginTop: spacing.sm }}>No table connected.</Text>
-        </View>
+        <EmptyState icon="cable" text="No table connected." />
       </Screen>
     )
   }
@@ -351,10 +331,7 @@ export function PlaylistsScreen() {
         refreshControl={<RefreshControl refreshing={loading} onRefresh={load} tintColor={colors.primary} />}
         ListEmptyComponent={
           loading ? <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} /> : (
-            <View style={styles.empty}>
-              <MaterialIcons name="playlist-remove" size={40} color={colors.mutedForeground} />
-              <Text style={{ color: colors.mutedForeground, marginTop: spacing.sm }}>No playlists. Tap “New” to create one.</Text>
-            </View>
+            <EmptyState icon="playlist-remove" text="No playlists. Tap “New” to create one." />
           )
         }
         renderItem={({ item }) => (
@@ -393,7 +370,9 @@ export function PlaylistsScreen() {
       {/* Detail view */}
       <Modal visible={detailOpen} transparent animationType="slide" onRequestClose={closeDetail}>
         <View style={styles.modalBackdrop}>
-          <View style={[styles.editorSheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
+          {/* Native SafeAreaView: measures the Modal's own window, so the sheet
+              clears the Android nav bar (main-window insets don't apply here). */}
+          <SafeAreaView edges={['bottom']} style={[styles.editorSheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
             <View style={styles.editorHeader}>
               <IconButton icon={dirty ? 'check' : 'close'} size={26} color={dirty ? colors.primary : colors.foreground} onPress={closeDetail} />
               <View style={{ flex: 1, alignItems: 'center' }}>
@@ -419,12 +398,7 @@ export function PlaylistsScreen() {
               contentContainerStyle={{ padding: spacing.md, gap: spacing.md, paddingBottom: 160 }}
               columnWrapperStyle={{ gap: spacing.md }}
               ListEmptyComponent={
-                <View style={styles.empty}>
-                  <MaterialIcons name="library-music" size={40} color={colors.mutedForeground} />
-                  <Text style={{ color: colors.mutedForeground, marginTop: spacing.sm, textAlign: 'center' }}>
-                    Empty playlist. Tap “Add patterns” to get started.
-                  </Text>
-                </View>
+                <EmptyState icon="library-music" text="Empty playlist. Tap “Add patterns” to get started." />
               }
               renderItem={({ item, index }) => (
                 <View style={styles.gridCell}>
@@ -435,7 +409,7 @@ export function PlaylistsScreen() {
                     </Pressable>
                   </View>
                   <Text numberOfLines={1} style={{ color: colors.foreground, fontSize: font.size.xs, fontWeight: font.weight.medium, maxWidth: '100%', textAlign: 'center' }}>
-                    {patternLabel(item)}
+                    {prettyName(item)}
                   </Text>
                 </View>
               )}
@@ -500,7 +474,7 @@ export function PlaylistsScreen() {
                 )}
               </Pressable>
             </View>
-          </View>
+          </SafeAreaView>
 
           {/* Clear-pattern selector — nested inside the detail Modal so it presents
               on top (a sibling Modal would silently fail to appear). */}
@@ -512,7 +486,7 @@ export function PlaylistsScreen() {
                   <Text style={{ color: colors.foreground, fontSize: font.size.lg, fontWeight: font.weight.semibold }}>Clear before each pattern</Text>
                   <IconButton icon="close" size={26} color={colors.foreground} onPress={() => setClearOpen(false)} />
                 </View>
-                <ScrollView contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}>
+                <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}>
                   {CLEAR_MODES.map((c) => {
                     const active = c.mode === pref.clearMode
                     return (
@@ -533,6 +507,7 @@ export function PlaylistsScreen() {
                     )
                   })}
                 </ScrollView>
+                <SafeAreaView edges={['bottom']} />
               </Pressable>
             </Pressable>
           </Modal>
@@ -540,7 +515,7 @@ export function PlaylistsScreen() {
           {/* Pattern picker — nested inside the detail Modal so it presents on top. */}
           <Modal visible={pickerOpen} transparent animationType="slide" onRequestClose={() => setPickerOpen(false)}>
             <View style={styles.modalBackdrop}>
-              <View style={[styles.editorSheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
+              <SafeAreaView edges={['bottom']} style={[styles.editorSheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
                 <View style={styles.editorHeader}>
                   <IconButton icon="close" size={26} color={colors.foreground} onPress={() => setPickerOpen(false)} />
                   <Text style={{ color: colors.foreground, fontSize: font.size.lg, fontWeight: font.weight.semibold }}>Add patterns</Text>
@@ -577,12 +552,10 @@ export function PlaylistsScreen() {
                   contentContainerStyle={{ padding: spacing.md, gap: spacing.md }}
                   columnWrapperStyle={{ gap: spacing.md }}
                   ListEmptyComponent={
-                    <View style={styles.empty}>
-                      <MaterialIcons name="grid-off" size={36} color={colors.mutedForeground} />
-                      <Text style={{ color: colors.mutedForeground, marginTop: spacing.sm, textAlign: 'center' }}>
-                        {tablePatterns.length === 0 ? 'No patterns on the table. Send some from Browse first.' : 'No matches'}
-                      </Text>
-                    </View>
+                    <EmptyState
+                      icon="grid-off"
+                      text={tablePatterns.length === 0 ? 'No patterns on the table. Send some from Browse first.' : 'No matches'}
+                    />
                   }
                   renderItem={({ item }) => {
                     const on = picked.has(item)
@@ -602,7 +575,7 @@ export function PlaylistsScreen() {
                           ) : null}
                         </View>
                         <Text numberOfLines={1} style={{ color: on ? colors.primary : colors.foreground, fontSize: font.size.xs, fontWeight: font.weight.medium, maxWidth: '100%', textAlign: 'center' }}>
-                          {patternLabel(item)}
+                          {prettyName(item)}
                         </Text>
                       </Pressable>
                     )
@@ -611,7 +584,7 @@ export function PlaylistsScreen() {
                 <View style={[styles.editorActions, { borderTopColor: colors.border }]}>
                   <Button title="Save selection" icon="check" loading={busy} onPress={confirmPicker} flex />
                 </View>
-              </View>
+              </SafeAreaView>
             </View>
           </Modal>
         </View>
@@ -624,7 +597,6 @@ const styles = StyleSheet.create({
   activeBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, margin: spacing.md, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderLeftWidth: 3 },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, marginBottom: spacing.sm },
   rowName: { flex: 1, fontSize: font.size.md, fontWeight: font.weight.medium },
-  empty: { alignItems: 'center', justifyContent: 'center', paddingVertical: 60, width: '100%' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   centerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: spacing.lg },
   createCard: { width: '100%', maxWidth: 420, borderRadius: radius.xl, borderWidth: 1, padding: spacing.lg, gap: spacing.md },

@@ -37,7 +37,7 @@ export const usePrefs = create<PrefsStore>((set, get) => {
     AsyncStorage.setItem(KEY, JSON.stringify({ clearMode, playlistPrefs } satisfies Persisted)).catch(() => {})
   }
   return {
-    clearMode: 'none',
+    clearMode: 'adaptive',
     playlistPrefs: {},
     setClearMode: (clearMode) => {
       set({ clearMode })
@@ -53,7 +53,7 @@ export const usePrefs = create<PrefsStore>((set, get) => {
         if (raw) {
           const data: Partial<Persisted> = JSON.parse(raw)
           set({
-            clearMode: data.clearMode ?? 'none',
+            clearMode: data.clearMode ?? 'adaptive',
             playlistPrefs: data.playlistPrefs ?? {},
           })
         }

@@ -26,12 +26,39 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
   EnumSetting values are case-insensitive (`strcasecmp`); booleans are `ON`/`OFF`.
 - Files: `POST /upload` multipart (file part's **filename = full SD path**, e.g. `/patterns/x.thr`;
   text field `<sdPath>S` = byte size). `GET /upload?action=delete&path=&filename=` to delete.
+  On upload failure, `uploadTextFile` retries once after best-effort `action=createdir` of the
+  parent folders — user SD cards prepared on a computer often lack `/playlists`, and firmware
+  ≤ v0.1.3 doesn't create parents on upload (newer does). `createdir` on an existing dir answers
+  HTTP 500; ignored. The upload abort timeout scales with payload size (30 s + ~25 KB/s floor) —
+  the board drains uploads slowly, and a flat timeout cancelled multi-MB full-res patterns
+  mid-transfer (surfaces as firmware "upload cancelled" / app "Fetch request has been canceled").
+  Pattern pushes suspend the 1 s status poller for the transfer (`useStatus.suspend()/resume()` —
+  keeps the last status on screen, unlike `setBase(null)` which the OTA flow uses); the board's
+  single-threaded server would otherwise queue polls against the upload. Uploads go through
+  XMLHttpRequest (not fetch) so `upload.onprogress` can drive the progress bar in Browse's
+  pattern detail sheet; "Add & send" opens that sheet before pushing so progress is visible.
+- **IP changes (DHCP)**: boards store an optional `hostname` (mDNS instance name, set when added
+  via discovery). `useAutoRelocate` (App.tsx) watches for the active board going unreachable
+  ~12 s, then re-scans mDNS (`scanOnce` in discovery.ts, retry every 60 s) and repoints the saved
+  board via `useBoards.updateBase` when a discovered table matches by hostname (display-name
+  fallback for older entries; manual boards without a hostname never auto-relocate). Settings'
+  discovered-table add also reconciles by hostname — updates the existing entry's IP instead of
+  erroring "Already added".
   **Reading files needs the explicit `/sd/` mount prefix** — `GET /sd/playlists/<name>.txt` /
   `GET /sd/patterns/<name>.thr` (firmware `myStreamFile`); a bare `/playlists/...` resolves to the
   on-board flash FS instead, so it won't find SD files.
 - **No WebSocket** — `useStatus` polls `/sand_status` every 1s, scheduled relative to request start.
-  Status also carries `playlist.quiet` (Still Sands active → `Status.isQuiet`) and, when LEDs are
-  configured, `led:{effect,brightness}` (→ `Status.led`).
+  Status also carries `playlist.quiet` (Still Sands active → `Status.isQuiet`), `fw` (firmware
+  version → `Status.fw`) and, when LEDs are configured, `led:{effect,brightness}` (→ `Status.led`).
+- **OTA firmware update**: `GET /updatefw` probes (`{status:"ready"|"busy",fw}`; 409 while a pattern
+  runs), `POST /updatefw` multipart (`firmware.binS` size field + `firmware.bin` file part) flashes
+  and reboots. `src/lib/firmwareUpdate.ts` orchestrates: download the latest GitHub release asset
+  (`tuanchris/dune-weaver-firmware` releases → `firmware.bin`), suspend the status poller (the
+  board's web server is single-threaded), flash via `board.uploadFirmware` (binary body needs
+  `expo/fetch` — RN's fetch can't send typed arrays), poll until the board is back. Update checks
+  live in `src/lib/updates.ts` + `src/stores/useUpdates.ts` (app: iTunes lookup / Play page scrape;
+  both fail-safe to "unknown"); a red dot on the Settings tab (App.tsx) + an Updates card in
+  Settings (`UpdatesCard.tsx`) surface them.
 
 ### Key data conventions (easy to get wrong)
 - **theta is RADIANS**, continuous/unwound (same as `.thr` files), NOT degrees. `rho` may be signed.
@@ -62,7 +89,8 @@ The app is the source of truth for patterns; it never reads pattern data back of
 - `src/screens/` — `Browse` (Library|On-Table tabs, circular thumbs, import, push, clear-before-run),
   `Playlists` (create/edit/delete, pattern picker grid, loop/shuffle/pause + pause-from-start/clear/
   auto-home), `Control` (home/stop/unlock/speed + quiet-hours + live status), `Led` (effect/palette/
-  color pickers, brightness/speed sliders, run/idle overrides), `Settings` (tables + reboot).
+  color pickers, brightness/speed sliders, run/idle overrides), `Settings` (tables + reboot + app/
+  firmware updates).
 - `src/components/` — `PolarPattern` (SVG path + progress + live dot), `PatternThumb`, `NowPlayingBar`
   (swipe up/down to expand/collapse), `Screen`, `ui.tsx` (`Button`/`Card`/`IconButton`/`Slider` —
   the `Slider` is PanResponder-based, no native dep), `Onboarding`, `Toaster`.

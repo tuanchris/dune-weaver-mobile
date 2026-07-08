@@ -14,6 +14,7 @@ import { radius, spacing, font } from '../theme'
 export function Onboarding() {
   const colors = useTheme((s) => s.colors)
   const addBoard = useBoards((s) => s.addBoard)
+  const addDemoBoard = useBoards((s) => s.addDemoBoard)
   const brand = useBranding((s) => s.name)
   const logoUri = useBranding((s) => s.logoUri)
   const [name, setName] = useState('')
@@ -60,6 +61,18 @@ export function Onboarding() {
           <Text style={[styles.sub, { color: colors.mutedForeground }]}>
             Connect to your sand table on the local network.
           </Text>
+
+          <View style={styles.form}>
+            <Button
+              title="Try demo mode — no table needed"
+              icon="play-circle-outline"
+              variant="secondary"
+              onPress={() => {
+                addDemoBoard()
+                toast.success('Demo table ready — explore the app')
+              }}
+            />
+          </View>
 
           {discoveryAvailable ? (
             <View style={styles.form}>

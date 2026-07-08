@@ -46,3 +46,13 @@ yarn-error.*
 /assets/geom/
 /assets/thr/
 /assets/pattern-manifest.js
+
+# fastlane
+fastlane/asc_api_key.json
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots
+*.ipa
+*.aab
+*.cer
+*.certSigningRequest

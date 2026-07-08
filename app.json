@@ -2,7 +2,7 @@
   "expo": {
     "name": "Dune Weaver",
     "slug": "dune-weaver-mobile",
-    "version": "1.0.0",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/dw-logo.png",
     "userInterfaceStyle": "automatic",
@@ -13,7 +13,10 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.joonsolutions.duneweaver",
+      "bundleIdentifier": "com.duneweaver",
+      "config": {
+        "usesNonExemptEncryption": false
+      },
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "Dune Weaver finds and connects to your sand table on the local network to control patterns.",
         "NSPhotoLibraryUsageDescription": "Dune Weaver lets you pick a photo to use as a custom app logo.",
@@ -27,12 +30,14 @@
     },
     "android": {
       "package": "com.duneweaver",
-      "usesCleartextTraffic": true,
+      "permissions": [
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.ACCESS_WIFI_STATE",
+        "android.permission.CHANGE_WIFI_MULTICAST_STATE"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#1a1a1a",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "foregroundImage": "./assets/dw-logo.png"
       },
       "predictiveBackGestureEnabled": false
     },
@@ -47,9 +52,18 @@
         {
           "ios": {
             "buildReactNativeFromSource": true
+          },
+          "android": {
+            "usesCleartextTraffic": true
           }
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "d4ffdf8f-10b5-4ed9-a7b6-4cf486165c48"
+      }
+    },
+    "owner": "duneweaver"
   }
 }

@@ -22,7 +22,9 @@ import { useLibrary } from './src/stores/useLibrary'
 import { usePrefs } from './src/stores/usePrefs'
 import { useBranding } from './src/stores/useBranding'
 import { usePreviews } from './src/stores/usePreviews'
+import { useUpdates, appUpdateAvailable, fwUpdateAvailable } from './src/stores/useUpdates'
 import { syncClock } from './src/lib/clock'
+import { useAutoRelocate } from './src/lib/relocate'
 
 const Tab = createBottomTabNavigator()
 
@@ -48,6 +50,16 @@ export default function App() {
   const colors = useTheme((s) => s.colors)
   const mode = useTheme((s) => s.mode)
 
+  // Follow the active table to a new IP when DHCP moves it (mDNS re-scan).
+  useAutoRelocate()
+
+  // Update-available dot on the Settings tab: a newer app in the store, or a
+  // newer firmware release than what the active table reports.
+  const appLatest = useUpdates((s) => s.appLatest)
+  const fwLatest = useUpdates((s) => s.fwLatest)
+  const tableFw = useStatus((s) => s.status?.fw ?? null)
+  const updateDot = appUpdateAvailable(appLatest) || fwUpdateAvailable(fwLatest, tableFw)
+
   // Hydrate persisted state on launch.
   useEffect(() => {
     hydrateTheme()
@@ -56,6 +68,7 @@ export default function App() {
     hydratePrefs()
     hydrateBranding()
     hydratePreviews()
+    useUpdates.getState().check() // best-effort; silently stays unknown offline
   }, [hydrateTheme, hydrateBoards, hydrateLibrary, hydratePrefs, hydrateBranding, hydratePreviews])
 
   // Point the status poller at the active board whenever it changes, and read
@@ -99,7 +112,14 @@ export default function App() {
               tabBarActiveTintColor: colors.primary,
               tabBarInactiveTintColor: colors.mutedForeground,
               tabBarStyle: { backgroundColor: colors.card, borderTopColor: colors.border },
-              tabBarIcon: ({ color, size }) => <MaterialIcons name={ICONS[route.name]} size={size} color={color} />,
+              tabBarIcon: ({ color, size }) => (
+                <View>
+                  <MaterialIcons name={ICONS[route.name]} size={size} color={color} />
+                  {route.name === 'Settings' && updateDot ? (
+                    <View style={{ position: 'absolute', top: -1, right: -3, width: 8, height: 8, borderRadius: 4, backgroundColor: colors.destructive }} />
+                  ) : null}
+                </View>
+              ),
             })}
           >
             <Tab.Screen name="Browse" component={BrowseScreen} />

@@ -1,13 +1,15 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board } from '../api/board'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
-import { toast } from '../stores/useToast'
-import { Button, Card, CardTitle, Slider } from '../components/ui'
+import { useBoardAction } from '../lib/useBoardAction'
+import { Button, Card, CardTitle } from '../components/ui'
 import { Screen } from '../components/Screen'
+import { SpeedControl } from '../components/SpeedControl'
+import { EmptyState } from '../components/EmptyState'
 import { radius, spacing, font } from '../theme'
 
 type IconName = React.ComponentProps<typeof MaterialIcons>['name']
@@ -25,34 +27,12 @@ export function ControlScreen() {
   const base = useBoards((s) => s.getActiveBase())
   const status = useStatus((s) => s.status)
   const refreshStatus = useStatus((s) => s.refresh)
-  const [busy, setBusy] = useState(false)
-  // Live value while dragging the speed slider (null = show the board's value).
-  // Held briefly after release so the thumb doesn't snap back before the poll
-  // catches up — mirrors the Now Playing slider.
-  const [speedDrag, setSpeedDrag] = useState<number | null>(null)
-  const speedHoldRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => () => { if (speedHoldRef.current) clearTimeout(speedHoldRef.current) }, [])
-
-  const act = async (fn: () => Promise<void>, msg: string) => {
-    if (!base) return
-    setBusy(true)
-    try {
-      await fn()
-      toast.success(msg)
-      setTimeout(refreshStatus, 400)
-    } catch {
-      toast.error('Action failed')
-    } finally {
-      setBusy(false)
-    }
-  }
+  const { busy, act } = useBoardAction()
 
   if (!base) {
     return (
       <Screen>
-        <View style={{ padding: spacing.xl }}>
-          <Text style={{ color: colors.mutedForeground }}>No table connected. Add one in Settings.</Text>
-        </View>
+        <EmptyState icon="cable" text="No table connected. Add one in Settings." />
       </Screen>
     )
   }
@@ -98,30 +78,10 @@ export function ControlScreen() {
 
         <Card>
           <CardTitle>Speed Control</CardTitle>
-          <View style={styles.speedHeader}>
-            <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>Speed</Text>
-            <Text style={{ color: colors.foreground, fontSize: font.size.sm, fontWeight: font.weight.medium }}>
-              {speedDrag ?? status?.speed ?? '—'} mm/min{status && status.feedOverride !== 100 ? ` · ${status.feedOverride}%` : ''}
-            </Text>
-          </View>
-          <Slider
-            value={speedDrag ?? status?.speed ?? 50}
-            min={50}
-            max={500}
-            step={50}
-            onChange={(v) => {
-              if (speedHoldRef.current) clearTimeout(speedHoldRef.current)
-              setSpeedDrag(v)
-            }}
-            onComplete={(v) => {
-              setSpeedDrag(v)
-              board
-                .setFeedLive(base, v)
-                .then(() => setTimeout(refreshStatus, 350))
-                .catch(() => {})
-              if (speedHoldRef.current) clearTimeout(speedHoldRef.current)
-              speedHoldRef.current = setTimeout(() => setSpeedDrag(null), 1200)
-            }}
+          <SpeedControl
+            value={status?.speed ?? 50}
+            feedOverride={status?.feedOverride ?? 100}
+            onCommit={(v) => board.setFeedLive(base, v).then(() => setTimeout(refreshStatus, 350)).catch(() => {})}
           />
         </Card>
       </ScrollView>
@@ -148,5 +108,4 @@ const styles = StyleSheet.create({
   tileRow: { flexDirection: 'row', gap: spacing.sm },
   tile: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 6, height: 72, borderRadius: radius.md, borderWidth: 1 },
   hint: { fontSize: font.size.xs, marginTop: spacing.md },
-  speedHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm },
 })

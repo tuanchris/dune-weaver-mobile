@@ -68,12 +68,3 @@ export function serializeSlots(slots: QuietSlot[]): string {
     })
     .join(',')
 }
-
-/** Human summary of a slot's days, e.g. "Mon, Wed, Fri". */
-export function daysSummary(s: QuietSlot): string {
-  if (s.days === 'daily') return 'Every day'
-  if (s.days === 'weekdays') return 'Weekdays'
-  if (s.days === 'weekends') return 'Weekends'
-  if (s.customDays.length === 0) return 'Every day'
-  return [...s.customDays].sort((a, b) => DAYS.indexOf(a as any) - DAYS.indexOf(b as any)).map((d) => DAY_LABELS[d]).join(', ')
-}

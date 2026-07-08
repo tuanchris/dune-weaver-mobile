@@ -28,6 +28,8 @@ on your Wi-Fi, so there's no CORS, no server to keep running, and nothing leaves
   during playlists.
 - **Quiet hours ("Still Sands")**, **auto-play on boot**, **multi-table** with a header switcher,
   custom **branding** (name + logo), and light/dark themes.
+- **Updates** – shows the table's firmware version, flashes new firmware releases over the air with
+  one tap, and flags new app versions (Settings tab dot + update card).
 
 ## Requirements
 
