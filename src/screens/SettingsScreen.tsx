@@ -9,6 +9,7 @@ import { useBranding, DEFAULT_BRAND } from '../stores/useBranding'
 import { usePreviews } from '../stores/usePreviews'
 import { toast } from '../stores/useToast'
 import { importPreviews } from '../lib/importPreviews'
+import { syncPreviewBundle } from '../lib/previewSync'
 import { Button, Card, CardTitle, IconButton, Select } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { StillSands } from '../components/StillSands'
@@ -107,6 +108,44 @@ export function SettingsScreen() {
   const addPreviews = usePreviews((s) => s.addMany)
   const clearPreviews = usePreviews((s) => s.clear)
   const [importingPreviews, setImportingPreviews] = useState(false)
+  const [syncingPreviews, setSyncingPreviews] = useState(false)
+  const [syncMsg, setSyncMsg] = useState<string | null>(null)
+
+  // Pull the preview bundle the SD Card Pattern Manager writes to the card.
+  // This also runs automatically once per session; the button is for "I just
+  // updated the card" moments and for making the outcome visible.
+  const doSyncPreviews = async () => {
+    if (!base) return
+    setSyncingPreviews(true)
+    setSyncMsg(null)
+    try {
+      const res = await syncPreviewBundle(base, (p) => {
+        if (p.stage === 'checking') {
+          setSyncMsg('Checking the card for a preview bundle…')
+        } else if (p.stage === 'downloading') {
+          setSyncMsg(
+            `Downloading bundle ${p.shard} of ${p.totalShards} (${Math.max(1, Math.round(p.bytes / 1024))} KB)…`
+          )
+        } else {
+          setSyncMsg(
+            `Saved ${p.images} preview${p.images === 1 ? '' : 's'} (bundle ${p.shard} of ${p.totalShards})…`
+          )
+        }
+      })
+      if (res.status === 'busy') {
+        toast.error('The table is running — try again when it’s idle')
+      } else if (res.status === 'no-bundle') {
+        toast.error('No preview bundle on the card — build one with the SD Card Pattern Manager (duneweaver.com/install)')
+      } else if (res.imagesIngested === 0) {
+        toast.success('Previews already up to date')
+      } else {
+        toast.success(`Synced ${res.imagesIngested} preview${res.imagesIngested > 1 ? 's' : ''} from the table`)
+      }
+    } finally {
+      setSyncingPreviews(false)
+      setSyncMsg(null)
+    }
+  }
 
   const doImportPreviews = async () => {
     setImportingPreviews(true)
@@ -547,8 +586,32 @@ export function SettingsScreen() {
         <Card>
           <CardTitle>Pattern previews</CardTitle>
           <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginBottom: spacing.md }}>
-            Import preview images for your custom patterns. They’re matched to patterns by file name (e.g. “star.thr.webp” → the “star.thr” pattern). Use black-on-transparent exports like the built-in library — full-colour images get tinted.
+            Thumbnails for patterns loaded straight onto the SD card. “Sync previews from table” pulls the preview bundle the SD Card Pattern Manager writes to the card (it also happens automatically once per session). Or import images manually — they’re matched to patterns by file name (e.g. “star.thr.webp” → the “star.thr” pattern); use black-on-transparent exports like the built-in library.
           </Text>
+          {base ? (
+            <View style={{ marginBottom: spacing.sm }}>
+              <Button
+                title="Sync previews from table"
+                icon="sync"
+                variant="secondary"
+                loading={syncingPreviews}
+                onPress={doSyncPreviews}
+              />
+              {syncingPreviews ? (
+                <Text
+                  style={{
+                    color: colors.mutedForeground,
+                    fontSize: font.size.xs,
+                    marginTop: spacing.xs,
+                    textAlign: 'center',
+                  }}
+                >
+                  {syncMsg ?? 'Checking the card for a preview bundle…'}
+                  {'\n'}This can take a while — keep the app open.
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
           <Button
             title="Import preview images"
             icon="add-photo-alternate"

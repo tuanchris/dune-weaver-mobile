@@ -11,6 +11,7 @@ import { toast } from '../stores/useToast'
 import { useLibrary, previewNames, bareName } from '../stores/useLibrary'
 import { pushToTable } from '../lib/pushPattern'
 import { assertSdIdle } from '../lib/sd'
+import { updateTableManifest } from '../lib/tableManifest'
 import { importThr, type ImportedThr } from '../lib/importPattern'
 import { PatternThumb } from '../components/PatternThumb'
 import { PolarPattern } from '../components/PolarPattern'
@@ -217,6 +218,7 @@ export function BrowseScreen() {
             if (onTable && base) {
               assertSdIdle()
               await board.deleteSdFile(base, '/patterns/', file)
+              await updateTableManifest(base, { remove: file })
               useLibrary.getState().removeTablePattern(file)
             }
             if (importedMatch) useLibrary.getState().remove(importedMatch.id)

@@ -3,6 +3,7 @@ import { board } from '../api/board'
 import { useLibrary, bareName } from '../stores/useLibrary'
 import { useStatus } from '../stores/useStatus'
 import { assertSdIdle } from './sd'
+import { updateTableManifest } from './tableManifest'
 
 /**
  * Push a locally-held pattern (bundled default or imported) to a board's SD
@@ -25,6 +26,9 @@ export async function pushToTable(base: string, name: string, onProgress?: (frac
   suspend()
   try {
     await board.uploadTextFile(base, `/patterns/${key}`, text, undefined, onProgress)
+    // Keep the on-card catalog in step, or the pushed pattern disappears
+    // from the on-table list after the next manifest read (best-effort).
+    await updateTableManifest(base, { add: key })
   } finally {
     resume()
   }

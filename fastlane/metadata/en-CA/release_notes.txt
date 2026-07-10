@@ -1,1 +1,3 @@
-Initial release.
+• Pattern previews now sync from your table — patterns bulk-loaded onto the SD card with the Pattern Manager get their thumbnails automatically, or on demand with “Sync previews from table” in Settings
+• Sending or deleting patterns now keeps the table’s on-card catalog in step, so pushed patterns no longer disappear after the table restarts
+• Small fixes and polish

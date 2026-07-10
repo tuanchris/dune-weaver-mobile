@@ -68,7 +68,9 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
   xy destroys the winding, so we never store xy for anything that gets pushed back).
 
 ## Pattern library + previews + upload
-The app is the source of truth for patterns; it never reads pattern data back off the SD for previews.
+The app is the source of truth for LOCAL patterns; it never reads pattern DATA (.thr) back off the SD
+for previews. Card-only patterns (bulk-loaded via the website's SD Card Pattern Manager) get their
+thumbnails from the card's **preview bundle** instead — see the previewSync bullet below.
 - **Bundled defaults (100)**: `npm run gen-geometry` reads `../dune-weaver/patterns/` and emits
   `assets/thr/<name>.thr` (decimated to `MAX_POINTS=15000`, the pushable copy) + `assets/previews/<name>.webp`
   (dw's pre-rendered preview) + `assets/pattern-manifest.js` (static `require()` maps `THR`/`PREVIEW`).
@@ -79,6 +81,17 @@ The app is the source of truth for patterns; it never reads pattern data back of
   `useLibrary.addImported`. See `src/lib/importPattern.ts`.
 - **Push to table**: read the decimated `.thr` (bundled asset via `expo-asset`, or imported file) and
   `board.uploadFile` to `/patterns/<name>`. See `src/lib/pushPattern.ts`.
+- **On-card catalog stays in step**: `src/lib/tableManifest.ts` — after a push/delete, best-effort
+  read-modify-write of `/patterns/index.json` (the firmware serves it VERBATIM from `/sand_patterns`
+  when present, so a push without a catalog update vanishes after the next cold start). It only ever
+  MODIFIES an existing manifest — creating one on a card without it would hide every other pattern.
+- **Preview bundle sync** (`src/lib/previewSync.ts`, mounted via `usePreviewSync` in App.tsx): the
+  website's SD Card Pattern Manager writes `/patterns/previews/shard-<0..7>.zip` (STORE-mode zips of
+  preview webps) + a ~1 KB `previews.json` sidecar with a content hash per shard. Once per table per
+  session (idle-gated), the app reads the sidecar, fetches only shards whose hash it hasn't ingested
+  (`usePreviews.shardHashes`, persisted), unzips with `fflate`, and registers images via
+  `usePreviews.addMany` — same store as manual preview imports, keyed by `previewKey` basename. This
+  is what gives bulk-loaded card patterns thumbnails; 404 sidecar (no bundle) is a quiet no-op.
 - **Shared geometry**: `src/lib/thrGeometry.mjs` (plain ESM `.mjs` so BOTH the Node build script and
   Metro import it — `mjs` is in Expo's `sourceExts`). `parseThr` / `decimate` / `toXY` / `decimateThrText`.
 

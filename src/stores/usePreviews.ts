@@ -26,15 +26,21 @@ export function previewKey(name: string | null | undefined): string {
 
 interface Persisted {
   map: Record<string, string>
+  /** Preview-bundle shard name -> content hash already ingested (see previewSync). */
+  shardHashes?: Record<string, string>
 }
 
 interface PreviewStore {
   /** previewKey -> file:// uri of the ingested image in document storage. */
   map: Record<string, string>
+  /** Preview-bundle shard name -> content hash already ingested from the table. */
+  shardHashes: Record<string, string>
   hydrated: boolean
   hydrate: () => Promise<void>
   /** Add/replace ingested previews (keyed by previewKey). Persists. */
   addMany: (entries: { key: string; uri: string }[]) => void
+  /** Record a preview-bundle shard as ingested at the given content hash. */
+  setShardHash: (name: string, hash: string) => void
   /** Resolve a pattern name to an ingested preview uri, if one exists. */
   get: (name: string | null | undefined) => string | undefined
   /** Number of ingested previews held. */
@@ -43,13 +49,14 @@ interface PreviewStore {
   clear: () => void
 }
 
-function persist(map: Record<string, string>) {
-  const data: Persisted = { map }
+function persist(map: Record<string, string>, shardHashes: Record<string, string>) {
+  const data: Persisted = { map, shardHashes }
   AsyncStorage.setItem(KEY, JSON.stringify(data)).catch(() => {})
 }
 
 export const usePreviews = create<PreviewStore>((set, get) => ({
   map: {},
+  shardHashes: {},
   hydrated: false,
 
   hydrate: async () => {
@@ -57,7 +64,11 @@ export const usePreviews = create<PreviewStore>((set, get) => ({
       const raw = await AsyncStorage.getItem(KEY)
       if (raw) {
         const data: Persisted = JSON.parse(raw)
-        set({ map: data.map || {}, hydrated: true })
+        set({
+          map: data.map || {},
+          shardHashes: data.shardHashes || {},
+          hydrated: true,
+        })
         return
       }
     } catch {
@@ -84,7 +95,13 @@ export const usePreviews = create<PreviewStore>((set, get) => ({
       map[key] = uri
     }
     set({ map })
-    persist(map)
+    persist(map, get().shardHashes)
+  },
+
+  setShardHash: (name, hash) => {
+    const shardHashes = { ...get().shardHashes, [name]: hash }
+    set({ shardHashes })
+    persist(get().map, shardHashes)
   },
 
   get: (name) => get().map[previewKey(name)],
@@ -101,7 +118,9 @@ export const usePreviews = create<PreviewStore>((set, get) => ({
         // ignore
       }
     }
-    set({ map: {} })
-    persist({})
+    // Also forget shard hashes, or the bundle sync would consider the
+    // (now deleted) table previews already ingested and never refetch.
+    set({ map: {}, shardHashes: {} })
+    persist({}, {})
   },
 }))

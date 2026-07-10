@@ -25,6 +25,7 @@ import { usePreviews } from './src/stores/usePreviews'
 import { useUpdates, appUpdateAvailable, fwUpdateAvailable } from './src/stores/useUpdates'
 import { syncClock } from './src/lib/clock'
 import { useAutoRelocate } from './src/lib/relocate'
+import { usePreviewSync } from './src/lib/previewSync'
 
 const Tab = createBottomTabNavigator()
 
@@ -52,6 +53,12 @@ export default function App() {
 
   // Follow the active table to a new IP when DHCP moves it (mDNS re-scan).
   useAutoRelocate()
+
+  // Pull preview thumbnails for card-loaded patterns from the table's
+  // preview bundle (written by the SD Card Pattern Manager) — once per
+  // table per session, when the table is idle.
+  const statusBase = useStatus((s) => s.base)
+  usePreviewSync(statusBase)
 
   // Update-available dot on the Settings tab: a newer app in the store, or a
   // newer firmware release than what the active table reports.

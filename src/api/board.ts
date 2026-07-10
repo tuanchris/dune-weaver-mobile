@@ -164,6 +164,22 @@ function httpErrorMessage(status: number, text: string): string {
   return `HTTP ${status}: ${text.slice(0, 200)}`
 }
 
+/**
+ * Fetch a binary file streamed from the SD card (e.g. a preview shard).
+ * Callers should scale the timeout with the expected size — the board's
+ * single-threaded server drains large files slowly.
+ */
+async function getBinary(base: string, path: string, timeoutMs = 30000): Promise<Uint8Array> {
+  const { signal, cancel } = withTimeout(timeoutMs)
+  try {
+    const res = await fetch(`${base}${encodePath(path)}`, { signal })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return new Uint8Array(await res.arrayBuffer())
+  } finally {
+    cancel()
+  }
+}
+
 /** Fire an action/command route. Returns when the request succeeds; ignores body. */
 async function hit(base: string, path: string, timeoutMs = 6000): Promise<void> {
   const { signal, cancel } = withTimeout(timeoutMs)
@@ -372,6 +388,16 @@ const realBoard = {
    * "/playlists/..." resolves to the on-board flash filesystem instead.
    */
   playlistText: (base: string, filename: string) => getText(base, `/sd/playlists/${filename}`),
+  /**
+   * Raw text of the on-card pattern catalog (/patterns/index.json). Throws
+   * "HTTP 404" when the card has none (firmware then live-lists /patterns).
+   */
+  patternManifest: (base: string) => getText(base, '/sd/patterns/index.json'),
+  /** The preview-bundle sidecar written by the SD Card Pattern Manager. */
+  previewSidecar: (base: string) => getJson<unknown>(base, '/sd/patterns/previews/previews.json'),
+  /** One preview-bundle shard (a STORE-mode zip of preview webps). */
+  previewShard: (base: string, name: string, timeoutMs?: number) =>
+    getBinary(base, `/sd/patterns/previews/${name}`, timeoutMs),
   setPlaylistMode: (base: string, mode: 'single' | 'loop') => command(base, `$Playlist/Mode=${mode}`),
   setPlaylistShuffle: (base: string, on: boolean) => command(base, `$Playlist/Shuffle=${on ? 'ON' : 'OFF'}`),
   setPlaylistPause: (base: string, seconds: number) => command(base, `$Playlist/PauseTime=${Math.round(seconds)}`),
