@@ -1,3 +1,4 @@
-• Pattern previews now sync from your table — patterns bulk-loaded onto the SD card with the Pattern Manager get their thumbnails automatically, or on demand with “Sync previews from table” in Settings
-• Sending or deleting patterns now keeps the table’s on-card catalog in step, so pushed patterns no longer disappear after the table restarts
-• Small fixes and polish
+• Wi-Fi controls in Settings — see how your table is connected, move it to a different Wi-Fi network right from the app, or switch it to standalone hotspot mode for router-free setups (needs Dune Weaver Firmware v0.1.8 or newer)
+• Tables are now recognized by their hardware identity, so they’re found again automatically after your router hands out a new address — even tables added by IP
+• Firmware updates show a full-screen progress view with a restart countdown
+• More reliable update checks and small fixes
