@@ -7,7 +7,7 @@
 
 import { PREVIEW } from '../../assets/pattern-manifest'
 import type { RawStatus, RawTime } from './status'
-import type { ClearMode } from './board'
+import type { ClearMode, WifiMode, WifiScanResult, WifiStatus, WifiWriteResult } from './board'
 
 /** Sentinel base for the demo table. Real bases are http(s) URLs, so this never
  *  collides; `isDemoBase` gates the dispatch. */
@@ -166,6 +166,16 @@ function buildStatus(): RawStatus {
 // (App Review!) never shows an update nag it can't act on.
 const DEMO_FW = 'v99.0.0'
 
+// Virtual WiFi state — writes flip it instantly (reboot:false), so the demo
+// flow never enters the reboot-wait.
+const DEMO_WIFI: { mode: WifiMode; ssid: string } = { mode: 'sta', ssid: 'Dune Cottage' }
+const DEMO_APS = [
+  { ssid: 'Dune Cottage', rssi: -46, secure: true },
+  { ssid: 'Dune Cottage Guest', rssi: -52, secure: true },
+  { ssid: 'Seaside 5G', rssi: -63, secure: true },
+  { ssid: 'Corner Cafe', rssi: -74, secure: false },
+]
+
 const setKey = (k: string, v: string) => { S.settings[k] = v }
 const ok = async () => { await wait(80) }
 
@@ -248,6 +258,27 @@ export const demoBoard = {
   setQuietSlots: async (_b: string, slots: string) => setKey('Sands/Slots', slots),
   setQuietLedOff: ok,
   setQuietFinishPattern: ok,
+
+  // ---- WiFi ----
+  wifiStatus: async (): Promise<WifiStatus> => {
+    await wait(60)
+    return { mode: DEMO_WIFI.mode, sta_ssid: DEMO_WIFI.ssid, ap_ssid: 'DuneWeaver', fail: '' }
+  },
+  wifiScan: async (): Promise<WifiScanResult> => {
+    await wait(900)
+    return { status: 'ok', aps: DEMO_APS }
+  },
+  wifiSave: async (_b: string, ssid: string): Promise<WifiWriteResult> => {
+    await wait(400)
+    DEMO_WIFI.mode = 'sta'
+    DEMO_WIFI.ssid = ssid
+    return { status: 'ok', reboot: false }
+  },
+  wifiStandalone: async (): Promise<WifiWriteResult> => {
+    await wait(400)
+    DEMO_WIFI.mode = 'standalone'
+    return { status: 'ok', reboot: false }
+  },
 
   // ---- Clock / system / SD (no-ops that resolve) ----
   syncTime: ok,

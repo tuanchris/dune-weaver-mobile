@@ -4,14 +4,16 @@
 // - Firmware: compares the active table's reported version (status.fw) to the
 //   latest GitHub release and flashes it over OTA right from the app.
 
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useState } from 'react'
 import { Alert, Linking, StyleSheet, Text, View } from 'react-native'
+import { useFocusEffect } from '@react-navigation/native'
 import { isDemoBase } from '../api/demoBoard'
 import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
 import { useUpdates, appUpdateAvailable, fwUpdateAvailable, APP_VERSION } from '../stores/useUpdates'
 import { toast } from '../stores/useToast'
 import { runFirmwareUpdate, FW_STAGE_LABELS, type FwUpdateStage } from '../lib/firmwareUpdate'
+import { FwUpdateSplash } from './FwUpdateSplash'
 import { Button, Card, CardTitle } from './ui'
 import { spacing, font } from '../theme'
 
@@ -23,10 +25,14 @@ export function UpdatesCard({ base }: { base: string | null }) {
   const tableFw = useStatus((s) => s.status?.fw ?? null)
   const [stage, setStage] = useState<FwUpdateStage | null>(null)
 
-  // Refresh when the card comes on screen (throttled inside the store).
-  useEffect(() => {
-    check()
-  }, [check])
+  // Refresh whenever Settings gains focus (the tab stays mounted, so a mount
+  // effect would only ever run once per session). Allow a re-check every
+  // 10 min here — cheap, and it picks up releases published mid-session.
+  useFocusEffect(
+    useCallback(() => {
+      void check(10 * 60_000)
+    }, [check])
+  )
 
   const appNew = appUpdateAvailable(appLatest)
   const fwNew = fwUpdateAvailable(fwLatest, tableFw)
@@ -60,6 +66,9 @@ export function UpdatesCard({ base }: { base: string | null }) {
 
   return (
     <Card>
+      {/* Full-screen splash while an update runs; during the reboot it shows
+          a 60s countdown and closes on reconnect or zero, whichever first. */}
+      <FwUpdateSplash stage={stage} version={fwLatest?.version} />
       <CardTitle>About</CardTitle>
 
       <View style={styles.row}>

@@ -14,6 +14,7 @@ import { Button, Card, CardTitle, IconButton, Select } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { StillSands } from '../components/StillSands'
 import { UpdatesCard } from '../components/UpdatesCard'
+import { WifiCard } from '../components/WifiCard'
 import { useDiscovery, type DiscoveredTable } from '../lib/discovery'
 import { playlistName } from '../lib/playlists'
 import { pickLogo, clearLogo } from '../lib/branding'
@@ -180,16 +181,22 @@ export function SettingsScreen() {
       toast.error('Already added')
       return
     }
-    // Same table, new DHCP address? Match on the stored mDNS hostname (display
-    // name as fallback for boards saved before hostnames were stored) and
-    // repoint the existing entry instead of creating a duplicate.
-    const moved = boards.find((b) => (b.hostname ?? b.name).trim().toLowerCase() === t.name.trim().toLowerCase())
+    // Same table, new DHCP address? Prefer the hardware MAC (from the mDNS TXT
+    // record / a status poll) when both sides have one — it survives hostname
+    // edits and distinguishes two tables with the same name. Fall back to the
+    // stored mDNS hostname (display name for boards saved before hostnames
+    // were stored). Repoint the existing entry instead of duplicating.
+    const moved = boards.find((b) =>
+      t.mac && b.mac
+        ? b.mac === t.mac
+        : (b.hostname ?? b.name).trim().toLowerCase() === t.name.trim().toLowerCase()
+    )
     if (moved) {
-      updateBase(moved.id, t.base, t.name)
+      updateBase(moved.id, t.base, t.name, t.mac)
       toast.success(`${moved.name} updated to ${t.address}`)
       return
     }
-    addBoard(t.name, t.base, t.name)
+    addBoard(t.name, t.base, t.name, t.mac)
     toast.success(`Added ${t.name}`)
   }
 
@@ -418,6 +425,8 @@ export function SettingsScreen() {
             <Button title="Test & add table" icon="add" loading={testing} onPress={add} />
           </View>
         </Card>
+
+        <WifiCard base={base} />
 
         {base ? (
           <Card>

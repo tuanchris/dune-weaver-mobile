@@ -13,6 +13,41 @@ export interface UpdateFwResponse {
   fw?: string
 }
 
+// ---- WiFi (firmware >= v0.1.8) ----
+// The captive-portal routes are registered in EVERY mode, so the app can
+// reconfigure a table over the LAN (STA) or while joined to its hotspot.
+
+/** "sta" = on home Wi-Fi; "fallback" = setup hotspot after a failed/absent
+ * home join; "standalone" = deliberate hotspot mode ($WiFi/Mode=AP). */
+export type WifiMode = 'sta' | 'fallback' | 'standalone'
+
+export interface WifiStatus {
+  mode: WifiMode
+  /** The saved home-network SSID ("" if none configured). */
+  sta_ssid: string
+  /** The hotspot name the table broadcasts when in AP/fallback mode. */
+  ap_ssid: string
+  /** This boot's STA join failure reason ("" if none). */
+  fail: string
+}
+
+export interface WifiNetwork {
+  ssid: string
+  rssi: number
+  secure: boolean
+}
+
+export type WifiScanResult = { status: 'scanning' } | { status: 'ok'; aps: WifiNetwork[] }
+
+/** POST /wifi_save + /wifi_standalone reply. "busy" = the write is idle-gated
+ * (boot auto-home / a running pattern) — retry shortly. `reboot` = the table
+ * restarts ~0.5s after replying. */
+export interface WifiWriteResult {
+  status: 'ok' | 'busy' | 'error'
+  reboot: boolean
+  message?: string
+}
+
 /** Clear-before-run modes accepted by the firmware's $Sand/Run command. */
 export type ClearMode = 'none' | 'adaptive' | 'in' | 'out' | 'sideway' | 'random'
 export const CLEAR_MODES: { mode: ClearMode; label: string }[] = [
@@ -196,6 +231,38 @@ async function hit(base: string, path: string, timeoutMs = 6000): Promise<void> 
 
 function command(base: string, plain: string): Promise<void> {
   return hit(base, `/command?plain=${encodeURIComponent(plain)}`)
+}
+
+/**
+ * POST a WiFi write (form-encoded, like the captive portal page). The firmware
+ * replies JSON on EVERY status (400 validation, 503 busy, 500 error), so parse
+ * the body instead of throwing on !ok. Throws only on network/timeout failures
+ * — which for these routes can mean the reboot beat the reply out the door;
+ * callers decide how to treat that (the portal treats it as the success path).
+ */
+async function postWifi(base: string, path: string, form?: Record<string, string>, timeoutMs = 10000): Promise<WifiWriteResult> {
+  const { signal, cancel } = withTimeout(timeoutMs)
+  try {
+    const body = form
+      ? Object.entries(form)
+          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+          .join('&')
+      : ''
+    const res = await fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+      signal,
+    })
+    const j = (await res.json()) as { status?: string; reboot?: number | string; message?: string }
+    return {
+      status: j.status === 'ok' ? 'ok' : j.status === 'busy' ? 'busy' : 'error',
+      reboot: Number(j.reboot ?? 0) === 1,
+      message: j.message,
+    }
+  } finally {
+    cancel()
+  }
 }
 
 /** UTF-8 byte length of a string (the firmware's `<path>S` size field). */
@@ -472,6 +539,28 @@ const realBoard = {
     if (opts.tz) p.push(`tz=${encodeURIComponent(opts.tz)}`)
     return hit(base, `/sand_time?${p.join('&')}`)
   },
+
+  // ---- WiFi (firmware >= v0.1.8; older builds 404 these routes) ----
+  wifiStatus: (base: string) => getJson<WifiStatus>(base, '/wifi_status'),
+  /** Async network scan. Answers {status:"scanning"} until done — poll ~1.5s.
+   * The firmware's JSONencoder emits numbers as strings; coerce here. */
+  wifiScan: async (base: string, rescan = false): Promise<WifiScanResult> => {
+    const raw = await getJson<{ status: string; aps?: { ssid: string; rssi: number | string; secure: number | string }[] }>(
+      base,
+      `/wifi_scan${rescan ? '?rescan=1' : ''}`
+    )
+    if (raw.status !== 'ok') return { status: 'scanning' }
+    return {
+      status: 'ok',
+      aps: (raw.aps ?? []).map((a) => ({ ssid: a.ssid, rssi: Number(a.rssi), secure: Number(a.secure) === 1 })),
+    }
+  },
+  /** Save home-network credentials. On "ok" the table reboots into STA>AP:
+   * it either joins the network or the fallback hotspot returns with `fail`. */
+  wifiSave: (base: string, ssid: string, password: string) => postWifi(base, '/wifi_save', { ssid, password }),
+  /** Switch to standalone hotspot mode ($WiFi/Mode=AP). Applies live from the
+   * hotspot (reboot:false); from home Wi-Fi the table reboots (reboot:true). */
+  wifiStandalone: (base: string) => postWifi(base, '/wifi_standalone'),
 
   // ---- System ----
   /** Clear an Alarm without homing ($X). */

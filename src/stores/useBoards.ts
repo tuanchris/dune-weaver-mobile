@@ -10,9 +10,13 @@ export interface Board {
   name: string
   base: string // normalized http://host[:port]
   /** mDNS instance name (= firmware hostname, e.g. "DWG") when added via
-   * discovery — the stable identity used to re-find the table after a DHCP
-   * address change. Absent on manually-added boards. */
+   * discovery — identity fallback for firmware that doesn't report a MAC.
+   * Also backfilled from /sand_status on newer firmware. */
   hostname?: string
+  /** Lowercase STA MAC ("a0:b1:c2:d3:e4:f5") — the table's stable hardware
+   * identity (firmware > v0.1.7; from the mDNS TXT record or /sand_status).
+   * Preferred over hostname for dedupe and DHCP auto-relocate. */
+  mac?: string
 }
 
 interface Persisted {
@@ -25,13 +29,17 @@ interface BoardsStore {
   activeId: string | null
   hydrated: boolean
   hydrate: () => Promise<void>
-  addBoard: (name: string, host: string, hostname?: string) => Board
+  addBoard: (name: string, host: string, hostname?: string, mac?: string) => Board
   /** Add (or re-select) the in-app demo table — no hardware needed. */
   addDemoBoard: () => Board
   removeBoard: (id: string) => void
   renameBoard: (id: string, name: string) => void
   /** Point an existing board at a new address (DHCP gave the table a new IP). */
-  updateBase: (id: string, host: string, hostname?: string) => void
+  updateBase: (id: string, host: string, hostname?: string, mac?: string) => void
+  /** Backfill identity learned from a live /sand_status poll onto the board
+   * with this base — lets manually-added (IP-only) boards gain the stable
+   * hardware ID so discovery dedupe and auto-relocate work for them too. */
+  noteIdentity: (base: string, mac?: string | null, hostname?: string | null) => void
   setActive: (id: string) => void
   getActive: () => Board | null
   getActiveBase: () => string | null
@@ -67,8 +75,8 @@ export const useBoards = create<BoardsStore>((set, get) => ({
     set({ hydrated: true })
   },
 
-  addBoard: (name, host, hostname) => {
-    const board: Board = { id: makeId(), name: name.trim() || host.trim(), base: normalizeBase(host), hostname }
+  addBoard: (name, host, hostname, mac) => {
+    const board: Board = { id: makeId(), name: name.trim() || host.trim(), base: normalizeBase(host), hostname, mac: mac?.toLowerCase() }
     const boards = [...get().boards, board]
     const activeId = get().activeId ?? board.id
     set({ boards, activeId })
@@ -105,12 +113,25 @@ export const useBoards = create<BoardsStore>((set, get) => ({
     persist(boards, get().activeId)
   },
 
-  updateBase: (id, host, hostname) => {
+  updateBase: (id, host, hostname, mac) => {
     const boards = get().boards.map((b) =>
-      b.id === id ? { ...b, base: normalizeBase(host), hostname: hostname ?? b.hostname } : b
+      b.id === id ? { ...b, base: normalizeBase(host), hostname: hostname ?? b.hostname, mac: mac?.toLowerCase() ?? b.mac } : b
     )
     set({ boards })
     persist(boards, get().activeId)
+  },
+
+  noteIdentity: (base, mac, hostname) => {
+    const m = mac?.toLowerCase()
+    const boards = get().boards.map((b) => {
+      if (b.base !== base) return b
+      if ((!m || b.mac === m) && (!hostname || b.hostname === hostname)) return b
+      return { ...b, mac: m ?? b.mac, hostname: hostname ?? b.hostname }
+    })
+    if (boards.some((b, i) => b !== get().boards[i])) {
+      set({ boards })
+      persist(boards, get().activeId)
+    }
   },
 
   setActive: (id) => {

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { board } from '../api/board'
 import { translateStatus, type Status } from '../api/status'
+import { useBoards } from './useBoards'
 
 const POLL_MS = 1000
 
@@ -28,7 +29,13 @@ async function pollOnce(base: string, gen: number, set: (p: Partial<StatusStore>
   try {
     const raw = await board.status(base)
     if (gen !== generation) return
-    set({ status: translateStatus(raw) })
+    const status = translateStatus(raw)
+    set({ status })
+    // Backfill the stable identity onto the saved board (no-op when unchanged)
+    // so boards added by bare IP still dedupe against discovery and relocate.
+    if (status.mac || status.hostname) {
+      useBoards.getState().noteIdentity(base, status.mac, status.hostname)
+    }
   } catch {
     if (gen !== generation) return
     const prev = get().status

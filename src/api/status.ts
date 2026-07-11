@@ -35,6 +35,12 @@ export interface RawStatus {
   /** Firmware version (git_info, e.g. "v0.1.2" or "v0.1.2 (main-abc1234)").
    * Absent on firmware older than the OTA-capable builds. */
   fw?: string
+  /** Lowercase STA MAC ("a0:b1:c2:d3:e4:f5") — the table's stable hardware
+   * identity (also in the mDNS TXT record as `mac=`). Absent on firmware
+   * v0.1.7 and older. */
+  mac?: string
+  /** Configured network hostname (e.g. "DWMP"). Absent on older firmware. */
+  hostname?: string
 }
 
 /** The table's wall clock (from /sand_time or status.time). */
@@ -69,6 +75,10 @@ export interface Status {
   clock: RawTime | null
   /** Firmware version string, or null on firmware that doesn't report it. */
   fw: string | null
+  /** Stable hardware ID (lowercase MAC), or null on older firmware. */
+  mac: string | null
+  /** Table's network hostname, or null on older firmware. */
+  hostname: string | null
   state: string
   connected: boolean
 }
@@ -113,6 +123,8 @@ export function translateStatus(raw: RawStatus): Status {
     led: raw.led ? { effect: raw.led.effect, brightness: raw.led.brightness } : null,
     clock: raw.time ?? null,
     fw: raw.fw ?? null,
+    mac: raw.mac?.toLowerCase() ?? null,
+    hostname: raw.hostname || null,
     state,
     connected: true,
   }

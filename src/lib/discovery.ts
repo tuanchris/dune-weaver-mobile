@@ -24,6 +24,10 @@ export interface DiscoveredTable {
   address: string
   port: number
   base: string
+  /** Lowercase STA MAC from the `mac=` TXT record (firmware > v0.1.7) — the
+   * table's stable hardware identity. Absent on older firmware or platforms
+   * that drop TXT records. */
+  mac?: string
 }
 
 const SCAN_TIMEOUT_MS = 12000
@@ -54,7 +58,8 @@ function toTable(service: any): DiscoveredTable | null {
   const port = typeof service.port === 'number' && service.port > 0 ? service.port : 80
   const base = normalizeBase(port === 80 ? address : `${address}:${port}`)
   const key = service.fullName || service.name || base
-  return { key, name: service.name || address, host: service.host || '', address, port, base }
+  const mac = String(service?.txt?.mac ?? '').toLowerCase() || undefined
+  return { key, name: service.name || address, host: service.host || '', address, port, base, mac }
 }
 
 /**

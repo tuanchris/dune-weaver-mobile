@@ -29,7 +29,9 @@ export function Onboarding() {
   }, [discoveryAvailable, start])
 
   const addDiscovered = (t: DiscoveredTable) => {
-    addBoard(t.name, t.base)
+    // Store the mDNS name + MAC as identity so dedupe/auto-relocate work for
+    // boards added here, same as the Settings discovery flow.
+    addBoard(t.name, t.base, t.name, t.mac)
     toast.success(`Connected to ${t.name}`)
   }
 

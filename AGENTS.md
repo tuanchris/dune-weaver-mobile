@@ -14,7 +14,7 @@ CORS. The phone must be on the same Wi-Fi as the table.
 ## Architecture — talks to the firmware, not the dw backend
 The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI backend + web frontend.
 **This app does NOT use that backend.** It speaks to the FluidNC fork's own HTTP routes (see
-`../fluidnc/FluidNC/src/SandApi.cpp` and `WebServer.cpp`). All API access is in `src/api/board.ts`:
+`../dune-weaver-firmware/FluidNC/src/SandApi.cpp` and `WebServer.cpp`). All API access is in `src/api/board.ts`:
 
 - Reads (JSON): `GET /sand_status`, `/sand_patterns`, `/sand_playlists`, `/sand_settings`.
 - Actions (plain text "ok"): `/sand_home`, `/sand_stop`, `/sand_pause`, `/sand_resume`, `/sand_feed?d=`.
@@ -58,7 +58,23 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
   `expo/fetch` — RN's fetch can't send typed arrays), poll until the board is back. Update checks
   live in `src/lib/updates.ts` + `src/stores/useUpdates.ts` (app: iTunes lookup / Play page scrape;
   both fail-safe to "unknown"); a red dot on the Settings tab (App.tsx) + an Updates card in
-  Settings (`UpdatesCard.tsx`) surface them.
+  Settings (`UpdatesCard.tsx`) surface them. Checks re-run on Settings focus (10 min max-age) and
+  the 6 h throttle only arms after a FULLY successful check — a failed/partial one retries, so a
+  stale "up to date" self-heals. The fetched "latest" is app-global; only `status.fw` is per-table.
+- **WiFi control** (firmware ≥ v0.1.8 — older builds 404 these routes, which is how `WifiCard`
+  detects "unsupported"): `GET /wifi_status` (`{mode:"sta"|"fallback"|"standalone", sta_ssid,
+  ap_ssid, fail}`), `GET /wifi_scan` (async; `{status:"scanning"}` until done — poll ~1.5 s;
+  `?rescan=1` forces a fresh scan; the firmware's JSONencoder emits rssi/secure as STRINGS —
+  `board.wifiScan` coerces), `POST /wifi_save` (form-encoded `ssid`+`password` 8–64 chars, open
+  networks unsupported; table reboots into STA>AP ~0.5 s after replying), `POST /wifi_standalone`
+  ($WiFi/Mode=AP; live from the hotspot, reboot from STA). Both writes are idle-gated
+  (`{"status":"busy"}` during boot auto-home / a running pattern) and reply JSON on every HTTP
+  status. `src/lib/wifiSetup.ts` orchestrates: busy-retry (20 s cap), a LOST reply on a write is
+  the SUCCESS path (the reboot races the reply out — same as the captive portal), suspend the
+  poller and wait ~90 s for the table to return after /wifi_save. Standalone flips repoint the
+  saved board at `http://192.168.0.1` (the firmware's default $AP/IP) so the app works the moment
+  the phone joins the hotspot. UI is `src/components/WifiCard.tsx` in Settings; it also works when
+  the phone is joined to the table's own hotspot (fallback/standalone), not just over the LAN.
 
 ### Key data conventions (easy to get wrong)
 - **theta is RADIANS**, continuous/unwound (same as `.thr` files), NOT degrees. `rho` may be signed.
@@ -102,8 +118,8 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
 - `src/screens/` — `Browse` (Library|On-Table tabs, circular thumbs, import, push, clear-before-run),
   `Playlists` (create/edit/delete, pattern picker grid, loop/shuffle/pause + pause-from-start/clear/
   auto-home), `Control` (home/stop/unlock/speed + quiet-hours + live status), `Led` (effect/palette/
-  color pickers, brightness/speed sliders, run/idle overrides), `Settings` (tables + reboot + app/
-  firmware updates).
+  color pickers, brightness/speed sliders, run/idle overrides), `Settings` (tables + Wi-Fi + reboot +
+  app/firmware updates).
 - `src/components/` — `PolarPattern` (SVG path + progress + live dot), `PatternThumb`, `NowPlayingBar`
   (swipe up/down to expand/collapse), `Screen`, `ui.tsx` (`Button`/`Card`/`IconButton`/`Slider` —
   the `Slider` is PanResponder-based, no native dep), `Onboarding`, `Toaster`.
@@ -123,5 +139,5 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
 - The firmware now drives the **on-board LED ring directly** (`$LED/*`, `led{}` in status) — this is no
   longer Pi-only. The LED screen hides Color/Color2/Palette controls per the active effect's needs
   (see `LED_EFFECTS[].uses` / `ledEffectInputs` in `board.ts`).
-- Out of reach (need the Pi backend, not the firmware): networked **WLED** controllers, MQTT, WiFi
-  setup UI, favorites, play-count/last-played history, server-rendered preview cache, multi-table discovery.
+- Out of reach (need the Pi backend, not the firmware): networked **WLED** controllers, MQTT,
+  favorites, play-count/last-played history, server-rendered preview cache, multi-table discovery.

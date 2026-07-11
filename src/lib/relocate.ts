@@ -2,10 +2,11 @@
 // answering for a while, run a one-shot mDNS scan and — if a discovered table
 // has the same identity — silently repoint the saved board at its new address.
 //
-// Identity is the stored mDNS hostname (captured when the board was added via
-// discovery), falling back to the display name for boards saved before the
-// hostname field existed. Manually-named boards without a hostname simply
-// never auto-relocate, which is the safe default.
+// Identity is the hardware MAC when both the saved board and the discovered
+// service have one (firmware > v0.1.7 advertises it in the mDNS TXT record,
+// and IP-added boards learn it from a status poll). Fallback is the stored
+// mDNS hostname (or the display name for boards saved before the hostname
+// field existed). Boards with neither never auto-relocate — the safe default.
 
 import { useEffect, useRef } from 'react'
 import { scanOnce } from './discovery'
@@ -43,15 +44,19 @@ export function useAutoRelocate(): void {
       const active = useBoards.getState().getActive()
       if (!active || isDemoBase(active.base)) return
       const ident = (active.hostname ?? active.name).trim().toLowerCase()
-      if (!ident) return
+      if (!ident && !active.mac) return
       const found = await scanOnce()
       // Re-check the world after the scan: still offline, same active board.
       const s = useStatus.getState()
       const stillOffline = s.status === null || s.status.connected === false
       const stillActive = useBoards.getState().activeId === active.id
-      const match = found.find((t) => t.name.trim().toLowerCase() === ident && t.base !== active.base)
+      const match = found.find((t) => {
+        if (t.base === active.base) return false
+        if (active.mac && t.mac) return t.mac === active.mac
+        return t.name.trim().toLowerCase() === ident
+      })
       if (stillOffline && stillActive && match) {
-        useBoards.getState().updateBase(active.id, match.base, match.name)
+        useBoards.getState().updateBase(active.id, match.base, match.name, match.mac)
         toast.success(`${active.name} moved — reconnected at ${match.address}`)
         return
       }

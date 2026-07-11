@@ -14,24 +14,41 @@ const CHECK_EVERY_MS = 6 * 3600_000
 interface UpdatesStore {
   appLatest: AppRelease | null
   fwLatest: FirmwareRelease | null
+  /** When the last FULLY successful check finished (0 = never). */
   checkedAt: number
-  /** Refresh both checks (throttled unless `force`). Never throws. */
-  check: (force?: boolean) => Promise<void>
+  /** Refresh both checks if the last successful one is older than
+   * `maxAgeMs` (default 6 h). Never throws. */
+  check: (maxAgeMs?: number) => Promise<void>
 }
+
+/** Collapse concurrent callers (launch + Settings focus) onto one check. */
+let inflight: Promise<void> | null = null
 
 export const useUpdates = create<UpdatesStore>((set, get) => ({
   appLatest: null,
   fwLatest: null,
   checkedAt: 0,
 
-  check: async (force = false) => {
-    const { checkedAt } = get()
-    if (!force && Date.now() - checkedAt < CHECK_EVERY_MS) return
-    set({ checkedAt: Date.now() })
-    const [app, fw] = await Promise.allSettled([fetchLatestApp(), fetchLatestFirmware()])
-    // Keep the previous answer when a check fails (offline ≠ up to date).
-    if (app.status === 'fulfilled' && app.value) set({ appLatest: app.value })
-    if (fw.status === 'fulfilled' && fw.value) set({ fwLatest: fw.value })
+  check: async (maxAgeMs = CHECK_EVERY_MS) => {
+    if (Date.now() - get().checkedAt < maxAgeMs) return
+    if (inflight) return inflight
+    inflight = (async () => {
+      try {
+        const [app, fw] = await Promise.allSettled([fetchLatestApp(), fetchLatestFirmware()])
+        // Keep the previous answer when a check fails (offline ≠ up to date).
+        if (app.status === 'fulfilled' && app.value) set({ appLatest: app.value })
+        if (fw.status === 'fulfilled' && fw.value) set({ fwLatest: fw.value })
+        // Only a fully successful check arms the throttle — after a failed or
+        // partial one (offline, GitHub rate limit) the next call retries, so
+        // a stale "up to date" self-heals instead of sticking for 6 h.
+        if (app.status === 'fulfilled' && app.value && fw.status === 'fulfilled' && fw.value) {
+          set({ checkedAt: Date.now() })
+        }
+      } finally {
+        inflight = null
+      }
+    })()
+    return inflight
   },
 }))
 
