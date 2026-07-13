@@ -1,4 +1,6 @@
-• Wi-Fi controls in Settings — see how your table is connected, move it to a different Wi-Fi network right from the app, or switch it to standalone hotspot mode for router-free setups (needs Dune Weaver Firmware v0.1.8 or newer)
-• Tables are now recognized by their hardware identity, so they’re found again automatically after your router hands out a new address — even tables added by IP
-• Firmware updates show a full-screen progress view with a restart countdown
-• More reliable update checks and small fixes
+• Protect your table with a password — set, change, or remove it in Settings, and the app remembers it on this phone (needs Dune Weaver Firmware v0.1.11 or newer)
+• Choose your own clear patterns for the “from center” and “from edge” sweeps, with an optional dedicated clear speed
+• New Diagnostics view collects your table’s logs so you can view and share them if something goes wrong
+• Clearer error messages that tell you what to try next — a missing SD card, a busy table, or a full card now read plainly
+• “Up next” now follows the real shuffle order, and editing a playlist asks before saving or discarding your changes
+• A “Check for updates” button, smoother Wi-Fi password entry, and more reliable preview syncing from the table

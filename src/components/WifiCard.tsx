@@ -6,7 +6,7 @@
 // table answers on 192.168.0.1.
 
 import React, { useCallback, useRef, useState } from 'react'
-import { ActivityIndicator, Alert, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { useFocusEffect } from '@react-navigation/native'
@@ -269,7 +269,11 @@ export function WifiCard({ base }: { base: string | null }) {
 
       {/* Network picker sheet */}
       <Modal visible={pickerOpen} transparent animationType="slide" onRequestClose={closePicker}>
-        <Pressable style={styles.backdrop} onPress={closePicker}>
+        {/* Lift the sheet above the keyboard so the password field and Connect
+            button stay visible while typing (bottom-anchored sheet otherwise
+            sits behind the keyboard). Tap-outside-to-close is the flex spacer. */}
+        <KeyboardAvoidingView style={styles.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <Pressable style={{ flex: 1 }} onPress={closePicker} />
           <Pressable style={[styles.sheet, { backgroundColor: colors.background, borderColor: colors.border }]} onPress={() => {}}>
             <View style={styles.sheetHandle} />
             <View style={styles.sheetHeader}>
@@ -368,7 +372,7 @@ export function WifiCard({ base }: { base: string | null }) {
             ) : null}
             <SafeAreaView edges={['bottom']} />
           </Pressable>
-        </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
     </Card>
   )

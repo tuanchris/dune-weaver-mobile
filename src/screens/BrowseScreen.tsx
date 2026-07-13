@@ -10,7 +10,7 @@ import { usePrefs } from '../stores/usePrefs'
 import { toast } from '../stores/useToast'
 import { useLibrary, previewNames, bareName } from '../stores/useLibrary'
 import { pushToTable } from '../lib/pushPattern'
-import { assertSdIdle } from '../lib/sd'
+import { assertSdIdle, assertNotSyncing } from '../lib/sd'
 import { updateTableManifest } from '../lib/tableManifest'
 import { importThr, type ImportedThr } from '../lib/importPattern'
 import { PatternThumb } from '../components/PatternThumb'
@@ -19,6 +19,7 @@ import { Button, IconButton } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { EmptyState } from '../components/EmptyState'
 import { prettyName } from '../lib/patternName'
+import { userMessage } from '../lib/errors'
 import { radius, spacing, font } from '../theme'
 
 const COLS = 3
@@ -135,12 +136,13 @@ export function BrowseScreen() {
     if (!base) return
     setRunning(true)
     try {
+      assertNotSyncing()
       await board.runPattern(base, file, clearMode)
       toast.success(`Running ${prettyName(file)}`)
       setSelected(null)
       setTimeout(refreshStatus, 400)
-    } catch {
-      toast.error(clearMode === 'none' ? 'Failed to run pattern' : 'Run failed (clear needs a playlist config)')
+    } catch (e) {
+      toast.error(clearMode === 'none' ? userMessage(e, 'run the pattern') : 'Run failed (clear needs a playlist config)')
     } finally {
       setRunning(false)
     }
@@ -158,7 +160,7 @@ export function BrowseScreen() {
         setSelected(null)
         useLibrary.getState().addTablePattern(bareName(name))
       } catch (e) {
-        toast.error(`Upload failed: ${(e as Error).message}`)
+        toast.error(userMessage(e, 'send the pattern'))
       } finally {
         setPushing(false)
         setPushPct(null)
@@ -195,7 +197,7 @@ export function BrowseScreen() {
       const added = `Added ${imported.length} pattern${imported.length > 1 ? 's' : ''} to library`
       toast.success(failed.length ? `${added}, skipped ${failed.length} invalid` : added)
     } catch (e) {
-      toast.error((e as Error).message || 'Import failed')
+      toast.error(userMessage(e, 'import the pattern'))
     } finally {
       setImporting(false)
     }
@@ -225,7 +227,7 @@ export function BrowseScreen() {
             toast.success('Deleted')
             setSelected(null)
           } catch (e) {
-            toast.error(`Delete failed: ${(e as Error).message}`)
+            toast.error(userMessage(e, 'delete the pattern'))
           } finally {
             setDeleting(false)
           }

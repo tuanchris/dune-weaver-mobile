@@ -108,21 +108,71 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   (`usePreviews.shardHashes`, persisted), unzips with `fflate`, and registers images via
   `usePreviews.addMany` — same store as manual preview imports, keyed by `previewKey` basename. This
   is what gives bulk-loaded card patterns thumbnails; 404 sidecar (no bundle) is a quiet no-op.
+  **Sync ↔ motion are mutually exclusive** (shared single-threaded SD): sync only starts when the
+  table is idle and, while shards stream, sets `usePreviews.syncing` — motion-START actions (run
+  pattern/playlist, home, clear, center/perimeter, skip) disable + refuse via `assertNotSyncing()`
+  (`sd.ts`; Stop/pause/resume never gate). The streaming phase also holds an `expo-keep-awake` lock
+  so a screen-off suspend can't abandon a half-fetched shard.
 - **Shared geometry**: `src/lib/thrGeometry.mjs` (plain ESM `.mjs` so BOTH the Node build script and
   Metro import it — `mjs` is in Expo's `sourceExts`). `parseThr` / `decimate` / `toXY` / `decimateThrText`.
 
 ## Project layout
 - `src/api/` — `board.ts` (HTTP client), `status.ts` (RawStatus → Status).
 - `src/stores/` — zustand, persisted via AsyncStorage: `useBoards` (tables), `useStatus` (1s poll),
-  `useLibrary` (imported patterns + geometry cache + bundle accessors), `useTheme`, `useToast`.
+  `useLibrary` (imported patterns + geometry cache + bundle accessors), `useTheme`, `useToast`
+  (errors linger 7 s vs 2.6 s for info/success), `useAppLog` (local diagnostics ring buffer —
+  see below).
+- **Custom clear patterns** (`$Playlist/ClearIn`/`ClearOut`/`ClearSpeed`, firmware ≥ v0.1.11):
+  `ClearPatternsCard` (Settings) points the from-center / from-edge clears at any on-table pattern
+  (a searchable single-select picker over `useLibrary.tablePatterns`; "Use built-in clear" sends `''`
+  → firmware falls back to its config default) and sets a dedicated clear feed (mm/min; 0 = pattern
+  feed). The firmware runs the chosen file NON-destructively (unlike the old web app, which
+  overwrote the stock clear files). Values are full SD paths (`/patterns/<key>`); a stored path equal
+  to the stock `/patterns/clear_from_{in,out}.thr` (or empty) displays as "Built-in". Idle-gated.
+- **API password** (`$Sand/Password`, firmware ≥ v0.1.11): a locked table 401s every CONTROL route
+  without the key (`?key=` or `X-Sand-Key`; reads stay open). The app stores the key per saved
+  board (`useBoards` `Board.key`) and attaches `X-Sand-Key` to EVERY request — `board.ts` gets the
+  key via `registerKeyLookup` (injected from useBoards; board.ts can't import the store, the store
+  imports `normalizeBase`). All request paths carry it: the shared helpers, the XHR upload, both
+  `/updatefw` calls, and the Wi-Fi POSTs. `SecurityCard` (Settings, hidden for the demo table)
+  sets/changes/removes the password on the table (`board.setSandPassword` — carries the old key
+  automatically) or just saves an existing password locally (`board.testKey` probes with `$G`;
+  401 = wrong). Lost password: `$Sand/Password=` over USB serial (never gated).
+- **User-facing errors go through `userMessage(e, 'create the playlist')`** (`src/lib/errors.ts`):
+  it maps raw causes to actionable sentences — SD card missing/unformatted (firmware's
+  "No SD card"/"filesystem inaccessible" 503s, plus `status.sd_ok === false` for otherwise-opaque
+  HTTP errors), busy/409, 507 card-full, network-unreachable — and logs the RAW error to the
+  diagnostics log so friendly toasts never lose detail. `useBoardAction.act(fn, successMsg, doing)`
+  takes the verb phrase as its third arg. Libs that already throw human messages
+  (`firmwareUpdate.ts`, `wifiSetup.ts`) surface those directly.
+- **Diagnostics** (`useAppLog` + `DiagnosticsCard` in Settings): a ~600-entry local ring buffer
+  (tail persisted) capturing failed board requests (`board.ts` helpers log everything EXCEPT
+  `/sand_status` — `useStatus` logs connect/disconnect transitions instead, so an offline table
+  doesn't flood it), plus uncaught JS errors via `ErrorUtils` (hooked in `initAppLog`, called from
+  App.tsx). "View logs" opens a table-first sheet: the Table tab shows the COLLECTED table-log
+  history — `useTableLogSync` (App.tsx) harvests `/sand_log` (a heap-free static-buffer route on
+  the board) into `useTableLog` (persisted per saved-board id, ~2000 lines) on every
+  unreachable→reachable transition and every 5 min while connected, merging by the `[+uptime]`
+  line prefixes (uptime going backwards = reboot → "— table restarted —" marker). This outlives
+  the board's ~8 KB RAM ring, which is lost on every table reboot. The app ring is the second
+  tab; the share icon exports the VISIBLE tab through the system share sheet. Nothing is uploaded
+  automatically, which keeps the "Data Not Collected" App Privacy label truthful.
+  (`/sand_bootlog`/`/sand_coredump` are no longer fetched; their `board.ts` helpers remain as
+  API-surface mirrors.)
 - `src/screens/` — `Browse` (Library|On-Table tabs, circular thumbs, import, push, clear-before-run),
   `Playlists` (create/edit/delete, pattern picker grid, loop/shuffle/pause + pause-from-start/clear/
-  auto-home), `Control` (home/stop/unlock/speed + quiet-hours + live status), `Led` (effect/palette/
-  color pickers, brightness/speed sliders, run/idle overrides), `Settings` (tables + Wi-Fi + reboot +
-  app/firmware updates).
+  auto-home; edits are local until the editor closes, and closing dirty ASKS save/discard — never
+  silently writes), `Control` (home/stop/unlock/speed + quiet-hours + live status), `Led` (effect/palette/
+  color pickers, brightness/speed sliders, run/idle overrides), `Settings` (tables + Wi-Fi + homing
+  mode/orientation + reboot + app/firmware updates).
 - `src/components/` — `PolarPattern` (SVG path + progress + live dot), `PatternThumb`, `NowPlayingBar`
   (swipe up/down to expand/collapse), `Screen`, `ui.tsx` (`Button`/`Card`/`IconButton`/`Slider` —
-  the `Slider` is PanResponder-based, no native dep), `Onboarding`, `Toaster`.
+  the `Slider` is PanResponder-based, no native dep), `Onboarding`, `Toaster`, `AlignOrientation`
+  (crash-homing pattern orientation, in Settings' Homing card: crash home never moves theta — the
+  arm's direction at home time BECOMES theta=0 — so the sheet nudges the ball around the perimeter
+  via absolute `/sand_goto?theta=` jogs (`board.rotateTo`, seeded from live status.theta, 409-retry
+  while the previous jog finishes) until it points "East" (viewer's right), then homes to lock it in.
+  Mirrors dw's Pattern Orientation Alignment dialog).
 - `src/lib/` — `thrGeometry.mjs`, `patternGeometry.ts`, `patternSource`/`pushPattern`/`importPattern`/`playlists`.
 - `metro.config.js` adds `thr` to `assetExts`. `app.json` has `assetBundlePatterns` for `assets/thr` + `assets/previews`.
 

@@ -37,6 +37,11 @@ interface PreviewStore {
   shardHashes: Record<string, string>
   hydrated: boolean
   hydrate: () => Promise<void>
+  /** True while a preview-bundle shard sync is streaming from the table. Motion
+   * is blocked during this (the board's single-threaded SD can't serve heavy
+   * shard reads and a running pattern at once). Not persisted. */
+  syncing: boolean
+  setSyncing: (v: boolean) => void
   /** Add/replace ingested previews (keyed by previewKey). Persists. */
   addMany: (entries: { key: string; uri: string }[]) => void
   /** Record a preview-bundle shard as ingested at the given content hash. */
@@ -58,6 +63,8 @@ export const usePreviews = create<PreviewStore>((set, get) => ({
   map: {},
   shardHashes: {},
   hydrated: false,
+  syncing: false,
+  setSyncing: (v) => set({ syncing: v }),
 
   hydrate: async () => {
     try {

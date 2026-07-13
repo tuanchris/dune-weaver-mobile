@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { board } from '../api/board'
 import { translateStatus, type Status } from '../api/status'
 import { useBoards } from './useBoards'
+import { log } from './useAppLog'
 
 const POLL_MS = 1000
 
@@ -30,15 +31,19 @@ async function pollOnce(base: string, gen: number, set: (p: Partial<StatusStore>
     const raw = await board.status(base)
     if (gen !== generation) return
     const status = translateStatus(raw)
+    if (get().status?.connected === false) log.info('table', `Reachable again: ${base}`)
     set({ status })
     // Backfill the stable identity onto the saved board (no-op when unchanged)
     // so boards added by bare IP still dedupe against discovery and relocate.
     if (status.mac || status.hostname) {
       useBoards.getState().noteIdentity(base, status.mac, status.hostname)
     }
-  } catch {
+  } catch (e) {
     if (gen !== generation) return
     const prev = get().status
+    // Log the TRANSITION only — a table that stays offline would otherwise
+    // fill the diagnostics ring at one line per second.
+    if (prev?.connected) log.warn('table', `Unreachable: ${base} (${(e as Error)?.message ?? e})`)
     set({ status: prev ? { ...prev, connected: false } : null })
   } finally {
     if (gen === generation) {

@@ -113,23 +113,33 @@ export function NowPlayingBar() {
   const elapsedMs = pausing ? pauseElapsedMs : startRef.current.file === currentFile ? Date.now() - startRef.current.at : 0
   const remainingMs = pausing ? pauseRemainMs : hasProgress && pct > 1 && pct < 100 ? (elapsedMs * (100 - pct)) / pct : null
 
-  // Up-next from the playlist file (bare ".thr" name).
-  const upNextFile =
-    status.playlist && playlistItems?.name === plName ? playlistItems.items[status.playlist.index + 1] : undefined
-  const upcoming =
+  // Up-next comes straight from the firmware (playlist.next) — it resolves the
+  // real next pattern even under shuffle, where the order is internal to the
+  // board. (The old code used playlistItems[index+1], which always showed file
+  // line 2 while shuffling.) "" / null = unknown (last of a pass / single run)
+  // -> no "up next".
+  const upNextFile = status.playlist?.next ? patternKey(status.playlist.next) : undefined
+
+  // The full upcoming queue is only knowable in file order, which is truthful
+  // ONLY when not shuffling. When the firmware's next disagrees with the
+  // file-order next, the playlist is shuffled and the rest of the order isn't
+  // exposed — show just the one known next item rather than a wrong list.
+  const fileUpcoming =
     status.playlist && playlistItems?.name === plName ? playlistItems.items.slice(status.playlist.index + 1) : []
+  const shuffled = !!upNextFile && fileUpcoming.length > 0 && upNextFile !== fileUpcoming[0]
+  const upcoming = shuffled ? [upNextFile] : fileUpcoming
 
   const togglePause = () =>
-    status.isPaused ? act(() => board.resume(base), 'Resumed') : act(() => board.pause(base), 'Paused')
+    status.isPaused ? act(() => board.resume(base), 'Resumed', 'resume the pattern') : act(() => board.pause(base), 'Paused', 'pause the pattern')
 
   const Controls = ({ big }: { big?: boolean }) => (
     <View style={styles.controls}>
-      <IconButton icon="stop" size={big ? 30 : 26} color={colors.foreground} onPress={() => act(() => board.stop(base), 'Stopped')} />
+      <IconButton icon="stop" size={big ? 30 : 26} color={colors.foreground} onPress={() => act(() => board.stop(base), 'Stopped', 'stop the table')} />
       <Pressable onPress={togglePause} style={[styles.playBtn, { backgroundColor: colors.primary, width: big ? 60 : 48, height: big ? 60 : 48 }]}>
         <MaterialIcons name={status.isPaused ? 'play-arrow' : 'pause'} size={big ? 34 : 28} color="#fff" />
       </Pressable>
       {status.playlist ? (
-        <IconButton icon="skip-next" size={big ? 30 : 26} color={colors.foreground} onPress={() => act(() => board.skip(base), 'Skipping')} />
+        <IconButton icon="skip-next" size={big ? 30 : 26} color={colors.foreground} onPress={() => act(() => board.skip(base), 'Skipping', 'skip to the next pattern')} />
       ) : (
         <View style={{ width: big ? 30 : 26 }} />
       )}

@@ -15,9 +15,11 @@ import { useLibrary } from '../stores/useLibrary'
 import { usePrefs, type PauseUnit, type PlaylistPref } from '../stores/usePrefs'
 import { loadPlaylist, savePlaylist, deletePlaylist, playlistName } from '../lib/playlists'
 import { prettyName } from '../lib/patternName'
+import { assertNotSyncing } from '../lib/sd'
+import { usePreviews } from '../stores/usePreviews'
 import { useBoardAction } from '../lib/useBoardAction'
 import { pauseToSeconds, secondsToPause } from '../lib/pauseUnits'
-import { SdBusyError } from '../lib/sd'
+import { userMessage } from '../lib/errors'
 import { radius, spacing, font } from '../theme'
 
 const GRID_COLS = 3
@@ -44,6 +46,8 @@ export function PlaylistsScreen() {
 
   const [playlists, setPlaylists] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
+  // A running preview sync blocks starting playback (shared single-threaded SD).
+  const syncing = usePreviews((s) => s.syncing)
   const { busy, setBusy, act } = useBoardAction()
 
   // Create-playlist modal (name only, like dw — empty playlist then open detail).
@@ -91,8 +95,8 @@ export function PlaylistsScreen() {
     try {
       // /sand_playlists is a motion-safe listing — fine to read during playback.
       setPlaylists(await board.playlists(base))
-    } catch {
-      toast.error('Failed to load playlists')
+    } catch (e) {
+      toast.error(userMessage(e, 'load the playlists'))
     } finally {
       setLoading(false)
     }
@@ -158,7 +162,7 @@ export function PlaylistsScreen() {
       setDetailOpen(true)
       loadPref(fname)
     } catch (e) {
-      toast.error(`Create failed: ${(e as Error).message}`)
+      toast.error(userMessage(e, 'create the playlist'))
     } finally {
       setBusy(false)
     }
@@ -176,8 +180,8 @@ export function PlaylistsScreen() {
       const loaded = await loadPlaylist(base, filename)
       setItems(loaded)
       setBaseline(loaded)
-    } catch {
-      toast.error('Could not read playlist')
+    } catch (e) {
+      toast.error(userMessage(e, 'read the playlist'))
     }
   }
 
@@ -192,19 +196,43 @@ export function PlaylistsScreen() {
       setBaseline(items)
       return true
     } catch (e) {
-      toast.error(e instanceof SdBusyError ? 'Table is busy — try again once it stops.' : `Save failed: ${(e as Error).message}`)
+      toast.error(userMessage(e, 'save the playlist'))
       return false
     } finally {
       setBusy(false)
     }
   }
 
-  const closeDetail = async () => {
-    if (current && dirty) {
-      const ok = await commitItems()
-      if (!ok) return // keep the sheet open; the edits (and the error) are still visible
+  // Closing with unsaved edits asks deliberately — silently writing (or losing)
+  // a changed pattern list is too easy to miss.
+  const closeDetail = () => {
+    if (!current || !dirty) {
+      setDetailOpen(false)
+      return
     }
-    setDetailOpen(false)
+    Alert.alert('Save changes?', `“${name}” has unsaved changes to its pattern list.`, [
+      { text: 'Keep editing', style: 'cancel' },
+      {
+        text: 'Discard',
+        style: 'destructive',
+        onPress: () => {
+          setItems(baseline)
+          setDetailOpen(false)
+        },
+      },
+      {
+        text: 'Save',
+        isPreferred: true,
+        onPress: async () => {
+          const ok = await commitItems()
+          if (ok) {
+            toast.success('Playlist saved')
+            setDetailOpen(false)
+          }
+          // failed write: keep the sheet open; the edits (and the error) are still visible
+        },
+      },
+    ])
   }
 
   const removeItem = (i: number) => setItems(items.filter((_, idx) => idx !== i))
@@ -253,12 +281,17 @@ export function PlaylistsScreen() {
   // launches playback from the detail view via the floating Play button.
   const run = async () => {
     if (!base || !current || items.length === 0) return
+    if (syncing) {
+      toast.error('Syncing previews from the table — try again in a moment.')
+      return
+    }
     if (dirty) {
       const ok = await commitItems()
       if (!ok) return
     }
     setBusy(true)
     try {
+      assertNotSyncing()
       await board.setPlaylistMode(base, pref.loop ? 'loop' : 'single')
       await board.setPlaylistShuffle(base, pref.shuffle)
       await board.setPlaylistPause(base, pauseToSeconds(pref.pauseTime, pref.pauseUnit))
@@ -267,8 +300,8 @@ export function PlaylistsScreen() {
       toast.success(`Started ${name}`)
       setDetailOpen(false)
       setTimeout(refreshStatus, 400)
-    } catch {
-      toast.error('Could not start playlist')
+    } catch (e) {
+      toast.error(userMessage(e, 'start the playlist'))
     } finally {
       setBusy(false)
     }
@@ -289,8 +322,8 @@ export function PlaylistsScreen() {
             toast.success('Deleted')
             setDetailOpen(false)
             await load()
-          } catch {
-            toast.error('Delete failed')
+          } catch (e) {
+            toast.error(userMessage(e, 'delete the playlist'))
           } finally {
             setBusy(false)
           }
@@ -319,8 +352,8 @@ export function PlaylistsScreen() {
               {activePlaylist.name ?? '—'} · {activePlaylist.index + 1}/{activePlaylist.total}
             </Text>
           </View>
-          <Button title="Skip" icon="skip-next" variant="secondary" disabled={busy} onPress={() => act(() => board.skip(base), 'Skipping')} />
-          <Button title="Stop" icon="stop" variant="destructive" disabled={busy} onPress={() => act(() => board.stopPlaylist(base), 'Stopping after current')} />
+          <Button title="Skip" icon="skip-next" variant="secondary" disabled={busy || syncing} onPress={() => act(() => { assertNotSyncing(); return board.skip(base) }, 'Skipping', 'skip to the next pattern')} />
+          <Button title="Stop" icon="stop" variant="destructive" disabled={busy} onPress={() => act(() => board.stopPlaylist(base), 'Stopping after current', 'stop the playlist')} />
         </View>
       ) : null}
 
@@ -461,10 +494,10 @@ export function PlaylistsScreen() {
 
               <Pressable
                 onPress={run}
-                disabled={busy || items.length === 0}
+                disabled={busy || items.length === 0 || syncing}
                 style={({ pressed }) => [
                   styles.playBig,
-                  { backgroundColor: items.length === 0 ? colors.border : colors.primary, opacity: pressed ? 0.85 : 1 },
+                  { backgroundColor: items.length === 0 || syncing ? colors.border : colors.primary, opacity: pressed ? 0.85 : 1 },
                 ]}
               >
                 {busy ? (

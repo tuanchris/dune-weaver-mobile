@@ -26,6 +26,8 @@ import { useUpdates, appUpdateAvailable, fwUpdateAvailable } from './src/stores/
 import { syncClock } from './src/lib/clock'
 import { useAutoRelocate } from './src/lib/relocate'
 import { usePreviewSync } from './src/lib/previewSync'
+import { useTableLogSync } from './src/lib/tableLogSync'
+import { initAppLog } from './src/stores/useAppLog'
 
 const Tab = createBottomTabNavigator()
 
@@ -59,6 +61,7 @@ export default function App() {
   // table per session, when the table is idle.
   const statusBase = useStatus((s) => s.base)
   usePreviewSync(statusBase)
+  useTableLogSync()
 
   // Update-available dot on the Settings tab: a newer app in the store, or a
   // newer firmware release than what the active table reports.
@@ -69,6 +72,7 @@ export default function App() {
 
   // Hydrate persisted state on launch.
   useEffect(() => {
+    void initAppLog() // diagnostics ring buffer + uncaught-error hook
     hydrateTheme()
     hydrateBoards()
     hydrateLibrary()

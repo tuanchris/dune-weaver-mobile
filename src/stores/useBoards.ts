@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import { normalizeBase } from '../api/board'
+import { normalizeBase, registerKeyLookup } from '../api/board'
 import { DEMO_BASE, isDemoBase } from '../api/demoBoard'
 
 const KEY = 'dw_boards_v1'
@@ -17,6 +17,10 @@ export interface Board {
    * identity (firmware > v0.1.7; from the mDNS TXT record or /sand_status).
    * Preferred over hostname for dedupe and DHCP auto-relocate. */
   mac?: string
+  /** $Sand/Password key for a locked table (firmware ≥ v0.1.11) — attached to
+   * every request as X-Sand-Key (see registerKeyLookup in board.ts). Stored
+   * locally on this phone only. */
+  key?: string
 }
 
 interface Persisted {
@@ -36,6 +40,8 @@ interface BoardsStore {
   renameBoard: (id: string, name: string) => void
   /** Point an existing board at a new address (DHCP gave the table a new IP). */
   updateBase: (id: string, host: string, hostname?: string, mac?: string) => void
+  /** Save (or clear, with undefined) a table's $Sand/Password key. */
+  setKey: (id: string, key: string | undefined) => void
   /** Backfill identity learned from a live /sand_status poll onto the board
    * with this base — lets manually-added (IP-only) boards gain the stable
    * hardware ID so discovery dedupe and auto-relocate work for them too. */
@@ -121,6 +127,12 @@ export const useBoards = create<BoardsStore>((set, get) => ({
     persist(boards, get().activeId)
   },
 
+  setKey: (id, key) => {
+    const boards = get().boards.map((b) => (b.id === id ? { ...b, key: key || undefined } : b))
+    set({ boards })
+    persist(boards, get().activeId)
+  },
+
   noteIdentity: (base, mac, hostname) => {
     const m = mac?.toLowerCase()
     const boards = get().boards.map((b) => {
@@ -146,3 +158,7 @@ export const useBoards = create<BoardsStore>((set, get) => ({
 
   getActiveBase: () => get().getActive()?.base ?? null,
 }))
+
+// Give the HTTP client access to saved keys without a store↔client import
+// cycle (this module already imports normalizeBase from board.ts).
+registerKeyLookup((base) => useBoards.getState().boards.find((b) => b.base === base)?.key)

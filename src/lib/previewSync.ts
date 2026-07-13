@@ -1,11 +1,16 @@
 import { useEffect, useRef } from 'react'
 import { Directory, File, Paths } from 'expo-file-system'
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake'
 import { unzipSync } from 'fflate'
 import { board } from '../api/board'
 import { usePreviews, previewKey } from '../stores/usePreviews'
 import { useStatus } from '../stores/useStatus'
 import { isBusy } from '../api/status'
 import { isSdBusy } from './sd'
+
+/** Tag for the keep-awake lock held while shards stream (screen off would
+ * suspend the transfer and leave a half-fetched bundle). */
+const KEEP_AWAKE_TAG = 'dw-preview-sync'
 
 /**
  * Sync preview thumbnails from the table's SD card. The SD Card Pattern
@@ -101,54 +106,66 @@ export async function syncPreviewBundle(
   const changed = sidecar.shards.filter(
     (s) => usePreviews.getState().shardHashes[s.name] !== s.hash
   )
+  if (changed.length === 0) return result // nothing to fetch; no lock, no keep-awake
 
-  for (let i = 0; i < changed.length; i++) {
-    const shard = changed[i]
-    const { addMany, setShardHash } = usePreviews.getState()
-    // The table may have started a pattern mid-sync — stop politely and
-    // pick the remaining shards up next session.
-    if (isSdBusy()) break
+  // Claim exclusive SD time for the streaming phase: mark syncing (motion
+  // start is blocked while set) and keep the screen awake (a screen-off
+  // suspend would abandon a half-fetched shard). Both released in finally.
+  const { setSyncing } = usePreviews.getState()
+  setSyncing(true)
+  void activateKeepAwakeAsync(KEEP_AWAKE_TAG)
+  try {
+    for (let i = 0; i < changed.length; i++) {
+      const shard = changed[i]
+      const { addMany, setShardHash } = usePreviews.getState()
+      // The table may have started a pattern mid-sync — stop politely and
+      // pick the remaining shards up next session.
+      if (isSdBusy()) break
 
-    // Nothing to ingest from an empty shard; just record it as seen.
-    if (!shard.entries) {
-      setShardHash(shard.name, shard.hash)
-      continue
-    }
-
-    try {
-      onProgress?.({
-        stage: 'downloading',
-        shard: i + 1,
-        totalShards: changed.length,
-        bytes: shard.bytes,
-      })
-      const bytes = await board.previewShard(base, shard.name, shardTimeout(shard.bytes))
-      const files = unzipSync(bytes)
-      if (!dir.exists) dir.create({ intermediates: true })
-      const entries: { key: string; uri: string }[] = []
-      for (const [entryName, data] of Object.entries(files)) {
-        if (!entryName.toLowerCase().endsWith('.webp') || data.length === 0) continue
-        const key = previewKey(entryName)
-        if (!key) continue
-        const dest = new File(dir, `${safe(key)}.webp`)
-        if (dest.exists) dest.delete()
-        dest.write(data)
-        entries.push({ key, uri: dest.uri })
+      // Nothing to ingest from an empty shard; just record it as seen.
+      if (!shard.entries) {
+        setShardHash(shard.name, shard.hash)
+        continue
       }
-      addMany(entries)
-      setShardHash(shard.name, shard.hash)
-      result.shardsFetched++
-      result.imagesIngested += entries.length
-      onProgress?.({
-        stage: 'saving',
-        shard: i + 1,
-        totalShards: changed.length,
-        images: result.imagesIngested,
-      })
-    } catch (e) {
-      // Failed shard: hash stays unrecorded, so the next pass retries it.
-      console.warn(`Preview shard sync failed (${shard.name})`, e)
+
+      try {
+        onProgress?.({
+          stage: 'downloading',
+          shard: i + 1,
+          totalShards: changed.length,
+          bytes: shard.bytes,
+        })
+        const bytes = await board.previewShard(base, shard.name, shardTimeout(shard.bytes))
+        const files = unzipSync(bytes)
+        if (!dir.exists) dir.create({ intermediates: true })
+        const entries: { key: string; uri: string }[] = []
+        for (const [entryName, data] of Object.entries(files)) {
+          if (!entryName.toLowerCase().endsWith('.webp') || data.length === 0) continue
+          const key = previewKey(entryName)
+          if (!key) continue
+          const dest = new File(dir, `${safe(key)}.webp`)
+          if (dest.exists) dest.delete()
+          dest.write(data)
+          entries.push({ key, uri: dest.uri })
+        }
+        addMany(entries)
+        setShardHash(shard.name, shard.hash)
+        result.shardsFetched++
+        result.imagesIngested += entries.length
+        onProgress?.({
+          stage: 'saving',
+          shard: i + 1,
+          totalShards: changed.length,
+          images: result.imagesIngested,
+        })
+      } catch (e) {
+        // Failed shard: hash stays unrecorded, so the next pass retries it.
+        console.warn(`Preview shard sync failed (${shard.name})`, e)
+      }
     }
+  } finally {
+    void deactivateKeepAwake(KEEP_AWAKE_TAG).catch(() => undefined)
+    setSyncing(false)
   }
   return result
 }

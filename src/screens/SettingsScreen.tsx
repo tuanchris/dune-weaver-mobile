@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Alert, Image, ScrollView, StyleSheet, Switch, Text, TextInput, View, Pressable } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board, normalizeBase, testBoard, CLEAR_MODES, type ClearMode } from '../api/board'
+import { isDemoBase } from '../api/demoBoard'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
@@ -12,9 +13,14 @@ import { importPreviews } from '../lib/importPreviews'
 import { syncPreviewBundle } from '../lib/previewSync'
 import { Button, Card, CardTitle, IconButton, Select } from '../components/ui'
 import { Screen } from '../components/Screen'
+import { AlignOrientation } from '../components/AlignOrientation'
+import { ClearPatternsCard } from '../components/ClearPatternsCard'
+import { SecurityCard } from '../components/SecurityCard'
 import { StillSands } from '../components/StillSands'
 import { UpdatesCard } from '../components/UpdatesCard'
 import { WifiCard } from '../components/WifiCard'
+import { DiagnosticsCard } from '../components/DiagnosticsCard'
+import { userMessage } from '../lib/errors'
 import { useDiscovery, type DiscoveredTable } from '../lib/discovery'
 import { playlistName } from '../lib/playlists'
 import { pickLogo, clearLogo } from '../lib/branding'
@@ -162,7 +168,7 @@ export function SettingsScreen() {
       const added = `Imported ${entries.length} preview${entries.length > 1 ? 's' : ''}`
       toast.success(failed.length ? `${added}, skipped ${failed.length}` : added)
     } catch (e) {
-      toast.error((e as Error).message || 'Import failed')
+      toast.error(userMessage(e, 'import the previews'))
     } finally {
       setImportingPreviews(false)
     }
@@ -428,6 +434,9 @@ export function SettingsScreen() {
 
         <WifiCard base={base} />
 
+        {/* Demo table: no real lock to manage. */}
+        {base && !isDemoBase(base) ? <SecurityCard base={base} /> : null}
+
         {base ? (
           <Card>
             <CardTitle>Auto-play on boot</CardTitle>
@@ -537,6 +546,12 @@ export function SettingsScreen() {
               )
             })}
 
+            {homingMode === 'crash' ? (
+              <View style={{ marginTop: spacing.sm }}>
+                <AlignOrientation base={base} />
+              </View>
+            ) : null}
+
             {homingMode === 'sensor' ? (
               <View style={{ marginTop: spacing.sm }}>
                 <Text style={[styles.bootLabel, { color: colors.foreground }]}>Sensor offset (degrees)</Text>
@@ -589,6 +604,8 @@ export function SettingsScreen() {
             </Text>
           </Card>
         ) : null}
+
+        {base ? <ClearPatternsCard base={base} /> : null}
 
         {base ? <StillSands base={base} /> : null}
 
@@ -657,6 +674,9 @@ export function SettingsScreen() {
           </Text>
         </Card>
 
+        <DiagnosticsCard base={base} />
+
+        {/* About stays the last card. */}
         <UpdatesCard base={base} />
       </ScrollView>
     </Screen>

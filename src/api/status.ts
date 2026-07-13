@@ -23,6 +23,11 @@ export interface RawStatus {
     /** Full length of the current between-patterns pause in seconds (fixed for
      * its duration; already accounts for PauseFromStart); -1 when not pausing. */
     pause_total?: number
+    /** The upcoming pattern's full SD path, resolved by the firmware so it's
+     * correct under shuffle (the shuffle order is internal to the board). "" =
+     * unknown: the last pattern of a pass, or a single run. Absent on firmware
+     * that predates it. */
+    next?: string
   }
   /** Only present when the table has LEDs configured (`has_led`). */
   led?: {
@@ -41,6 +46,9 @@ export interface RawStatus {
   mac?: string
   /** Configured network hostname (e.g. "DWMP"). Absent on older firmware. */
   hostname?: string
+  /** Boot-time SD readability probe. Absent when no SD is configured (and on
+   * older firmware). false = card missing/unreadable/unformatted. */
+  sd_ok?: boolean
 }
 
 /** The table's wall clock (from /sand_time or status.time). */
@@ -62,7 +70,7 @@ export interface Status {
   feedOverride: number
   theta: number
   rho: number
-  playlist: { index: number; total: number; name: string | null } | null
+  playlist: { index: number; total: number; name: string | null; next: string | null } | null
   /** Seconds left in the between-patterns pause, or null when not pausing. */
   pauseRemaining: number | null
   /** Full length of the current between-patterns pause in seconds, or null. */
@@ -79,6 +87,8 @@ export interface Status {
   mac: string | null
   /** Table's network hostname, or null on older firmware. */
   hostname: string | null
+  /** SD card readable? null when unreported (no card configured / old fw). */
+  sdOk: boolean | null
   state: string
   connected: boolean
 }
@@ -115,7 +125,14 @@ export function translateStatus(raw: RawStatus): Status {
     theta: raw.theta,
     rho: raw.rho,
     playlist: plActive
-      ? { index: raw.playlist.index, total: raw.playlist.total, name: raw.playlist.name || null }
+      ? {
+          index: raw.playlist.index,
+          total: raw.playlist.total,
+          name: raw.playlist.name || null,
+          // Firmware resolves the true next pattern (shuffle-aware); "" / absent
+          // -> null (the app then shows no "up next").
+          next: raw.playlist.next || null,
+        }
       : null,
     pauseRemaining,
     pauseTotal,
@@ -125,6 +142,7 @@ export function translateStatus(raw: RawStatus): Status {
     fw: raw.fw ?? null,
     mac: raw.mac?.toLowerCase() ?? null,
     hostname: raw.hostname || null,
+    sdOk: raw.sd_ok ?? null,
     state,
     connected: true,
   }

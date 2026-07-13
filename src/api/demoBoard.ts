@@ -65,6 +65,9 @@ function defaultSettings(): Record<string, string> {
     'Playlist/Shuffle': 'OFF',
     'Playlist/PauseTime': '0',
     'Playlist/ClearPattern': 'none',
+    'Playlist/ClearIn': '/patterns/clear_from_in.thr',
+    'Playlist/ClearOut': '/patterns/clear_from_out.thr',
+    'Playlist/ClearSpeed': '0',
     'Playlist/AutoHome': '0',
     'Playlist/Autostart': '',
     'Playlist/AutostartMode': 'loop',
@@ -155,6 +158,12 @@ function buildStatus(): RawStatus {
       quiet: false,
       pause_remaining: -1,
       pause_total: -1,
+      // Mirror the firmware's resolved "up next" (the demo doesn't shuffle, so
+      // it's just the next file, wrapping on loop).
+      next:
+        S.playlist.active && S.playlist.files.length
+          ? S.playlist.files[(S.playlist.index + 1) % S.playlist.files.length]
+          : '',
     },
     led: { effect: S.settings['LED/Effect'], brightness: Number(S.settings['LED/Brightness']) || 0 },
     time: nowTime(),
@@ -207,6 +216,7 @@ export const demoBoard = {
   setFeedLive: async (_base: string, mmPerMin: number) => { S.feed = Math.max(10, Math.min(500, Math.round(mmPerMin))) },
   moveToCenter: ok,
   moveToPerimeter: ok,
+  rotateTo: ok,
 
   // ---- Playlists ----
   runPlaylist: async (_base: string, name: string) => {
@@ -227,6 +237,9 @@ export const demoBoard = {
   setPlaylistPause: async (_b: string, s: number) => setKey('Playlist/PauseTime', String(Math.round(s))),
   setPlaylistPauseFromStart: ok,
   setPlaylistClearPattern: async (_b: string, m: ClearMode) => setKey('Playlist/ClearPattern', m),
+  setPlaylistClearIn: async (_b: string, p: string) => setKey('Playlist/ClearIn', p),
+  setPlaylistClearOut: async (_b: string, p: string) => setKey('Playlist/ClearOut', p),
+  setPlaylistClearSpeed: async (_b: string, n: number) => setKey('Playlist/ClearSpeed', String(Math.max(0, Math.round(n)))),
   setPlaylistAutoHome: async (_b: string, n: number) => setKey('Playlist/AutoHome', String(Math.max(0, Math.round(n)))),
   setHomingMode: async (_b: string, m: 'sensor' | 'crash') => setKey('Sand/HomingMode', m),
   setThetaOffset: async (_b: string, deg: number) => setKey('Sand/ThetaOffset', String(Math.round(deg))),
@@ -278,6 +291,20 @@ export const demoBoard = {
     await wait(400)
     DEMO_WIFI.mode = 'standalone'
     return { status: 'ok', reboot: false }
+  },
+
+  // ---- Diagnostics ----
+  sandLog: async (): Promise<string> => {
+    await wait(80)
+    return '[+12] demo table: session log placeholder\n[+13] playlist: started "Demo Favorites"'
+  },
+  sandBootlog: async (): Promise<string> => {
+    await wait(80)
+    return '[boot] demo table: boot log placeholder (reset: power_on)'
+  },
+  sandCoredump: async (): Promise<Record<string, unknown>> => {
+    await wait(60)
+    return { present: false }
   },
 
   // ---- Clock / system / SD (no-ops that resolve) ----

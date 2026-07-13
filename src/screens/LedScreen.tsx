@@ -8,6 +8,7 @@ import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
 import { toast } from '../stores/useToast'
+import { userMessage } from '../lib/errors'
 import { Card, CardTitle, IconButton, Select, Slider } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { EmptyState } from '../components/EmptyState'
@@ -148,7 +149,7 @@ export function LedScreen() {
 
   const send = (fn: () => Promise<void>) => {
     if (!base) return
-    fn().catch(() => toast.error('LED command failed'))
+    fn().catch((e) => toast.error(userMessage(e, 'update the LEDs')))
   }
 
   const applyEffect = (e: string) => {

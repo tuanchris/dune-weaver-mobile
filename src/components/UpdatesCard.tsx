@@ -24,6 +24,30 @@ export function UpdatesCard({ base }: { base: string | null }) {
   const check = useUpdates((s) => s.check)
   const tableFw = useStatus((s) => s.status?.fw ?? null)
   const [stage, setStage] = useState<FwUpdateStage | null>(null)
+  const [checking, setChecking] = useState(false)
+
+  // Deliberate re-check: bypasses the 6 h throttle (maxAge 0) and reports the
+  // outcome, unlike the silent background checks on launch / Settings focus.
+  const checkNow = async () => {
+    setChecking(true)
+    const before = useUpdates.getState().checkedAt
+    try {
+      await check(0)
+    } finally {
+      setChecking(false)
+    }
+    const s = useUpdates.getState()
+    if (s.checkedAt === before) {
+      toast.error('Couldn’t check for updates — is this phone online?')
+      return
+    }
+    const appAvail = appUpdateAvailable(s.appLatest)
+    const fwAvail = fwUpdateAvailable(s.fwLatest, useStatus.getState().status?.fw ?? null)
+    if (appAvail && fwAvail) toast.info('App and firmware updates available')
+    else if (appAvail) toast.info('An app update is available')
+    else if (fwAvail) toast.info('A firmware update is available')
+    else toast.success('Everything is up to date')
+  }
 
   // Refresh whenever Settings gains focus (the tab stays mounted, so a mount
   // effect would only ever run once per session). Allow a re-check every
@@ -118,6 +142,10 @@ export function UpdatesCard({ base }: { base: string | null }) {
           ) : null}
         </>
       ) : null}
+
+      <View style={{ marginTop: spacing.md }}>
+        <Button title="Check for updates" icon="refresh" variant="secondary" loading={checking} onPress={() => void checkNow()} />
+      </View>
     </Card>
   )
 }

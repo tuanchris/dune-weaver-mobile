@@ -4,7 +4,9 @@ import { MaterialIcons } from '@expo/vector-icons'
 import { board } from '../api/board'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
+import { usePreviews } from '../stores/usePreviews'
 import { useTheme } from '../stores/useTheme'
+import { assertNotSyncing } from '../lib/sd'
 import { useBoardAction } from '../lib/useBoardAction'
 import { Button, Card, CardTitle } from '../components/ui'
 import { Screen } from '../components/Screen'
@@ -27,6 +29,9 @@ export function ControlScreen() {
   const base = useBoards((s) => s.getActiveBase())
   const status = useStatus((s) => s.status)
   const refreshStatus = useStatus((s) => s.refresh)
+  // Block motion-START while the app is streaming previews off the card (shared
+  // single-threaded SD). Stop stays enabled — you must always be able to halt.
+  const syncing = usePreviews((s) => s.syncing)
   const { busy, act } = useBoardAction()
 
   if (!base) {
@@ -40,7 +45,8 @@ export function ControlScreen() {
   const isAlarm = status?.state === 'Alarm'
   // Moving the ball / clearing needs an idle, homed table (the firmware rejects
   // these mid-pattern with HTTP 409). Disable rather than let them silently fail.
-  const canPosition = !!status && status.state === 'Idle' && !status.playlist
+  // A running preview sync also blocks them (SD contention).
+  const canPosition = !!status && status.state === 'Idle' && !status.playlist && !syncing
 
   return (
     <Screen title="Table Control">
@@ -48,20 +54,22 @@ export function ControlScreen() {
         <Card>
           <CardTitle>Movement Controls</CardTitle>
           <View style={styles.row}>
-            <Button title="Home" icon="home" variant="primary" flex disabled={busy} onPress={() => act(() => board.home(base), 'Homing')} />
-            <Button title="Stop" icon="stop" variant="destructive" flex disabled={busy} onPress={() => act(() => board.stop(base), 'Stopped')} />
+            <Button title="Home" icon="home" variant="primary" flex disabled={busy || syncing} onPress={() => act(() => { assertNotSyncing(); return board.home(base) }, 'Homing', 'home the table')} />
+            <Button title="Stop" icon="stop" variant="destructive" flex disabled={busy} onPress={() => act(() => board.stop(base), 'Stopped', 'stop the table')} />
           </View>
           {isAlarm ? (
-            <Button title="Unlock (clear alarm)" icon="lock-open" variant="secondary" style={{ marginTop: spacing.sm }} disabled={busy} onPress={() => act(() => board.unlock(base), 'Unlocked')} />
+            <Button title="Unlock (clear alarm)" icon="lock-open" variant="secondary" style={{ marginTop: spacing.sm }} disabled={busy} onPress={() => act(() => board.unlock(base), 'Unlocked', 'unlock the table')} />
           ) : null}
-          <Text style={[styles.hint, { color: colors.mutedForeground }]}>Home the table before the first pattern after powering on.</Text>
+          <Text style={[styles.hint, { color: colors.mutedForeground }]}>
+            {syncing ? 'Syncing previews from the table — motion is paused until it finishes.' : 'Home the table before the first pattern after powering on.'}
+          </Text>
         </Card>
 
         <Card>
           <CardTitle>Move Ball</CardTitle>
           <View style={styles.tileRow}>
-            <ActionTile icon="center-focus-strong" label="Center" disabled={busy || !canPosition} onPress={() => act(() => board.moveToCenter(base), 'Moving to center')} />
-            <ActionTile icon="trip-origin" label="Perimeter" disabled={busy || !canPosition} onPress={() => act(() => board.moveToPerimeter(base), 'Moving to perimeter')} />
+            <ActionTile icon="center-focus-strong" label="Center" disabled={busy || !canPosition} onPress={() => act(() => { assertNotSyncing(); return board.moveToCenter(base) }, 'Moving to center', 'move the ball')} />
+            <ActionTile icon="trip-origin" label="Perimeter" disabled={busy || !canPosition} onPress={() => act(() => { assertNotSyncing(); return board.moveToPerimeter(base) }, 'Moving to perimeter', 'move the ball')} />
           </View>
           <Text style={[styles.hint, { color: colors.mutedForeground }]}>Position the ball between patterns. Needs an idle, homed table.</Text>
         </Card>
@@ -70,7 +78,7 @@ export function ControlScreen() {
           <CardTitle>Clear Sand</CardTitle>
           <View style={styles.tileRow}>
             {CLEAR_ACTIONS.map((c) => (
-              <ActionTile key={c.file} icon={c.icon} label={c.label} disabled={busy || !canPosition} onPress={() => act(() => board.runPattern(base, c.file), c.toast)} />
+              <ActionTile key={c.file} icon={c.icon} label={c.label} disabled={busy || !canPosition} onPress={() => act(() => { assertNotSyncing(); return board.runPattern(base, c.file) }, c.toast, 'start the clear pattern')} />
             ))}
           </View>
           <Text style={[styles.hint, { color: colors.mutedForeground }]}>Erase the current pattern with a clearing sweep.</Text>

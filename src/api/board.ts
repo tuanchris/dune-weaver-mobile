@@ -5,6 +5,15 @@
 import { fetch as binaryFetch } from 'expo/fetch' // WinterCG fetch: typed-array bodies (RN's can't)
 import type { RawStatus, RawTime } from './status'
 import { demoBoard, isDemoBase } from './demoBoard'
+import { log } from '../stores/useAppLog'
+
+/** Diagnostics trail for failed requests. The 1s status poll is excluded —
+ * useStatus logs its connect/disconnect TRANSITIONS instead, so an offline
+ * table doesn't flood the ring buffer once a second. */
+function logHttpFail(path: string, e: unknown): void {
+  if (path.startsWith('/sand_status')) return
+  log.error('http', `${path.split('?')[0]}: ${(e as Error)?.message ?? String(e)}`)
+}
 
 /** GET/POST /updatefw response. "ready"/"busy" = probe (no file); "ok" =
  * flashed, board reboots ~1s later; "failed" = rejected or bad image. */
@@ -154,6 +163,22 @@ function encodePath(p: string): string {
   return p.split('/').map(encodeURIComponent).join('/')
 }
 
+// ---- API password ($Sand/Password, firmware ≥ v0.1.11) ----
+// When a table is locked, control routes need the key on every request (reads
+// stay open). The per-table key lives on the saved board entry; useBoards
+// injects the lookup at module load (board.ts can't import useBoards — the
+// store already imports normalizeBase from here).
+let lookupKey: (base: string) => string | undefined = () => undefined
+export function registerKeyLookup(fn: (base: string) => string | undefined): void {
+  lookupKey = fn
+}
+/** X-Sand-Key header for a base; {} when no key is saved. The header is sent
+ * on every request (open routes and unlocked tables simply ignore it). */
+function keyHeaders(base: string, override?: string): Record<string, string> {
+  const k = override ?? lookupKey(base)
+  return k ? { 'X-Sand-Key': k } : {}
+}
+
 function withTimeout(ms: number): { signal: AbortSignal; cancel: () => void } {
   const c = new AbortController()
   const t = setTimeout(() => c.abort(), ms)
@@ -163,9 +188,12 @@ function withTimeout(ms: number): { signal: AbortSignal; cancel: () => void } {
 async function getJson<T>(base: string, path: string, timeoutMs = 6000): Promise<T> {
   const { signal, cancel } = withTimeout(timeoutMs)
   try {
-    const res = await fetch(`${base}${path}`, { signal })
+    const res = await fetch(`${base}${path}`, { signal, headers: keyHeaders(base) })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return (await res.json()) as T
+  } catch (e) {
+    logHttpFail(path, e)
+    throw e
   } finally {
     cancel()
   }
@@ -175,9 +203,12 @@ async function getJson<T>(base: string, path: string, timeoutMs = 6000): Promise
 async function getText(base: string, path: string, timeoutMs = 8000): Promise<string> {
   const { signal, cancel } = withTimeout(timeoutMs)
   try {
-    const res = await fetch(`${base}${encodePath(path)}`, { signal })
+    const res = await fetch(`${base}${encodePath(path)}`, { signal, headers: keyHeaders(base) })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return await res.text()
+  } catch (e) {
+    logHttpFail(path, e)
+    throw e
   } finally {
     cancel()
   }
@@ -207,7 +238,7 @@ function httpErrorMessage(status: number, text: string): string {
 async function getBinary(base: string, path: string, timeoutMs = 30000): Promise<Uint8Array> {
   const { signal, cancel } = withTimeout(timeoutMs)
   try {
-    const res = await fetch(`${base}${encodePath(path)}`, { signal })
+    const res = await fetch(`${base}${encodePath(path)}`, { signal, headers: keyHeaders(base) })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return new Uint8Array(await res.arrayBuffer())
   } finally {
@@ -216,14 +247,17 @@ async function getBinary(base: string, path: string, timeoutMs = 30000): Promise
 }
 
 /** Fire an action/command route. Returns when the request succeeds; ignores body. */
-async function hit(base: string, path: string, timeoutMs = 6000): Promise<void> {
+async function hit(base: string, path: string, timeoutMs = 6000, headers?: Record<string, string>): Promise<void> {
   const { signal, cancel } = withTimeout(timeoutMs)
   try {
-    const res = await fetch(`${base}${path}`, { signal })
+    const res = await fetch(`${base}${path}`, { signal, headers: { ...keyHeaders(base), ...headers } })
     if (!res.ok) {
       const text = await res.text().catch(() => '')
       throw new Error(httpErrorMessage(res.status, text))
     }
+  } catch (e) {
+    logHttpFail(path, e)
+    throw e
   } finally {
     cancel()
   }
@@ -250,7 +284,7 @@ async function postWifi(base: string, path: string, form?: Record<string, string
       : ''
     const res = await fetch(`${base}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...keyHeaders(base) },
       body,
       signal,
     })
@@ -317,6 +351,8 @@ async function uploadTextFile(
       xhr.open('POST', `${base}/upload`)
       xhr.timeout = timeout
       xhr.setRequestHeader('Content-Type', `multipart/form-data; boundary=${boundary}`)
+      const sandKey = lookupKey(base)
+      if (sandKey) xhr.setRequestHeader('X-Sand-Key', sandKey)
       if (onProgress) {
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable && e.total > 0) onProgress(Math.min(1, e.loaded / e.total))
@@ -328,6 +364,7 @@ async function uploadTextFile(
       xhr.send(body)
     })
   let r = await attempt()
+  if (!r.ok) logHttpFail(`/upload ${sdPath}`, new Error(httpErrorMessage(r.status, r.text)))
   if (!r.ok && r.status !== 401 && r.status !== 507) {
     // Most likely a missing target folder (a fresh or computer-wiped SD card
     // has no /playlists or /patterns, and the firmware's fopen doesn't create
@@ -362,7 +399,7 @@ async function ensureSdDirs(base: string, sdPath: string): Promise<void> {
 async function updateProbe(base: string, timeoutMs = 6000): Promise<UpdateFwResponse> {
   const { signal, cancel } = withTimeout(timeoutMs)
   try {
-    const res = await fetch(`${base}/updatefw`, { signal })
+    const res = await fetch(`${base}/updatefw`, { signal, headers: keyHeaders(base) })
     return (await res.json()) as UpdateFwResponse
   } finally {
     cancel()
@@ -397,7 +434,7 @@ async function uploadFirmware(base: string, image: Uint8Array, timeoutMs = 18000
   try {
     const res = await binaryFetch(`${base}/updatefw`, {
       method: 'POST',
-      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}`, ...keyHeaders(base) },
       body,
       signal,
     })
@@ -443,6 +480,10 @@ const realBoard = {
   moveToCenter: (base: string) => hit(base, '/sand_goto?rho=0'),
   /** Jog the ball to the perimeter (ρ=1). */
   moveToPerimeter: (base: string) => hit(base, '/sand_goto?rho=1'),
+  /** Rotate the arm to an absolute angle (radians, continuous — same frame as
+   * status.theta), parking the ball at the perimeter. Powers the crash-homing
+   * align-orientation nudges. 409 while a previous jog is still finishing. */
+  rotateTo: (base: string, thetaRad: number) => hit(base, `/sand_goto?theta=${thetaRad.toFixed(4)}&rho=1`),
 
   // ---- Playlists ----
   runPlaylist: (base: string, name: string) =>
@@ -460,6 +501,14 @@ const realBoard = {
    * "HTTP 404" when the card has none (firmware then live-lists /patterns).
    */
   patternManifest: (base: string) => getText(base, '/sd/patterns/index.json'),
+  // ---- Diagnostics (all plain text / JSON, small) ----
+  /** Rolling session log (last ~8 KB of runtime log lines; RAM-only). */
+  sandLog: (base: string) => getText(base, '/sand_log'),
+  /** Boot log; after a panic it still holds the PREVIOUS boot's log. */
+  sandBootlog: (base: string) => getText(base, '/sand_bootlog'),
+  /** Crash report from the coredump partition ({present:false} when clean). */
+  sandCoredump: (base: string) => getJson<Record<string, unknown>>(base, '/sand_coredump'),
+
   /** The preview-bundle sidecar written by the SD Card Pattern Manager. */
   previewSidecar: (base: string) => getJson<unknown>(base, '/sd/patterns/previews/previews.json'),
   /** One preview-bundle shard (a STORE-mode zip of preview webps). */
@@ -472,10 +521,29 @@ const realBoard = {
   setPlaylistPauseFromStart: (base: string, on: boolean) => command(base, `$Playlist/PauseFromStart=${on ? 'ON' : 'OFF'}`),
   /** Default clear sequenced before each pattern in a playlist. */
   setPlaylistClearPattern: (base: string, mode: ClearMode) => command(base, `$Playlist/ClearPattern=${mode}`),
+  // ---- Custom clear patterns + speed ($Playlist/ClearIn|ClearOut|ClearSpeed, firmware ≥ v0.1.11) ----
+  // Point the "from center" / "from edge" clears at any pattern file (full SD
+  // path, e.g. "/patterns/spiral.thr"); "" restores the firmware's built-in
+  // clear. Non-destructive — unlike the old web app, which overwrote the stock
+  // clear files.
+  setPlaylistClearIn: (base: string, sdPath: string) => command(base, `$Playlist/ClearIn=${sdPath}`),
+  setPlaylistClearOut: (base: string, sdPath: string) => command(base, `$Playlist/ClearOut=${sdPath}`),
+  /** Feed (motor mm/min) for clear moves; 0 = same as the pattern feed ($THR/Feed). */
+  setPlaylistClearSpeed: (base: string, mmPerMin: number) => command(base, `$Playlist/ClearSpeed=${Math.max(0, Math.round(mmPerMin))}`),
   /** Re-home every n patterns while a playlist runs (0 = never). */
   setPlaylistAutoHome: (base: string, every: number) => command(base, `$Playlist/AutoHome=${Math.max(0, Math.round(every))}`),
   /** Homing mode: 'sensor' (homes both axes via sensors) or 'crash' (drives to a
    * physical stop, then zeroes theta/rho). Idle-gated by the firmware. */
+  // ---- API password ($Sand/Password, firmware ≥ v0.1.11) ----
+  /** Set (1–32 chars) or clear ('') the table's API password. Idle-gated; on a
+   * locked table the request must carry the CURRENT key (attached from the
+   * saved board entry automatically). */
+  setSandPassword: (base: string, pw: string) => command(base, `$Sand/Password=${pw}`),
+  /** Probe whether `key` unlocks a locked table — throws "HTTP 401" when it
+   * doesn't. ($G is a harmless modal-state query; on an OPEN table any key
+   * "works", which is fine — the caller saves it and it's simply unused.) */
+  testKey: (base: string, key: string) => hit(base, `/command?plain=${encodeURIComponent('$G')}`, 6000, { 'X-Sand-Key': key }),
+
   setHomingMode: (base: string, mode: 'sensor' | 'crash') => command(base, `$Sand/HomingMode=${mode}`),
   /** Sensor-homing angular offset in degrees, so the radial arm points East.
    * Idle-gated by the firmware. */
