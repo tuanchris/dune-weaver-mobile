@@ -2,7 +2,7 @@
   "expo": {
     "name": "Dune Weaver",
     "slug": "dune-weaver-mobile",
-    "version": "1.0.5",
+    "version": "1.0.6",
     "orientation": "portrait",
     "icon": "./assets/dw-logo.png",
     "userInterfaceStyle": "automatic",
@@ -51,7 +51,8 @@
         "expo-build-properties",
         {
           "ios": {
-            "buildReactNativeFromSource": true
+            "buildReactNativeFromSource": true,
+            "deploymentTarget": "16.4"
           },
           "android": {
             "usesCleartextTraffic": true

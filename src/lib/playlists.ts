@@ -55,6 +55,20 @@ export async function savePlaylist(base: string, name: string, items: string[]):
   return fname
 }
 
+/**
+ * Copy a playlist to a DIFFERENT table (write the same .txt to its
+ * /playlists). Unlike savePlaylist this doesn't assert the active table is idle
+ * — the target isn't the table we poll, and it's a tiny write the firmware
+ * serves during playback. The pattern list is copied verbatim; patterns the
+ * target lacks simply won't play until they're added there.
+ */
+export async function copyPlaylistTo(targetBase: string, name: string, items: string[]): Promise<string> {
+  const fname = fileName(name)
+  const content = items.map((n) => `/patterns/${patternKey(n)}`).join('\n') + '\n'
+  await board.uploadTextFile(targetBase, `${DIR}${fname}`, content)
+  return fname
+}
+
 /** Delete a playlist file from the board. */
 export async function deletePlaylist(base: string, filename: string): Promise<void> {
   assertSdIdle()

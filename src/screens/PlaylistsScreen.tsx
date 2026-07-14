@@ -13,7 +13,8 @@ import { PatternThumb } from '../components/PatternThumb'
 import { EmptyState } from '../components/EmptyState'
 import { useLibrary } from '../stores/useLibrary'
 import { usePrefs, type PauseUnit, type PlaylistPref } from '../stores/usePrefs'
-import { loadPlaylist, savePlaylist, deletePlaylist, playlistName } from '../lib/playlists'
+import { loadPlaylist, savePlaylist, deletePlaylist, copyPlaylistTo, playlistName } from '../lib/playlists'
+import { isDemoBase } from '../api/demoBoard'
 import { prettyName } from '../lib/patternName'
 import { assertNotSyncing } from '../lib/sd'
 import { usePreviews } from '../stores/usePreviews'
@@ -41,11 +42,16 @@ const DEFAULT_PREF: PlaylistPref = { loop: false, shuffle: false, pauseTime: 0, 
 export function PlaylistsScreen() {
   const colors = useTheme((s) => s.colors)
   const base = useBoards((s) => s.getActiveBase())
+  const boards = useBoards((s) => s.boards)
+  const activeId = useBoards((s) => s.activeId)
   const status = useStatus((s) => s.status)
   const refreshStatus = useStatus((s) => s.refresh)
 
-  const [playlists, setPlaylists] = useState<string[]>([])
-  const [loading, setLoading] = useState(false)
+  // Playlist listing comes from the shared store's per-board cache (persisted):
+  // shown instantly on launch/switch, re-read only on pull-to-refresh.
+  const playlists = useLibrary((s) => s.tablePlaylists)
+  const loading = useLibrary((s) => s.playlistsLoading)
+  const loadPlaylists = useLibrary((s) => s.loadPlaylists)
   // A running preview sync blocks starting playback (shared single-threaded SD).
   const syncing = usePreviews((s) => s.syncing)
   const { busy, setBusy, act } = useBoardAction()
@@ -74,6 +80,14 @@ export function PlaylistsScreen() {
   const [pref, setPref] = useState<PlaylistPref>(DEFAULT_PREF)
   const [clearOpen, setClearOpen] = useState(false)
 
+  // "Copy to another table" — other saved (non-demo) tables we can write this
+  // playlist's .txt to. Demo tables aren't real SD targets.
+  const [copyOpen, setCopyOpen] = useState(false)
+  const copyTargets = useMemo(
+    () => boards.filter((b) => b.id !== activeId && !isDemoBase(b.base)),
+    [boards, activeId]
+  )
+
   // Update one or more options and remember them for the open playlist.
   const updatePref = (patch: Partial<PlaylistPref>) => {
     const next = { ...pref, ...patch }
@@ -89,18 +103,9 @@ export function PlaylistsScreen() {
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [pickerQuery, setPickerQuery] = useState('')
 
-  const load = useCallback(async () => {
-    if (!base) return
-    setLoading(true)
-    try {
-      // /sand_playlists is a motion-safe listing — fine to read during playback.
-      setPlaylists(await board.playlists(base))
-    } catch (e) {
-      toast.error(userMessage(e, 'load the playlists'))
-    } finally {
-      setLoading(false)
-    }
-  }, [base])
+  // force=true is the pull-to-refresh / post-mutation path (re-reads the board);
+  // the bare on-focus call is stale-while-revalidate (cache, first-load fetch).
+  const load = useCallback((force?: boolean) => loadPlaylists(base, force), [base, loadPlaylists])
 
   const activePlaylist = status?.playlist
   useEffect(() => {
@@ -153,7 +158,7 @@ export function PlaylistsScreen() {
       const fname = await savePlaylist(base, trimmed, [])
       setCreateOpen(false)
       setNewName('')
-      await load()
+      await load(true)
       // Open the freshly created (empty) playlist straight into the detail view.
       setCurrent(fname)
       setName(trimmed)
@@ -307,6 +312,23 @@ export function PlaylistsScreen() {
     }
   }
 
+  // Copy the on-screen pattern list to another table as a .txt (verbatim — no
+  // pattern push; missing patterns just won't play there). Uses the working
+  // `items` so any unsaved edits go along too.
+  const doCopy = async (targetBase: string, targetName: string) => {
+    if (!current) return
+    setBusy(true)
+    try {
+      await copyPlaylistTo(targetBase, playlistName(current), items)
+      toast.success(`Copied “${name}” to ${targetName}`)
+      setCopyOpen(false)
+    } catch (e) {
+      toast.error(userMessage(e, `copy the playlist to ${targetName}`))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const del = () => {
     if (!base || !current) return
     const target = current
@@ -321,7 +343,7 @@ export function PlaylistsScreen() {
             await deletePlaylist(base, target)
             toast.success('Deleted')
             setDetailOpen(false)
-            await load()
+            await load(true)
           } catch (e) {
             toast.error(userMessage(e, 'delete the playlist'))
           } finally {
@@ -361,7 +383,7 @@ export function PlaylistsScreen() {
         data={playlists}
         keyExtractor={(p) => p}
         contentContainerStyle={{ padding: spacing.md, paddingBottom: 160 }}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={load} tintColor={colors.primary} />}
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={() => load(true)} tintColor={colors.primary} />}
         ListEmptyComponent={
           loading ? <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} /> : (
             <EmptyState icon="playlist-remove" text="No playlists. Tap “New” to create one." />
@@ -416,6 +438,9 @@ export function PlaylistsScreen() {
                   {items.length} pattern{items.length === 1 ? '' : 's'}{dirty ? ' · unsaved' : ''}
                 </Text>
               </View>
+              {copyTargets.length > 0 ? (
+                <IconButton icon="content-copy" size={22} color={colors.foreground} onPress={() => setCopyOpen(true)} />
+              ) : null}
               <IconButton icon="delete" size={24} color={colors.destructive} onPress={del} />
             </View>
 
@@ -539,6 +564,40 @@ export function PlaylistsScreen() {
                       </Pressable>
                     )
                   })}
+                </ScrollView>
+                <SafeAreaView edges={['bottom']} />
+              </Pressable>
+            </Pressable>
+          </Modal>
+
+          {/* Copy-to-table selector — nested inside the detail Modal so it presents on top. */}
+          <Modal visible={copyOpen} transparent animationType="slide" onRequestClose={() => setCopyOpen(false)}>
+            <Pressable style={styles.modalBackdrop} onPress={() => setCopyOpen(false)}>
+              <Pressable style={[styles.clearSheet, { backgroundColor: colors.background, borderColor: colors.border }]} onPress={() => {}}>
+                <View style={styles.editorHeader}>
+                  <View style={{ width: 32 }} />
+                  <Text style={{ color: colors.foreground, fontSize: font.size.lg, fontWeight: font.weight.semibold }}>Copy to table</Text>
+                  <IconButton icon="close" size={26} color={colors.foreground} onPress={() => setCopyOpen(false)} />
+                </View>
+                <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, paddingHorizontal: spacing.md }}>
+                  Copies “{name}” ({items.length} pattern{items.length === 1 ? '' : 's'}) to another table. Patterns that table doesn’t have won’t play until you add them there.
+                </Text>
+                <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}>
+                  {copyTargets.map((b) => (
+                    <Pressable
+                      key={b.id}
+                      disabled={busy}
+                      onPress={() => doCopy(b.base, b.name)}
+                      style={[styles.clearOption, { backgroundColor: colors.card, borderColor: colors.border, opacity: busy ? 0.6 : 1 }]}
+                    >
+                      <MaterialIcons name="table-restaurant" size={22} color={colors.primary} />
+                      <View style={{ flex: 1 }}>
+                        <Text numberOfLines={1} style={{ color: colors.foreground, fontSize: font.size.md, fontWeight: font.weight.medium }}>{b.name}</Text>
+                        <Text numberOfLines={1} style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{b.base.replace(/^https?:\/\//, '')}</Text>
+                      </View>
+                      <MaterialIcons name="chevron-right" size={22} color={colors.mutedForeground} />
+                    </Pressable>
+                  ))}
                 </ScrollView>
                 <SafeAreaView edges={['bottom']} />
               </Pressable>

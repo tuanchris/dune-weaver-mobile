@@ -8,6 +8,10 @@ import { THR, PREVIEW } from '../../assets/pattern-manifest'
 import { board } from '../api/board'
 
 const KEY = 'dw_library_v1'
+// On-table listings (patterns + playlists) cached per board base, so a relaunch
+// or a table switch shows the last-known catalog instantly and we only hit the
+// board on an explicit pull-to-refresh (see loadTable/loadPlaylists).
+const TABLE_KEY = 'dw_table_cache_v1'
 
 export type Point = [number, number]
 
@@ -83,15 +87,35 @@ interface Persisted {
   patterns: LibraryPattern[]
 }
 
+/** Last-known on-table listings for one board base. */
+interface TableCacheEntry {
+  patterns?: string[]
+  playlists?: string[]
+  /** ETag of the last /sand_patterns manifest, sent as If-None-Match on refresh
+   * so an unchanged catalog is a cheap 304 instead of a full re-download. */
+  patternsEtag?: string | null
+}
+type TableCache = Record<string, TableCacheEntry>
+
+function persistTableCache(cache: TableCache) {
+  AsyncStorage.setItem(TABLE_KEY, JSON.stringify(cache)).catch(() => {})
+}
+
 interface LibraryStore {
   patterns: LibraryPattern[]
   hydrated: boolean
   xyCache: Record<string, Point[]>
   loading: Record<string, true>
-  /** Patterns currently on the table's SD card. Fetched once (see loadTable). */
+  /** On-table listings for the CURRENTLY-selected board (`tableBase`). Backed by
+   * a per-board persisted cache so a relaunch/switch shows them instantly. */
   tablePatterns: string[]
-  tableLoaded: boolean
+  tablePlaylists: string[]
+  /** Which board base `tablePatterns`/`tablePlaylists` currently reflect. */
+  tableBase: string | null
   tableLoading: boolean
+  playlistsLoading: boolean
+  /** Per-board cache of the last-fetched listings (persisted). */
+  tableCache: TableCache
 
   hydrate: () => Promise<void>
   addImported: (name: string, thrUri: string, sizeBytes: number, xy?: Point[]) => LibraryPattern
@@ -99,12 +123,14 @@ interface LibraryStore {
   /** Record the persisted preview image file for an imported pattern. */
   setPreviewUri: (name: string, uri: string) => void
   /**
-   * Fetch the on-table pattern manifest (the full recursive catalog incl.
-   * custom_patterns/). No-op if already loaded (unless force) or a load is in
-   * flight — we read it once at startup. /sand_patterns is motion-safe, so this
-   * is fine to run even while a pattern is playing.
+   * Point the on-table view at `base` (populating from cache instantly), and
+   * fetch the pattern manifest from the board ONLY on `force` (pull-to-refresh)
+   * or the first time we've ever seen this board. /sand_patterns is motion-safe,
+   * so a refresh is fine even while a pattern is playing.
    */
   loadTable: (base: string | null, force?: boolean) => Promise<void>
+  /** Same contract as loadTable, for the playlist listing (/sand_playlists). */
+  loadPlaylists: (base: string | null, force?: boolean) => Promise<void>
   /** Optimistically reflect a push/delete without re-reading the manifest. */
   addTablePattern: (name: string) => void
   removeTablePattern: (name: string) => void
@@ -130,14 +156,29 @@ function makeId(): string {
   return `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`
 }
 
+/** Merge a listing patch into the per-board cache and persist. */
+function writeCache(
+  get: () => LibraryStore,
+  set: (partial: Partial<LibraryStore>) => void,
+  base: string,
+  patch: TableCacheEntry
+) {
+  const tableCache: TableCache = { ...get().tableCache, [base]: { ...get().tableCache[base], ...patch } }
+  set({ tableCache })
+  persistTableCache(tableCache)
+}
+
 export const useLibrary = create<LibraryStore>((set, get) => ({
   patterns: [],
   hydrated: false,
   xyCache: {},
   loading: {},
   tablePatterns: [],
-  tableLoaded: false,
+  tablePlaylists: [],
+  tableBase: null,
   tableLoading: false,
+  playlistsLoading: false,
+  tableCache: {},
 
   setPreviewUri: (name, uri) => {
     const key = bareName(name)
@@ -149,18 +190,37 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
   loadTable: async (base, force) => {
     if (!base) return
     const s = get()
-    if (s.tableLoading) return
-    if (!force && s.tableLoaded) return
+    const cached = s.tableCache[base]
+    // Switch the view to this board from cache (instant, no network).
+    if (s.tableBase !== base) {
+      set({ tableBase: base, tablePatterns: cached?.patterns ?? [], tablePlaylists: cached?.playlists ?? [] })
+    }
+    // SWR: hit the board only on an explicit refresh, or the first time ever
+    // (no cached patterns for this base). Otherwise the cached list stands.
+    if (!force && cached?.patterns !== undefined) return
+    if (get().tableLoading) return
     // NOTE: /sand_patterns is NOT motion-gated by the firmware (it skips the
     // block-during-motion gate), so the manifest is safe to read even while a
     // pattern runs — unlike file CONTENT reads/writes, which we still guard.
     set({ tableLoading: true })
     try {
-      const list = await board.patterns(base)
-      // Normalize to keys relative to /patterns (strip /sd//patterns/ prefixes)
-      // so on-table names dedupe against the bundled manifest and don't surface a
-      // bogus "patterns" folder. Dedupe after normalizing.
-      set({ tablePatterns: [...new Set(list.map((p) => patternKey(p)))], tableLoaded: true })
+      // Conditional GET: send the cached ETag so an unchanged catalog returns a
+      // tiny 304 (keep the cache) instead of re-streaming the whole manifest —
+      // cheap even while HA is polling, and only the real changes cost a full
+      // read. The firmware only ETags the prebuilt manifest; the live-listing
+      // fallback has no ETag (res.etag null) and always sends the full list.
+      const res = await board.patternsConditional(base, cached?.patternsEtag)
+      if (!res.notModified) {
+        // Normalize to keys relative to /patterns (strip /sd//patterns/ prefixes)
+        // so on-table names dedupe against the bundled manifest and don't surface
+        // a bogus "patterns" folder. Dedupe after normalizing.
+        const patterns = [...new Set(res.list.map((p) => patternKey(p)))]
+        // Only publish to the view if this is still the selected board (guards a
+        // fetch that resolves after the user switched tables).
+        if (get().tableBase === base) set({ tablePatterns: patterns })
+        writeCache(get, set, base, { patterns, patternsEtag: res.etag })
+      }
+      // notModified -> the cached list already stands (shown at the view switch).
     } catch {
       // keep whatever we had; a later manual refresh can retry
     } finally {
@@ -168,15 +228,49 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
     }
   },
 
+  loadPlaylists: async (base, force) => {
+    if (!base) return
+    const s = get()
+    const cached = s.tableCache[base]
+    if (s.tableBase !== base) {
+      set({ tableBase: base, tablePatterns: cached?.patterns ?? [], tablePlaylists: cached?.playlists ?? [] })
+    }
+    if (!force && cached?.playlists !== undefined) return
+    if (get().playlistsLoading) return
+    set({ playlistsLoading: true })
+    try {
+      // /sand_playlists is a motion-safe listing — fine to read during playback.
+      const playlists = await board.playlists(base)
+      if (get().tableBase === base) set({ tablePlaylists: playlists })
+      writeCache(get, set, base, { playlists })
+    } catch {
+      // keep the cached list; a later pull-to-refresh retries
+    } finally {
+      set({ playlistsLoading: false })
+    }
+  },
+
   addTablePattern: (name) => {
     set((s) => (s.tablePatterns.includes(name) ? s : { tablePatterns: [...s.tablePatterns, name] }))
+    const base = get().tableBase
+    if (base) writeCache(get, set, base, { patterns: get().tablePatterns })
   },
 
   removeTablePattern: (name) => {
     set((s) => ({ tablePatterns: s.tablePatterns.filter((p) => p !== name) }))
+    const base = get().tableBase
+    if (base) writeCache(get, set, base, { patterns: get().tablePatterns })
   },
 
   hydrate: async () => {
+    // Load the per-board listing cache alongside the imported library so the
+    // launch effect can populate the on-table view from disk without a fetch.
+    try {
+      const rawCache = await AsyncStorage.getItem(TABLE_KEY)
+      if (rawCache) set({ tableCache: JSON.parse(rawCache) as TableCache })
+    } catch {
+      // ignore — a missing/corrupt cache just means the first load fetches
+    }
     try {
       const raw = await AsyncStorage.getItem(KEY)
       if (raw) {

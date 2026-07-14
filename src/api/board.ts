@@ -199,6 +199,80 @@ async function getJson<T>(base: string, path: string, timeoutMs = 6000): Promise
   }
 }
 
+/** The firmware answers 503 when it's momentarily busy / low on heap. */
+function isBusy503(e: unknown): boolean {
+  return e instanceof Error && /HTTP 503/.test(e.message)
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * Like getJson, but a good citizen about the board's transient 503 ("busy: low
+ * memory"): instead of failing outright it backs off with jitter and retries a
+ * couple of times, so a contended listing read (patterns/playlists during the
+ * launch burst) loads a beat later rather than showing an error. Only 503 is
+ * retried — real failures (404, network) throw immediately.
+ */
+async function getJsonRetry<T>(base: string, path: string, tries = 3, timeoutMs?: number): Promise<T> {
+  let lastErr: unknown
+  for (let attempt = 0; attempt < tries; attempt++) {
+    try {
+      return await getJson<T>(base, path, timeoutMs)
+    } catch (e) {
+      lastErr = e
+      if (!isBusy503(e) || attempt === tries - 1) throw e
+      // Exponential-ish backoff with jitter (~0.5s, ~1s, …) so app + HA + web
+      // don't retry in lockstep against the single-threaded server.
+      await sleep(500 * 2 ** attempt + Math.floor(Math.random() * 300))
+    }
+  }
+  throw lastErr
+}
+
+/** Result of a conditional list GET: `notModified` means "keep your cache". */
+export type ConditionalList =
+  | { notModified: true }
+  | { notModified: false; list: string[]; etag: string | null }
+
+/**
+ * Conditional GET of a JSON list route that supports ETag revalidation
+ * (/sand_patterns). Sends `If-None-Match` when we hold an ETag; an unchanged
+ * catalog comes back as a tiny 304 with no body, so a pull-to-refresh — even
+ * with HA also polling the board — barely touches its heap. The full manifest
+ * is re-streamed only when it actually changed (a new ETag). Retries the
+ * transient 503 with jittered backoff like getJsonRetry.
+ */
+async function getListConditional(
+  base: string,
+  path: string,
+  etag: string | null | undefined,
+  tries = 3,
+  timeoutMs = 8000
+): Promise<ConditionalList> {
+  let lastErr: unknown
+  for (let attempt = 0; attempt < tries; attempt++) {
+    const { signal, cancel } = withTimeout(timeoutMs)
+    try {
+      const headers = { ...keyHeaders(base), ...(etag ? { 'If-None-Match': etag } : {}) }
+      const res = await fetch(`${base}${path}`, { signal, headers })
+      if (res.status === 304) return { notModified: true }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const list = (await res.json()) as string[]
+      return { notModified: false, list, etag: res.headers.get('etag') }
+    } catch (e) {
+      lastErr = e
+      if (!isBusy503(e) || attempt === tries - 1) {
+        logHttpFail(path, e)
+        throw e
+      }
+      await sleep(500 * 2 ** attempt + Math.floor(Math.random() * 300))
+    } finally {
+      cancel()
+    }
+  }
+  throw lastErr
+}
+
 /** Fetch a small text file streamed from the SD card (e.g. a playlist). */
 async function getText(base: string, path: string, timeoutMs = 8000): Promise<string> {
   const { signal, cancel } = withTimeout(timeoutMs)
@@ -447,8 +521,13 @@ async function uploadFirmware(base: string, image: Uint8Array, timeoutMs = 18000
 const realBoard = {
   // ---- Reads ----
   status: (base: string, timeoutMs = 4000) => getJson<RawStatus>(base, '/sand_status', timeoutMs),
-  patterns: (base: string) => getJson<string[]>(base, '/sand_patterns'),
-  playlists: (base: string) => getJson<string[]>(base, '/sand_playlists'),
+  patterns: (base: string) => getJsonRetry<string[]>(base, '/sand_patterns'),
+  /** Conditional /sand_patterns: pass the last ETag to get a 304 when the
+   * catalog is unchanged (see getListConditional). Used by the pull-to-refresh
+   * path so a re-check is cheap and doesn't contend with HA for board heap. */
+  patternsConditional: (base: string, etag: string | null | undefined) =>
+    getListConditional(base, '/sand_patterns', etag),
+  playlists: (base: string) => getJsonRetry<string[]>(base, '/sand_playlists'),
   settings: (base: string) => getJson<Record<string, string>>(base, '/sand_settings'),
 
   // ---- Pattern / machine actions ----
@@ -647,11 +726,38 @@ const realBoard = {
     hit(base, `/upload?path=${encodeURIComponent(dir)}&action=delete&filename=${encodeURIComponent(filename)}`),
 }
 
+// ---- Client-side concurrency gate ----
+// The board runs a single-threaded web server with a tiny socket pool. Opening
+// several TCP connections at once — the launch burst fires status + patterns +
+// time + log almost simultaneously — can exhaust its sockets and wedge it (see
+// the WiFi-scan socket-exhaustion history). Cap concurrent in-flight requests
+// to the board so calls queue CLIENT-side instead of racing for sockets. Two
+// (not one) so a slow listing read can't stall reachability detection: the poll
+// still gets a slot. Demo base bypasses entirely (in-memory, instant).
+const MAX_CONCURRENCY = 2
+let inflight = 0
+const gateWaiters: Array<() => void> = []
+
+function acquire(): Promise<void> {
+  if (inflight < MAX_CONCURRENCY) {
+    inflight++
+    return Promise.resolve()
+  }
+  return new Promise<void>((resolve) => gateWaiters.push(resolve))
+}
+
+function release(): void {
+  const next = gateWaiters.shift()
+  if (next) next() // hand the slot straight to the next waiter (count unchanged)
+  else inflight--
+}
+
 /**
  * The board client used everywhere. Dispatches per-call by the FIRST argument
  * (the board base): a `DEMO_BASE` routes to the in-memory `demoBoard` simulator,
  * any real URL hits the firmware over HTTP. This keeps the demo table invisible
  * to every screen/store — they all just call `board.x(base, …)` as before.
+ * Real-board calls pass through the concurrency gate above.
  */
 export const board: typeof realBoard = new Proxy(realBoard, {
   get(target, prop, receiver) {
@@ -664,7 +770,16 @@ export const board: typeof realBoard = new Proxy(realBoard, {
           ? (demoFn as (...a: unknown[]) => unknown)(...args)
           : Promise.resolve() // action with no demo impl -> silent success
       }
-      return (realValue as (...a: unknown[]) => unknown).apply(target, args)
+      return acquire().then(() => {
+        let out: unknown
+        try {
+          out = (realValue as (...a: unknown[]) => unknown).apply(target, args)
+        } catch (e) {
+          release() // synchronous throw before a promise existed
+          throw e
+        }
+        return Promise.resolve(out).finally(release)
+      })
     }
   },
 })

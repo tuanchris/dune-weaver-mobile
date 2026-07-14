@@ -16,6 +16,14 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
 **This app does NOT use that backend.** It speaks to the FluidNC fork's own HTTP routes (see
 `../dune-weaver-firmware/FluidNC/src/SandApi.cpp` and `WebServer.cpp`). All API access is in `src/api/board.ts`:
 
+- **Concurrency gate**: the board runs a single-threaded web server with a tiny socket pool, so
+  every real-board call funnels through a client-side semaphore in `board.ts` (`MAX_CONCURRENCY = 2`,
+  at the `board` Proxy; demo base bypasses). Opening 4 sockets at once (the launch burst) could
+  exhaust its sockets and wedge it — the gate queues calls client-side instead. Cap is 2 (not 1) so a
+  slow listing read can't starve the status poll of a slot.
+- **503 back-off**: `/sand_patterns` + `/sand_playlists` go through `getJsonRetry` — the firmware's
+  transient 503 ("busy: low memory") is retried with jittered exponential back-off (~0.5s/1s, 3 tries)
+  instead of failing, so a contended listing loads a beat later. Only 503 retries; 404/network throw.
 - Reads (JSON): `GET /sand_status`, `/sand_patterns`, `/sand_playlists`, `/sand_settings`.
 - Actions (plain text "ok"): `/sand_home`, `/sand_stop`, `/sand_pause`, `/sand_resume`, `/sand_feed?d=`.
 - Commands: `GET /command?plain=$...` — `$SD/Run=`, `$Sand/Run=<file> clear=<mode>` (pre-exec clear),
@@ -48,6 +56,8 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
   `GET /sd/patterns/<name>.thr` (firmware `myStreamFile`); a bare `/playlists/...` resolves to the
   on-board flash FS instead, so it won't find SD files.
 - **No WebSocket** — `useStatus` polls `/sand_status` every 1s, scheduled relative to request start.
+  The poll is **paused while the app is backgrounded** (`AppState` in App.tsx → `suspend()`/`resume()`)
+  and snaps back with an immediate poll on foreground — no point hammering the board off-screen.
   Status also carries `playlist.quiet` (Still Sands active → `Status.isQuiet`), `fw` (firmware
   version → `Status.fw`) and, when LEDs are configured, `led:{effect,brightness}` (→ `Status.led`).
 - **OTA firmware update**: `GET /updatefw` probes (`{status:"ready"|"busy",fw}`; 409 while a pattern
@@ -104,10 +114,22 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
 - **Preview bundle sync** (`src/lib/previewSync.ts`, mounted via `usePreviewSync` in App.tsx): the
   website's SD Card Pattern Manager writes `/patterns/previews/shard-<0..7>.zip` (STORE-mode zips of
   preview webps) + a ~1 KB `previews.json` sidecar with a content hash per shard. Once per table per
-  session (idle-gated), the app reads the sidecar, fetches only shards whose hash it hasn't ingested
-  (`usePreviews.shardHashes`, persisted), unzips with `fflate`, and registers images via
-  `usePreviews.addMany` — same store as manual preview imports, keyed by `previewKey` basename. This
-  is what gives bulk-loaded card patterns thumbnails; 404 sidecar (no bundle) is a quiet no-op.
+  session (idle-gated), the app reads the sidecar, fetches only shards whose CONTENT hash it hasn't
+  ingested (`usePreviews.ingestedShards` — a persisted SET of content hashes, deliberately keyed by
+  hash not shard-name so it's cross-table: a second table carrying the same patterns produces a
+  byte-identical bundle → identical hashes → zero re-download), unzips with `fflate`, and registers
+  images via `usePreviews.addMany` — same store as manual preview imports, keyed by `previewKey`
+  basename (path-stripped, so the same pattern filed under a different folder on another table still
+  resolves the same image → **previews are shared across all tables**). This is what gives bulk-loaded
+  card patterns thumbnails; 404 sidecar (no bundle) is a quiet no-op. Manual import
+  (`importPreviews.ts`, Settings) accepts individual images OR the bundle's `.zip` shards directly
+  (unzipped with `fflate`) — the offline path to load a bundle into every table without pulling it off
+  each card. **iOS container gotcha**: `usePreviews` persists preview image refs as bare FILENAMES and
+  rebuilds the absolute `file://` uri under the current document dir on hydrate (`resolvePreviewUri`).
+  iOS rotates the app-container UUID on every app UPDATE, so a persisted absolute Documents uri goes
+  dead after an update (the key survives → count looks right, but `<Image>` loads blank). NOTE: the
+  same latent bug still lives in `useLibrary` (imported patterns' `thrUri`/`previewUri`) and the brand
+  logo — `thrUri` breakage silently breaks PUSHING imported patterns after an update.
   **Sync ↔ motion are mutually exclusive** (shared single-threaded SD): sync only starts when the
   table is idle and, while shards stream, sets `usePreviews.syncing` — motion-START actions (run
   pattern/playlist, home, clear, center/perimeter, skip) disable + refuse via `assertNotSyncing()`
@@ -119,7 +141,12 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
 ## Project layout
 - `src/api/` — `board.ts` (HTTP client), `status.ts` (RawStatus → Status).
 - `src/stores/` — zustand, persisted via AsyncStorage: `useBoards` (tables), `useStatus` (1s poll),
-  `useLibrary` (imported patterns + geometry cache + bundle accessors), `useTheme`, `useToast`
+  `useLibrary` (imported patterns + geometry cache + bundle accessors + a **per-board persisted cache
+  of the on-table listings** — `tableCache[base] = {patterns, playlists}`, keyed by base; `loadTable`
+  / `loadPlaylists` are stale-while-revalidate: they populate `tablePatterns`/`tablePlaylists` from
+  cache instantly and hit the board ONLY on `force` (pull-to-refresh) or the first-ever load, so the
+  launch effect no longer force-reads the catalog every open; `addTablePattern`/`removeTablePattern`
+  write through to the cache so a push/delete survives relaunch), `useTheme`, `useToast`
   (errors linger 7 s vs 2.6 s for info/success), `useAppLog` (local diagnostics ring buffer —
   see below).
 - **Custom clear patterns** (`$Playlist/ClearIn`/`ClearOut`/`ClearSpeed`, firmware ≥ v0.1.11):
@@ -162,7 +189,9 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
 - `src/screens/` — `Browse` (Library|On-Table tabs, circular thumbs, import, push, clear-before-run),
   `Playlists` (create/edit/delete, pattern picker grid, loop/shuffle/pause + pause-from-start/clear/
   auto-home; edits are local until the editor closes, and closing dirty ASKS save/discard — never
-  silently writes), `Control` (home/stop/unlock/speed + quiet-hours + live status), `Led` (effect/palette/
+  silently writes; a copy-icon in the editor header copies the playlist's `.txt` VERBATIM to another
+  saved table via `copyPlaylistTo` — no pattern push, so patterns the target lacks just won't play),
+  `Control` (home/stop/unlock/speed + quiet-hours + live status), `Led` (effect/palette/
   color pickers, brightness/speed sliders, run/idle overrides), `Settings` (tables + Wi-Fi + homing
   mode/orientation + reboot + app/firmware updates).
 - `src/components/` — `PolarPattern` (SVG path + progress + live dot), `PatternThumb`, `NowPlayingBar`

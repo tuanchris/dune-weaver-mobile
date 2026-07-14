@@ -612,7 +612,7 @@ export function SettingsScreen() {
         <Card>
           <CardTitle>Pattern previews</CardTitle>
           <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginBottom: spacing.md }}>
-            Thumbnails for patterns loaded straight onto the SD card. “Sync previews from table” pulls the preview bundle the SD Card Pattern Manager writes to the card (it also happens automatically once per session). Or import images manually — they’re matched to patterns by file name (e.g. “star.thr.webp” → the “star.thr” pattern); use black-on-transparent exports like the built-in library.
+            Thumbnails for patterns loaded straight onto the SD card. “Sync previews from table” pulls the preview bundle the SD Card Pattern Manager writes to the card (it also happens automatically once per session, and is shared across every table). Or import manually — pick individual images or the bundle’s .zip shards directly. Everything’s matched to patterns by file name (e.g. “star.thr.webp” → the “star.thr” pattern); use black-on-transparent exports like the built-in library.
           </Text>
           {base ? (
             <View style={{ marginBottom: spacing.sm }}>
@@ -639,7 +639,7 @@ export function SettingsScreen() {
             </View>
           ) : null}
           <Button
-            title="Import preview images"
+            title="Import previews or shards"
             icon="add-photo-alternate"
             variant="secondary"
             loading={importingPreviews}

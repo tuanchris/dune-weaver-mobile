@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react'
 import { StatusBar } from 'expo-status-bar'
-import { View } from 'react-native'
+import { AppState, View } from 'react-native'
 import { NavigationContainer, DefaultTheme, DarkTheme, type Theme } from '@react-navigation/native'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
@@ -48,7 +48,10 @@ export default function App() {
   const hydratePreviews = usePreviews((s) => s.hydrate)
   const hydrated = useBoards((s) => s.hydrated)
   const boards = useBoards((s) => s.boards)
-  const activeId = useBoards((s) => s.activeId)
+  // The active board's base URL. A stable string selector: it does NOT change
+  // when the poller backfills MAC/hostname onto the board (noteIdentity), so the
+  // launch effect below fires ONCE instead of a second full burst ~1s in.
+  const activeBase = useBoards((s) => s.getActiveBase())
   const setBase = useStatus((s) => s.setBase)
   const colors = useTheme((s) => s.colors)
   const mode = useTheme((s) => s.mode)
@@ -82,17 +85,30 @@ export default function App() {
     useUpdates.getState().check() // best-effort; silently stays unknown offline
   }, [hydrateTheme, hydrateBoards, hydrateLibrary, hydratePrefs, hydrateBranding, hydratePreviews])
 
-  // Point the status poller at the active board whenever it changes, and read
-  // the on-table pattern manifest once for that board (heavy SD read — we don't
-  // want it on every screen mount). Switching tables forces a fresh read.
+  // Point the status poller at the active board whenever it changes, and select
+  // that board's on-table view (patterns + playlists) from the persisted cache.
+  // loadTable is now stale-while-revalidate: it shows the cached catalog and
+  // only hits the board on the first-ever load — a heavy SD read no longer runs
+  // on every launch (pull-to-refresh in Browse re-reads on demand).
   useEffect(() => {
-    const base = useBoards.getState().getActiveBase()
-    setBase(base)
-    useLibrary.getState().loadTable(base, true)
+    setBase(activeBase)
+    useLibrary.getState().loadTable(activeBase)
+    useLibrary.getState().loadPlaylists(activeBase)
     // Keep the table's clock correct so Still Sands fires on schedule: push the
     // device time/timezone if they differ (best-effort, once per active board).
-    if (base) syncClock(base)
-  }, [activeId, boards, setBase])
+    if (activeBase) syncClock(activeBase)
+  }, [activeBase, setBase])
+
+  // Pause the 1 Hz status poll while the app is backgrounded (no point hitting
+  // the board when nothing's on screen), and snap back with an immediate poll on
+  // foreground so the UI is fresh instead of waiting up to a second.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') useStatus.getState().resume()
+      else useStatus.getState().suspend()
+    })
+    return () => sub.remove()
+  }, [])
 
   const navTheme: Theme = {
     ...(mode === 'dark' ? DarkTheme : DefaultTheme),

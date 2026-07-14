@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Directory, File, Paths } from 'expo-file-system'
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake'
 import { unzipSync } from 'fflate'
@@ -103,9 +103,11 @@ export async function syncPreviewBundle(
   if (!isSidecar(sidecar)) return { ...result, status: 'no-bundle' }
 
   const dir = new Directory(Paths.document, 'userPreviews')
-  const changed = sidecar.shards.filter(
-    (s) => usePreviews.getState().shardHashes[s.name] !== s.hash
-  )
+  // Dedup by shard CONTENT hash, not shard name: two tables carrying the same
+  // patterns produce byte-identical bundles, so switching tables re-fetches
+  // nothing. (Keying by name would collide "shard-0" across tables and force a
+  // full re-download each switch even though the images are already ingested.)
+  const changed = sidecar.shards.filter((s) => !usePreviews.getState().hasShard(s.hash))
   if (changed.length === 0) return result // nothing to fetch; no lock, no keep-awake
 
   // Claim exclusive SD time for the streaming phase: mark syncing (motion
@@ -117,14 +119,14 @@ export async function syncPreviewBundle(
   try {
     for (let i = 0; i < changed.length; i++) {
       const shard = changed[i]
-      const { addMany, setShardHash } = usePreviews.getState()
+      const { addMany, markShard } = usePreviews.getState()
       // The table may have started a pattern mid-sync — stop politely and
       // pick the remaining shards up next session.
       if (isSdBusy()) break
 
       // Nothing to ingest from an empty shard; just record it as seen.
       if (!shard.entries) {
-        setShardHash(shard.name, shard.hash)
+        markShard(shard.hash)
         continue
       }
 
@@ -149,7 +151,7 @@ export async function syncPreviewBundle(
           entries.push({ key, uri: dest.uri })
         }
         addMany(entries)
-        setShardHash(shard.name, shard.hash)
+        markShard(shard.hash)
         result.shardsFetched++
         result.imagesIngested += entries.length
         onProgress?.({
@@ -170,21 +172,55 @@ export async function syncPreviewBundle(
   return result
 }
 
+/** Auto-sync retry cap for a contended/unreachable table (see below). */
+const MAX_SYNC_ATTEMPTS = 4
+const RETRY_DELAY_MS = 45000
+
 /**
  * Kick a preview-bundle sync once per table per app session, as soon as the
  * active table is reachable and idle. Cheap when there's nothing to do (one
  * small JSON read), so once a session is plenty — a fresh bundle written
  * while the app runs is picked up on the next launch or table switch.
+ *
+ * A table is only marked done once the sidecar actually READ ('ok'). A 'busy'
+ * or 'no-bundle' result (the latter also covers a timed-out sidecar fetch when
+ * the board's single-threaded server is momentarily saturated by the status
+ * poller) is retried a few times — otherwise a single contended first attempt
+ * would leave a bundle-carrying table with no previews for the whole session.
  */
 export function usePreviewSync(base: string | null): void {
-  const synced = useRef<Set<string>>(new Set())
+  const done = useRef<Set<string>>(new Set())
+  const attempts = useRef<Record<string, number>>({})
+  const [tick, setTick] = useState(0)
   const idle = useStatus((s) => (s.status ? !isBusy(s.status) : false))
   const hydrated = usePreviews((s) => s.hydrated)
 
   useEffect(() => {
     if (!base || !idle || !hydrated) return
-    if (synced.current.has(base)) return
-    synced.current.add(base)
-    void syncPreviewBundle(base)
-  }, [base, idle, hydrated])
+    if (done.current.has(base)) return
+    let cancelled = false
+    void (async () => {
+      const res = await syncPreviewBundle(base)
+      if (cancelled) return
+      if (res.status === 'ok') {
+        done.current.add(base) // clean sidecar read — nothing more to do this session
+        return
+      }
+      // busy / no-bundle: possibly transient (contended or mid-pattern). Retry a
+      // bounded number of times before giving up so we don't hammer a card that
+      // genuinely has no bundle.
+      const n = (attempts.current[base] ?? 0) + 1
+      attempts.current[base] = n
+      if (n >= MAX_SYNC_ATTEMPTS) {
+        done.current.add(base)
+        return
+      }
+      setTimeout(() => {
+        if (!cancelled) setTick((t) => t + 1) // re-run the effect to try again
+      }, RETRY_DELAY_MS)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [base, idle, hydrated, tick])
 }
