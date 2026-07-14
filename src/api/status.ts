@@ -95,7 +95,11 @@ export interface Status {
 
 export function translateStatus(raw: RawStatus): Status {
   const state = raw.state || 'Idle'
-  const isPaused = state === 'Hold'
+  // Firmware reports GRBL-style hold substates ("Hold:0" = hold complete/ready
+  // to resume, "Hold:1" = decelerating), never a bare "Hold" — so match by
+  // prefix. An exact === 'Hold' check leaves isPaused stuck false while paused,
+  // which pins the Now-Playing button on "pause" and blocks resume.
+  const isPaused = state.startsWith('Hold')
   const isHoming = state === 'Home'
 
   // progress is a 0..1 fraction (-1 = idle). Clamp defensively in case a

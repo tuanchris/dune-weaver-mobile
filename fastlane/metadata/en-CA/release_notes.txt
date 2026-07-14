@@ -1,6 +1,5 @@
-• Protect your table with a password — set, change, or remove it in Settings, and the app remembers it on this phone (needs Dune Weaver Firmware v0.1.11 or newer)
-• Choose your own clear patterns for the “from center” and “from edge” sweeps, with an optional dedicated clear speed
-• New Diagnostics view collects your table’s logs so you can view and share them if something goes wrong
-• Clearer error messages that tell you what to try next — a missing SD card, a busy table, or a full card now read plainly
-• “Up next” now follows the real shuffle order, and editing a playlist asks before saving or discarding your changes
-• A “Check for updates” button, smoother Wi-Fi password entry, and more reliable preview syncing from the table
+• Fixed: pausing a pattern now lets you resume it — the play button reliably picks the pattern back up
+• Switching between tables is snappier — a table that's slow to respond no longer holds up the one you switched to
+• Bigger, easier-to-tap controls for playlist settings, LED colors, and pattern filters
+• Faster startup — your table's patterns and playlists appear instantly from a saved copy, then refresh with a pull-down
+• More reliable connection to your table, especially right after you open the app or when it's busy with a pattern

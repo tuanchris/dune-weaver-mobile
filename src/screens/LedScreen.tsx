@@ -582,7 +582,7 @@ const styles = StyleSheet.create({
   wheelWrap: { alignItems: 'center', marginTop: spacing.md, marginBottom: spacing.lg },
   presetLabel: { fontSize: font.size.xs, fontWeight: font.weight.medium, marginBottom: spacing.sm, textTransform: 'uppercase', letterSpacing: 0.5 },
   swatches: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  swatch: { width: 34, height: 34, borderRadius: 17 },
+  swatch: { width: 44, height: 44, borderRadius: 22 },
   hexRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: spacing.md, borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 44 },
   sliderLabelRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: spacing.xs },
 })

@@ -726,30 +726,54 @@ const realBoard = {
     hit(base, `/upload?path=${encodeURIComponent(dir)}&action=delete&filename=${encodeURIComponent(filename)}`),
 }
 
-// ---- Client-side concurrency gate ----
+// ---- Client-side concurrency gate (PER BOARD) ----
 // The board runs a single-threaded web server with a tiny socket pool. Opening
 // several TCP connections at once — the launch burst fires status + patterns +
 // time + log almost simultaneously — can exhaust its sockets and wedge it (see
 // the WiFi-scan socket-exhaustion history). Cap concurrent in-flight requests
 // to the board so calls queue CLIENT-side instead of racing for sockets. Two
 // (not one) so a slow listing read can't stall reachability detection: the poll
-// still gets a slot. Demo base bypasses entirely (in-memory, instant).
+// still gets a slot.
+//
+// The gate is keyed BY BASE: the socket pool being protected belongs to one
+// physical board, and each board has its own. A single global gate meant a
+// hung/unreachable table (whose requests block until they time out, 4–8 s each)
+// held both slots and starved EVERY other table — so switching away to a
+// healthy table left the new table's requests queued behind the dead one's,
+// making the hang appear to "carry over". Per-base gates isolate that: a wedged
+// table can only ever stall itself. Demo base bypasses entirely (in-memory).
 const MAX_CONCURRENCY = 2
-let inflight = 0
-const gateWaiters: Array<() => void> = []
+interface Gate { inflight: number; waiters: Array<() => void> }
+const gates = new Map<string, Gate>()
 
-function acquire(): Promise<void> {
-  if (inflight < MAX_CONCURRENCY) {
-    inflight++
-    return Promise.resolve()
+function gateFor(base: string): Gate {
+  let g = gates.get(base)
+  if (!g) {
+    g = { inflight: 0, waiters: [] }
+    gates.set(base, g)
   }
-  return new Promise<void>((resolve) => gateWaiters.push(resolve))
+  return g
 }
 
-function release(): void {
-  const next = gateWaiters.shift()
+function acquire(base: string): Promise<void> {
+  const g = gateFor(base)
+  if (g.inflight < MAX_CONCURRENCY) {
+    g.inflight++
+    return Promise.resolve()
+  }
+  return new Promise<void>((resolve) => g.waiters.push(resolve))
+}
+
+function release(base: string): void {
+  const g = gateFor(base)
+  const next = g.waiters.shift()
   if (next) next() // hand the slot straight to the next waiter (count unchanged)
-  else inflight--
+  else {
+    g.inflight--
+    // Drop idle gates so the map can't grow unbounded as boards come and go
+    // (DHCP relocations mint new base strings).
+    if (g.inflight <= 0 && g.waiters.length === 0) gates.delete(base)
+  }
 }
 
 /**
@@ -765,20 +789,21 @@ export const board: typeof realBoard = new Proxy(realBoard, {
     if (typeof realValue !== 'function') return realValue
     const demoFn = (demoBoard as Record<string, unknown>)[prop as string]
     return (...args: unknown[]) => {
-      if (isDemoBase(args[0] as string)) {
+      const base = args[0] as string
+      if (isDemoBase(base)) {
         return typeof demoFn === 'function'
           ? (demoFn as (...a: unknown[]) => unknown)(...args)
           : Promise.resolve() // action with no demo impl -> silent success
       }
-      return acquire().then(() => {
+      return acquire(base).then(() => {
         let out: unknown
         try {
           out = (realValue as (...a: unknown[]) => unknown).apply(target, args)
         } catch (e) {
-          release() // synchronous throw before a promise existed
+          release(base) // synchronous throw before a promise existed
           throw e
         }
-        return Promise.resolve(out).finally(release)
+        return Promise.resolve(out).finally(() => release(base))
       })
     }
   },

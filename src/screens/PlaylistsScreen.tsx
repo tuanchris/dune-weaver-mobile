@@ -704,10 +704,10 @@ const styles = StyleSheet.create({
   // Floating controls
   floatWrap: { position: 'absolute', bottom: spacing.xxl + spacing.md, left: 0, right: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
   pill: { flexDirection: 'row', alignItems: 'center', height: 52, borderRadius: radius.pill, borderWidth: 1, paddingHorizontal: 6, gap: 2, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 6 },
-  pillBtn: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
+  pillBtn: { width: 42, height: 44, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
   pillDivider: { width: 1, height: 28, marginHorizontal: 4 },
-  stepBtn: { width: 30, height: 38, alignItems: 'center', justifyContent: 'center' },
-  pauseValue: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', minWidth: 44, paddingHorizontal: 2 },
+  stepBtn: { width: 42, height: 44, alignItems: 'center', justifyContent: 'center' },
+  pauseValue: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', minWidth: 44, height: 44, paddingHorizontal: 2 },
   playBig: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 6 },
   // Clear selector
   clearSheet: { maxHeight: '70%', borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1 },
