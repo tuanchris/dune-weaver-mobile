@@ -1,5 +1,4 @@
-• Fixed: pausing a pattern now lets you resume it — the play button reliably picks the pattern back up
-• Switching between tables is snappier — a table that's slow to respond no longer holds up the one you switched to
-• Bigger, easier-to-tap controls for playlist settings, LED colors, and pattern filters
-• Faster startup — your table's patterns and playlists appear instantly from a saved copy, then refresh with a pull-down
-• More reliable connection to your table, especially right after you open the app or when it's busy with a pattern
+• A whole new look — a warm, sand-and-basalt design inspired by the table itself, in both dark and light modes
+• Favorites — tap the heart on any pattern, then filter to your favorites from the new dropdown next to search
+• New expanded player — watch progress sweep around your pattern on a glowing disc
+• New display and telemetry typefaces throughout

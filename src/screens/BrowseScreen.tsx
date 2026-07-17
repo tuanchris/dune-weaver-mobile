@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, Alert, FlatList, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
+import { ActivityIndicator, Alert, FlatList, Modal, Pressable, RefreshControl, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board, type ClearMode } from '../api/board'
@@ -56,6 +56,7 @@ function fuzzyMatch(target: string, query: string): boolean {
 
 const ALL_FOLDERS = '__all__'
 const TOP_LEVEL = '__top__'
+const FAVORITES = '__fav__'
 
 export function BrowseScreen() {
   const colors = useTheme((s) => s.colors)
@@ -74,7 +75,11 @@ export function BrowseScreen() {
 
   const [query, setQuery] = useState('')
   const [asc, setAsc] = useState(true)
-  const [folder, setFolder] = useState<string>(ALL_FOLDERS)
+  // Single-select filter: everything, favorites, top-level, or one subfolder.
+  const [filter, setFilter] = useState<string>(ALL_FOLDERS)
+  const [filterOpen, setFilterOpen] = useState(false)
+  const favorites = usePrefs((s) => s.favorites)
+  const toggleFavorite = usePrefs((s) => s.toggleFavorite)
   const [selected, setSelected] = useState<string | null>(null)
   // Pre-Execution Action is a remembered preference (persisted across launches).
   const clearMode = usePrefs((s) => s.clearMode)
@@ -116,23 +121,38 @@ export function BrowseScreen() {
     return [...set].filter((f) => f !== '').sort((a, b) => a.localeCompare(b))
   }, [allNames])
   const hasTopLevel = useMemo(() => allNames.some((n) => folderOf(n) === ''), [allNames])
-  const showFolderFilter = folders.length > 0
+  const hasFavorites = Object.keys(favorites).length > 0
 
-  // Reset the folder filter if its folder disappears (e.g. on table reload).
+  // Reset a folder filter whose folder disappears (e.g. on table reload).
   useEffect(() => {
-    if (folder !== ALL_FOLDERS && folder !== TOP_LEVEL && !folders.includes(folder)) setFolder(ALL_FOLDERS)
-  }, [folders, folder])
+    if (filter !== ALL_FOLDERS && filter !== TOP_LEVEL && filter !== FAVORITES && !folders.includes(filter)) {
+      setFilter(ALL_FOLDERS)
+    }
+  }, [folders, filter])
 
   const visible = useMemo(() => {
     const q = query.trim()
     let list = allNames
-    if (folder !== ALL_FOLDERS) {
-      list = list.filter((p) => (folder === TOP_LEVEL ? folderOf(p) === '' : folderOf(p) === folder))
+    if (filter === FAVORITES) list = list.filter((p) => favorites[p])
+    else if (filter !== ALL_FOLDERS) {
+      list = list.filter((p) => (filter === TOP_LEVEL ? folderOf(p) === '' : folderOf(p) === filter))
     }
     if (q) list = list.filter((p) => fuzzyMatch(p.replace(/\.thr$/i, ''), q))
     list = [...list].sort((a, b) => prettyName(a).localeCompare(prettyName(b)) * (asc ? 1 : -1))
     return list
-  }, [allNames, query, asc, folder])
+  }, [allNames, query, asc, filter, favorites])
+
+  // Dropdown options: everything / favorites / default (top-level) / each subfolder.
+  const filterOptions = useMemo(
+    () => [
+      { key: ALL_FOLDERS, label: 'All patterns', icon: 'apps' as const },
+      { key: FAVORITES, label: 'Favorites', icon: 'favorite' as const },
+      ...(folders.length > 0 && hasTopLevel ? [{ key: TOP_LEVEL, label: 'Default', icon: 'folder' as const }] : []),
+      ...folders.map((f) => ({ key: f, label: folderLabel(f), icon: 'folder' as const })),
+    ],
+    [folders, hasTopLevel],
+  )
+  const filterActive = filter !== ALL_FOLDERS
 
   const run = async (file: string) => {
     if (!base) return
@@ -290,6 +310,26 @@ export function BrowseScreen() {
           <Text style={{ color: colors.foreground, fontSize: font.size.sm }}>{asc ? 'A–Z' : 'Z–A'}</Text>
         </Pressable>
         <Pressable
+          onPress={() => setFilterOpen(true)}
+          accessibilityRole="button"
+          accessibilityLabel={`Filter patterns${filterActive ? ` (${filterOptions.find((o) => o.key === filter)?.label ?? ''} active)` : ''}`}
+          style={[
+            styles.control,
+            styles.iconBtn,
+            filter === FAVORITES
+              ? { backgroundColor: colors.destructive, borderColor: colors.destructive }
+              : filterActive
+                ? { backgroundColor: colors.primary, borderColor: colors.primary }
+                : { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+        >
+          <MaterialIcons
+            name={filter === FAVORITES ? 'favorite' : 'filter-list'}
+            size={22}
+            color={filter === FAVORITES ? colors.destructiveForeground : filterActive ? colors.primaryForeground : colors.foreground}
+          />
+        </Pressable>
+        <Pressable
           onPress={doImport}
           disabled={importing}
           style={[styles.control, styles.iconBtn, { backgroundColor: colors.primary, borderColor: colors.primary, opacity: importing ? 0.5 : 1 }]}
@@ -302,31 +342,48 @@ export function BrowseScreen() {
         </Pressable>
       </View>
 
-      {showFolderFilter ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.folderRow}
-          contentContainerStyle={{ gap: spacing.xs, paddingHorizontal: spacing.md, alignItems: 'center' }}
-        >
-          {[
-            { key: ALL_FOLDERS, label: 'All' },
-            ...(hasTopLevel ? [{ key: TOP_LEVEL, label: 'Default' }] : []),
-            ...folders.map((f) => ({ key: f, label: folderLabel(f) })),
-          ].map(({ key, label }) => {
-            const on = folder === key
-            return (
-              <Pressable
-                key={key}
-                onPress={() => setFolder(key)}
-                style={[styles.folderChip, { borderColor: on ? colors.primary : colors.border, backgroundColor: on ? colors.primary : colors.card }]}
-              >
-                <Text style={{ color: on ? colors.primaryForeground : colors.foreground, fontSize: font.size.sm }}>{label}</Text>
-              </Pressable>
-            )
-          })}
-        </ScrollView>
-      ) : null}
+      {/* Filter dropdown — bottom sheet listing All / Favorites / folders */}
+      <Modal visible={filterOpen} transparent animationType="slide" onRequestClose={() => setFilterOpen(false)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setFilterOpen(false)}>
+          <Pressable style={[styles.detailSheet, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => {}}>
+            <View style={styles.detailHeader}>
+              <Text numberOfLines={1} style={[styles.detailTitle, { color: colors.foreground }]}>
+                Show
+              </Text>
+              <IconButton icon="close" size={26} color={colors.foreground} onPress={() => setFilterOpen(false)} />
+            </View>
+            <View style={[styles.detailRule, { backgroundColor: colors.border }]} />
+            <View style={styles.filterList}>
+              {filterOptions.map(({ key, label, icon }) => {
+                const on = filter === key
+                const fav = key === FAVORITES
+                return (
+                  <Pressable
+                    key={key}
+                    onPress={() => {
+                      setFilter(key)
+                      setFilterOpen(false)
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel={label}
+                    style={[styles.filterRow, { backgroundColor: on ? colors.cardElevated : 'transparent' }]}
+                  >
+                    <MaterialIcons name={icon} size={20} color={fav ? colors.destructive : colors.mutedForeground} />
+                    <Text style={[styles.filterLabel, { color: colors.foreground }]}>{label}</Text>
+                    {fav && hasFavorites ? (
+                      <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, fontFamily: font.family.mono }}>
+                        {Object.keys(favorites).length}
+                      </Text>
+                    ) : null}
+                    {on ? <MaterialIcons name="check" size={20} color={colors.primary} /> : null}
+                  </Pressable>
+                )
+              })}
+            </View>
+            <SafeAreaView edges={['bottom']} />
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <FlatList
         data={visible}
@@ -339,6 +396,8 @@ export function BrowseScreen() {
         ListEmptyComponent={
           loading ? (
             <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} />
+          ) : filter === FAVORITES && !hasFavorites ? (
+            <EmptyState icon="favorite-border" text="No favorites yet — tap the heart on a pattern." />
           ) : (
             <EmptyState icon="grid-off" text="No patterns" />
           )
@@ -348,6 +407,19 @@ export function BrowseScreen() {
             <View style={[styles.tileThumb, { width: thumb, height: thumb, borderRadius: thumb / 2, backgroundColor: colors.card, borderColor: colors.border }]}>
               <PatternThumb name={item} size={thumb - 4} />
             </View>
+            <Pressable
+              onPress={() => toggleFavorite(item)}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel={favorites[item] ? `Remove ${prettyName(item)} from favorites` : `Add ${prettyName(item)} to favorites`}
+              style={[styles.favBadge, { backgroundColor: colors.card, borderColor: colors.border }]}
+            >
+              <MaterialIcons
+                name={favorites[item] ? 'favorite' : 'favorite-border'}
+                size={14}
+                color={favorites[item] ? colors.destructive : colors.mutedForeground}
+              />
+            </Pressable>
             <Text numberOfLines={1} style={[styles.tileName, { color: colors.foreground }]}>
               {prettyName(item)}
             </Text>
@@ -363,6 +435,13 @@ export function BrowseScreen() {
               <Text numberOfLines={1} style={[styles.detailTitle, { color: colors.foreground }]}>
                 {selected ? prettyName(selected) : ''}
               </Text>
+              <IconButton
+                icon={selected && favorites[selected] ? 'favorite' : 'favorite-border'}
+                label={selected && favorites[selected] ? 'Remove from favorites' : 'Add to favorites'}
+                size={26}
+                color={selected && favorites[selected] ? colors.destructive : colors.mutedForeground}
+                onPress={() => selected && toggleFavorite(selected)}
+              />
               <IconButton icon="close" size={26} color={colors.foreground} disabled={busy} onPress={() => setSelected(null)} />
             </View>
             <View style={[styles.detailRule, { backgroundColor: colors.border }]} />
@@ -452,9 +531,11 @@ export function BrowseScreen() {
 }
 
 const styles = StyleSheet.create({
-  searchRow: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.md, paddingTop: spacing.sm },
-  folderRow: { flexGrow: 0, height: 48, marginTop: spacing.sm, marginBottom: spacing.sm },
-  folderChip: { paddingHorizontal: spacing.lg, height: 40, borderRadius: radius.pill, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  searchRow: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.md, paddingTop: spacing.sm, marginBottom: spacing.sm },
+  favBadge: { position: 'absolute', top: -2, right: -2, width: 26, height: 26, borderRadius: 13, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  filterList: { marginTop: spacing.sm, gap: 2 },
+  filterRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 52, borderRadius: radius.md, paddingHorizontal: spacing.md },
+  filterLabel: { flex: 1, fontSize: font.size.md, fontWeight: font.weight.medium, textTransform: 'capitalize' },
   control: { shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
   search: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderRadius: radius.pill, borderWidth: 1, paddingHorizontal: spacing.md, height: 44 },
   searchInput: { flex: 1, fontSize: font.size.md, paddingVertical: 0 },

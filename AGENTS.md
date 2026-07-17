@@ -186,6 +186,16 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   automatically, which keeps the "Data Not Collected" App Privacy label truthful.
   (`/sand_bootlog`/`/sand_coredump` are no longer fetched; their `board.ts` helpers remain as
   API-surface mirrors.)
+- **Favorites** are LOCAL (`usePrefs.favorites`, persisted; keyed by `patternKey` so they apply
+  across tables, like previews) — a FluidNC table has no backend to hold them, and the dw web FE's
+  Favorites-playlist convention targets the Pi backend, not the firmware. UI lives in Browse: a
+  tappable heart badge on EVERY grid tile (ember fill when on; a nested Pressable, so it wins the
+  touch over the tile), the same toggle in the pattern detail sheet header, and a single-select
+  "Show" filter DROPDOWN in the search row (bottom-sheet listing All patterns / Favorites /
+  Default / each subfolder — replaced BOTH the old folder-chip row and the heart toggle; owner
+  explicitly did not want a second filter line). The trigger reflects the selection (filter-list
+  icon; sand fill for a folder, ember heart for Favorites); selecting Favorites with zero
+  favorites shows a guidance empty state.
 - `src/screens/` — `Browse` (Library|On-Table tabs, circular thumbs, import, push, clear-before-run),
   `Playlists` (create/edit/delete, pattern picker grid, loop/shuffle/pause + pause-from-start/clear/
   auto-home; edits are local until the editor closes, and closing dirty ASKS save/discard — never
@@ -235,4 +245,5 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   longer Pi-only. The LED screen hides Color/Color2/Palette controls per the active effect's needs
   (see `LED_EFFECTS[].uses` / `ledEffectInputs` in `board.ts`).
 - Out of reach (need the Pi backend, not the firmware): networked **WLED** controllers, MQTT,
-  favorites, play-count/last-played history, server-rendered preview cache, multi-table discovery.
+  play-count/last-played history, server-rendered preview cache, multi-table discovery.
+  (Favorites were on this list but are now implemented app-locally — see the Favorites bullet.)
