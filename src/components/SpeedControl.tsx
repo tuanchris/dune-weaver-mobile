@@ -28,7 +28,7 @@ export function SpeedControl({
     <>
       <View style={styles.header}>
         <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>Speed</Text>
-        <Text style={{ color: colors.foreground, fontSize: font.size.sm, fontWeight: font.weight.medium }}>
+        <Text style={{ color: colors.foreground, fontFamily: font.family.monoMedium, fontSize: font.size.sm }}>
           {drag ?? value} mm/min{feedOverride !== 100 ? ` · ${feedOverride}%` : ''}
         </Text>
       </View>

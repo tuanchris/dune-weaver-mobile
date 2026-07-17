@@ -5,6 +5,9 @@ import { NavigationContainer, DefaultTheme, DarkTheme, type Theme } from '@react
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
+import { useFonts } from 'expo-font'
+import { BricolageGrotesque_600SemiBold, BricolageGrotesque_700Bold } from '@expo-google-fonts/bricolage-grotesque'
+import { IBMPlexMono_400Regular, IBMPlexMono_500Medium } from '@expo-google-fonts/ibm-plex-mono'
 
 import { BrowseScreen } from './src/screens/BrowseScreen'
 import { PlaylistsScreen } from './src/screens/PlaylistsScreen'
@@ -40,6 +43,14 @@ const ICONS: Record<string, keyof typeof MaterialIcons.glyphMap> = {
 }
 
 export default function App() {
+  // Display + telemetry faces (body text stays the system font). Gate render on
+  // this alongside hydration — Android silently drops unknown fontFamily names.
+  const [fontsLoaded] = useFonts({
+    BricolageGrotesque_600SemiBold,
+    BricolageGrotesque_700Bold,
+    IBMPlexMono_400Regular,
+    IBMPlexMono_500Medium,
+  })
   const hydrateBoards = useBoards((s) => s.hydrate)
   const hydrateTheme = useTheme((s) => s.hydrate)
   const hydrateLibrary = useLibrary((s) => s.hydrate)
@@ -122,7 +133,7 @@ export default function App() {
     },
   }
 
-  if (!hydrated) {
+  if (!hydrated || !fontsLoaded) {
     return <View style={{ flex: 1, backgroundColor: colors.background }} />
   }
 

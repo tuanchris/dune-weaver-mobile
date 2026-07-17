@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Modal, PanResponder, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
+import { Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import Svg, { Circle, Defs, G, Path, RadialGradient, Stop } from 'react-native-svg'
 import { MaterialIcons } from '@expo/vector-icons'
@@ -9,7 +9,7 @@ import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
 import { toast } from '../stores/useToast'
 import { userMessage } from '../lib/errors'
-import { Card, CardTitle, IconButton, Select, Slider } from '../components/ui'
+import { Card, CardTitle, IconButton, Select, Slider, Toggle } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { EmptyState } from '../components/EmptyState'
 import { radius, spacing, font } from '../theme'
@@ -201,8 +201,8 @@ export function LedScreen() {
             onPress={togglePower}
             style={({ pressed }) => [styles.power, { backgroundColor: isOn ? colors.cardElevated : colors.success, opacity: pressed ? 0.85 : 1, borderColor: colors.border, borderWidth: isOn ? 1 : 0 }]}
           >
-            <MaterialIcons name="power-settings-new" size={20} color={isOn ? colors.foreground : '#fff'} />
-            <Text style={{ color: isOn ? colors.foreground : '#fff', fontWeight: font.weight.semibold, fontSize: font.size.md }}>
+            <MaterialIcons name="power-settings-new" size={20} color={isOn ? colors.foreground : colors.background} />
+            <Text style={{ color: isOn ? colors.foreground : colors.background, fontWeight: font.weight.semibold, fontSize: font.size.md }}>
               {isOn ? 'Turn OFF' : 'Turn ON'}
             </Text>
           </Pressable>
@@ -217,7 +217,7 @@ export function LedScreen() {
                 A glowing dot that follows the sand ball around the ring.
               </Text>
             </View>
-            <Switch value={isBall} onValueChange={toggleBall} />
+            <Toggle value={isBall} onValueChange={toggleBall} />
           </View>
 
           {isBall ? (

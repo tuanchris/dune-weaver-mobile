@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Alert, Image, ScrollView, StyleSheet, Switch, Text, TextInput, View, Pressable } from 'react-native'
+import { Alert, Image, ScrollView, StyleSheet, Text, TextInput, View, Pressable } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board, normalizeBase, testBoard, CLEAR_MODES, type ClearMode } from '../api/board'
 import { isDemoBase } from '../api/demoBoard'
@@ -11,7 +11,7 @@ import { usePreviews } from '../stores/usePreviews'
 import { toast } from '../stores/useToast'
 import { importPreviews } from '../lib/importPreviews'
 import { syncPreviewBundle } from '../lib/previewSync'
-import { Button, Card, CardTitle, IconButton, Select } from '../components/ui'
+import { Button, Card, CardTitle, IconButton, Select, Toggle } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { AlignOrientation } from '../components/AlignOrientation'
 import { ClearPatternsCard } from '../components/ClearPatternsCard'
@@ -445,7 +445,7 @@ export function SettingsScreen() {
                 <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>Enable auto-play</Text>
                 <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>Automatically start a playlist after the table powers on and homes.</Text>
               </View>
-              <Switch value={!!autostart} onValueChange={toggleAutoplay} />
+              <Toggle value={!!autostart} onValueChange={toggleAutoplay} />
             </View>
 
             {autostart ? (
@@ -508,7 +508,7 @@ export function SettingsScreen() {
                     <Text style={{ color: colors.foreground }}>Pause from start</Text>
                     <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>Measure the gap from each pattern’s start, not its end.</Text>
                   </View>
-                  <Switch value={bootPauseFromStart} onValueChange={(v) => { setBootPauseFromStart(v); saveBoot(() => board.setPlaylistAutostartPauseFromStart(base, v)) }} />
+                  <Toggle value={bootPauseFromStart} onValueChange={(v) => { setBootPauseFromStart(v); saveBoot(() => board.setPlaylistAutostartPauseFromStart(base, v)) }} />
                 </View>
 
                 <View style={styles.bootRow}>
@@ -516,7 +516,7 @@ export function SettingsScreen() {
                     <Text style={{ color: colors.foreground }}>Shuffle</Text>
                     <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>Randomize the pattern order.</Text>
                   </View>
-                  <Switch value={bootShuffle} onValueChange={(v) => { setBootShuffle(v); saveBoot(() => board.setPlaylistAutostartShuffle(base, v)) }} />
+                  <Toggle value={bootShuffle} onValueChange={(v) => { setBootShuffle(v); saveBoot(() => board.setPlaylistAutostartShuffle(base, v)) }} />
                 </View>
               </View>
             ) : null}
@@ -582,7 +582,7 @@ export function SettingsScreen() {
                 <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>Auto-home during playlists</Text>
                 <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>Re-home the table every so often while a playlist runs to correct mechanical drift.</Text>
               </View>
-              <Switch value={autoHomeEnabled} onValueChange={toggleAutoHome} />
+              <Toggle value={autoHomeEnabled} onValueChange={toggleAutoHome} />
             </View>
             {autoHomeEnabled ? (
               <View style={{ marginTop: spacing.md }}>

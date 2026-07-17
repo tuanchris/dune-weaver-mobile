@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, Alert, Dimensions, FlatList, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, Alert, FlatList, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board, CLEAR_MODES, type ClearMode } from '../api/board'
@@ -24,7 +24,6 @@ import { userMessage } from '../lib/errors'
 import { radius, spacing, font } from '../theme'
 
 const GRID_COLS = 3
-const GRID_THUMB = Math.floor((Dimensions.get('window').width - spacing.md * 2 - spacing.md * (GRID_COLS - 1)) / GRID_COLS)
 
 // Mirrors dw's preExecutionOptions copy so the clear selector reads the same.
 const CLEAR_DESC: Record<ClearMode, string> = {
@@ -40,6 +39,9 @@ const UNIT_SUFFIX: Record<PauseUnit, string> = { sec: 's', min: 'm', hr: 'h' }
 const DEFAULT_PREF: PlaylistPref = { loop: false, shuffle: false, pauseTime: 0, pauseUnit: 'sec', clearMode: 'none' }
 
 export function PlaylistsScreen() {
+  // Thumb size tracks the live window width (iPad split view safe).
+  const { width: winW } = useWindowDimensions()
+  const gridThumb = Math.floor((winW - spacing.md * 2 - spacing.md * (GRID_COLS - 1)) / GRID_COLS)
   const colors = useTheme((s) => s.colors)
   const base = useBoards((s) => s.getActiveBase())
   const boards = useBoards((s) => s.boards)
@@ -460,10 +462,10 @@ export function PlaylistsScreen() {
               }
               renderItem={({ item, index }) => (
                 <View style={styles.gridCell}>
-                  <View style={[styles.gridThumb, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                    <PatternThumb name={item} size={GRID_THUMB - 4} />
+                  <View style={[styles.gridThumb, { width: gridThumb, height: gridThumb, borderRadius: gridThumb / 2, backgroundColor: colors.card, borderColor: colors.border }]}>
+                    <PatternThumb name={item} size={gridThumb - 4} />
                     <Pressable onPress={() => removeItem(index)} hitSlop={8} style={[styles.removeBadge, { backgroundColor: colors.destructive }]}>
-                      <MaterialIcons name="close" size={13} color="#fff" />
+                      <MaterialIcons name="close" size={13} color={colors.destructiveForeground} />
                     </Pressable>
                   </View>
                   <Text numberOfLines={1} style={{ color: colors.foreground, fontSize: font.size.xs, fontWeight: font.weight.medium, maxWidth: '100%', textAlign: 'center' }}>
@@ -526,9 +528,9 @@ export function PlaylistsScreen() {
                 ]}
               >
                 {busy ? (
-                  <ActivityIndicator color="#fff" />
+                  <ActivityIndicator color={colors.primaryForeground} />
                 ) : (
-                  <MaterialIcons name="play-arrow" size={28} color="#fff" />
+                  <MaterialIcons name="play-arrow" size={28} color={colors.primaryForeground} />
                 )}
               </Pressable>
             </View>
@@ -656,13 +658,14 @@ export function PlaylistsScreen() {
                         <View
                           style={[
                             styles.gridThumb,
+                            { width: gridThumb, height: gridThumb, borderRadius: gridThumb / 2 },
                             { backgroundColor: colors.card, borderColor: on ? colors.primary : 'transparent' },
                           ]}
                         >
-                          <PatternThumb name={item} size={GRID_THUMB - 4} />
+                          <PatternThumb name={item} size={gridThumb - 4} />
                           {on ? (
                             <View style={[styles.pickCheck, { backgroundColor: colors.primary }]}>
-                              <MaterialIcons name="check" size={14} color="#fff" />
+                              <MaterialIcons name="check" size={14} color={colors.primaryForeground} />
                             </View>
                           ) : null}
                         </View>
@@ -698,7 +701,7 @@ const styles = StyleSheet.create({
   input: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 46, fontSize: font.size.md },
   editorActions: { flexDirection: 'row', gap: spacing.md, padding: spacing.md, borderTopWidth: 1 },
   gridCell: { flex: 1 / GRID_COLS, alignItems: 'center', gap: spacing.xs },
-  gridThumb: { width: GRID_THUMB, height: GRID_THUMB, borderRadius: GRID_THUMB / 2, borderWidth: 2, alignItems: 'center', justifyContent: 'center', overflow: 'visible' },
+  gridThumb: { borderWidth: 2, alignItems: 'center', justifyContent: 'center', overflow: 'visible' },
   removeBadge: { position: 'absolute', top: -4, right: -4, width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   pickCheck: { position: 'absolute', top: 2, right: 2, width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   // Floating controls

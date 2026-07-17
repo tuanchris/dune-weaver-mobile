@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, FlatList, Modal, PanResponder, Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native'
+import { ActivityIndicator, FlatList, Modal, PanResponder, Pressable, StyleSheet, Switch, Text, View, type ViewStyle } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { useTheme } from '../stores/useTheme'
@@ -27,13 +27,15 @@ export function Button({
   flex?: boolean
 }) {
   const colors = useTheme((s) => s.colors)
+  // Destructive is an outlined ember, not a filled red block — "stop" should
+  // read as a boundary, not a rival call-to-action next to the sand primary.
   const bg =
     variant === 'primary' ? colors.primary
-    : variant === 'destructive' ? colors.destructive
     : variant === 'secondary' ? colors.cardElevated
     : 'transparent'
   const fg =
-    variant === 'primary' || variant === 'destructive' ? '#fff'
+    variant === 'primary' ? colors.primaryForeground
+    : variant === 'destructive' ? colors.destructive
     : colors.foreground
   const isDisabled = disabled || loading
 
@@ -41,10 +43,13 @@ export function Button({
     <Pressable
       onPress={onPress}
       disabled={isDisabled}
+      accessibilityRole="button"
+      accessibilityLabel={title}
       style={({ pressed }) => [
         styles.btn,
         { backgroundColor: bg, opacity: isDisabled ? 0.5 : pressed ? 0.85 : 1 },
         variant === 'ghost' && { borderWidth: 1, borderColor: colors.border },
+        variant === 'destructive' && { borderWidth: 1.5, borderColor: colors.destructive },
         flex ? { flex: 1 } : null,
         style,
       ]}
@@ -67,18 +72,57 @@ export function IconButton({
   color,
   size = 24,
   disabled,
+  label,
 }: {
   icon: keyof typeof MaterialIcons.glyphMap
   onPress?: () => void
   color?: string
   size?: number
   disabled?: boolean
+  /** VoiceOver/TalkBack name — icon-only buttons are invisible without one. */
+  label?: string
 }) {
   const colors = useTheme((s) => s.colors)
   return (
-    <Pressable onPress={onPress} disabled={disabled} hitSlop={10} style={({ pressed }) => ({ opacity: disabled ? 0.4 : pressed ? 0.6 : 1, padding: 4 })}>
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      hitSlop={10}
+      accessibilityRole="button"
+      accessibilityLabel={label ?? icon.replace(/-/g, ' ')}
+      style={({ pressed }) => ({ opacity: disabled ? 0.4 : pressed ? 0.6 : 1, padding: 4 })}
+    >
       <MaterialIcons name={icon} size={size} color={color ?? colors.foreground} />
     </Pressable>
+  )
+}
+
+/** Themed Switch — the stock iOS green fights the sand palette. Use this for
+ * every on/off setting instead of a bare `Switch`. */
+export function Toggle({
+  value,
+  onValueChange,
+  disabled,
+}: {
+  value: boolean
+  onValueChange: (v: boolean) => void
+  disabled?: boolean
+}) {
+  const colors = useTheme((s) => s.colors)
+  return (
+    <Switch
+      value={value}
+      onValueChange={onValueChange}
+      disabled={disabled}
+      trackColor={{ false: colors.cardElevated, true: colors.primary }}
+      ios_backgroundColor={colors.cardElevated}
+      // White thumb on both platforms/tracks — the switch-knob convention.
+      thumbColor="#FFFFFF"
+      // The native switch is huge (51×31 on iOS) next to our 13–15 px rows;
+      // scale it down. Transform doesn't shrink the layout box, so pull the
+      // overhang back in with negative margins.
+      style={styles.toggle}
+    />
   )
 }
 
@@ -87,15 +131,11 @@ export function Card({ children, style }: { children: React.ReactNode; style?: V
   return <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }, style]}>{children}</View>
 }
 
-/** dw-style card section title: bold label with a thin rule beneath it. */
+/** Card section label: small spaced uppercase, so the card's CONTENT (not its
+ * heading) carries the visual weight. */
 export function CardTitle({ children }: { children: React.ReactNode }) {
   const colors = useTheme((s) => s.colors)
-  return (
-    <View style={styles.cardTitleWrap}>
-      <Text style={[styles.cardTitleText, { color: colors.foreground }]}>{children}</Text>
-      <View style={[styles.cardTitleRule, { backgroundColor: colors.border }]} />
-    </View>
-  )
+  return <Text style={[styles.cardTitleText, { color: colors.mutedForeground }]}>{children}</Text>
 }
 
 /** A dropdown select styled like an input; opens a sheet of options. */
@@ -127,7 +167,7 @@ export function Select<T extends string>({
       <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
         <Pressable style={styles.selectBackdrop} onPress={() => setOpen(false)}>
           <Pressable style={[styles.selectSheet, { backgroundColor: colors.background, borderColor: colors.border }]} onPress={() => {}}>
-            <View style={styles.selectHandle} />
+            <View style={[styles.selectHandle, { backgroundColor: colors.border }]} />
             <FlatList
               data={options}
               keyExtractor={(o) => o.value}
@@ -257,7 +297,7 @@ export function Slider({
 
 const styles = StyleSheet.create({
   btn: {
-    borderRadius: radius.md,
+    borderRadius: radius.pill,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
     alignItems: 'center',
@@ -271,13 +311,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     padding: spacing.lg,
   },
-  cardTitleWrap: { marginBottom: spacing.md },
-  cardTitleText: { fontSize: font.size.md, fontWeight: font.weight.semibold, marginBottom: spacing.sm },
-  cardTitleRule: { height: 1, borderRadius: 1 },
+  toggle: { transform: [{ scaleX: 0.78 }, { scaleY: 0.78 }], marginVertical: -3, marginHorizontal: -5 },
+  cardTitleText: {
+    fontSize: 11,
+    fontWeight: font.weight.bold,
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+    marginBottom: spacing.md,
+  },
   select: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 48 },
   selectBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   selectSheet: { maxHeight: '70%', borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1, paddingTop: spacing.sm, paddingHorizontal: spacing.lg },
-  selectHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#888', alignSelf: 'center', marginBottom: spacing.sm },
+  selectHandle: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: spacing.sm },
   selectOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing.md, borderBottomWidth: 1 },
   sliderHit: { height: 36, justifyContent: 'center' },
   sliderTrack: { height: 6, borderRadius: radius.pill, overflow: 'hidden' },

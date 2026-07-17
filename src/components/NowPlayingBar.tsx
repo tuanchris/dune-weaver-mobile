@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Dimensions, FlatList, Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { FlatList, Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board } from '../api/board'
@@ -11,6 +11,7 @@ import { loadPlaylist } from '../lib/playlists'
 import { prettyName } from '../lib/patternName'
 import { useBoardAction } from '../lib/useBoardAction'
 import { PatternThumb } from './PatternThumb'
+import { LiveDrawing } from './LiveDrawing'
 import { patternKey } from '../stores/useLibrary'
 import { IconButton } from './ui'
 import { SpeedControl } from './SpeedControl'
@@ -30,6 +31,7 @@ export function NowPlayingBar() {
   const refresh = useStatus((s) => s.refresh)
   const base = useBoards((s) => s.getActiveBase())
   const insets = useSafeAreaInsets()
+  const { width: winWidth } = useWindowDimensions()
   const [expanded, setExpanded] = useState(false)
   const [queueOpen, setQueueOpen] = useState(false)
   const [playlistItems, setPlaylistItems] = useState<{ name: string; items: string[] } | null>(null)
@@ -134,12 +136,17 @@ export function NowPlayingBar() {
 
   const Controls = ({ big }: { big?: boolean }) => (
     <View style={styles.controls}>
-      <IconButton icon="stop" size={big ? 30 : 26} color={colors.foreground} onPress={() => act(() => board.stop(base), 'Stopped', 'stop the table')} />
-      <Pressable onPress={togglePause} style={[styles.playBtn, { backgroundColor: colors.primary, width: big ? 60 : 48, height: big ? 60 : 48 }]}>
-        <MaterialIcons name={status.isPaused ? 'play-arrow' : 'pause'} size={big ? 34 : 28} color="#fff" />
+      <IconButton icon="stop" size={big ? 30 : 26} color={colors.foreground} label="Stop" onPress={() => act(() => board.stop(base), 'Stopped', 'stop the table')} />
+      <Pressable
+        onPress={togglePause}
+        accessibilityRole="button"
+        accessibilityLabel={status.isPaused ? 'Resume' : 'Pause'}
+        style={[styles.playBtn, { backgroundColor: colors.primary, width: big ? 60 : 48, height: big ? 60 : 48 }]}
+      >
+        <MaterialIcons name={status.isPaused ? 'play-arrow' : 'pause'} size={big ? 34 : 28} color={colors.primaryForeground} />
       </Pressable>
       {status.playlist ? (
-        <IconButton icon="skip-next" size={big ? 30 : 26} color={colors.foreground} onPress={() => act(() => board.skip(base), 'Skipping', 'skip to the next pattern')} />
+        <IconButton icon="skip-next" size={big ? 30 : 26} color={colors.foreground} label="Skip to next pattern" onPress={() => act(() => board.skip(base), 'Skipping', 'skip to the next pattern')} />
       ) : (
         <View style={{ width: big ? 30 : 26 }} />
       )}
@@ -154,8 +161,10 @@ export function NowPlayingBar() {
     : status.isPaused ? 'Paused'
     : status.state
 
-  const width = Dimensions.get('window').width
-  const vizSize = Math.min(width - spacing.xl * 2, 320)
+  // Sized so disc + title + up-next + progress + controls + speed all fit the
+  // 88% sheet WITHOUT scrolling — the speed slider was falling off the bottom
+  // (and under Android's system nav).
+  const vizSize = Math.min(winWidth - spacing.xl * 2, 290)
 
   const queueModal = (
     <Modal visible={queueOpen} transparent animationType="slide" onRequestClose={() => setQueueOpen(false)}>
@@ -164,7 +173,7 @@ export function NowPlayingBar() {
             clears the Android nav bar (main-window insets don't apply here). */}
         <SafeAreaView edges={['bottom']} style={[styles.queueSheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
           <View style={styles.queueHeader}>
-            <IconButton icon="close" size={26} color={colors.foreground} onPress={() => setQueueOpen(false)} />
+            <IconButton icon="close" size={26} color={colors.foreground} label="Close queue" onPress={() => setQueueOpen(false)} />
             <Text style={{ color: colors.foreground, fontSize: font.size.lg, fontWeight: font.weight.semibold }}>
               {status.playlist?.name ?? 'Queue'}
             </Text>
@@ -200,10 +209,10 @@ export function NowPlayingBar() {
           <View {...swipe.panHandlers}>
             <View style={[styles.grabber, { backgroundColor: colors.border }]} />
             <View style={styles.expandedHeader}>
-              <IconButton icon="expand-more" size={28} color={colors.foreground} onPress={() => setExpanded(false)} />
+              <IconButton icon="expand-more" size={28} color={colors.foreground} label="Collapse player" onPress={() => setExpanded(false)} />
               <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>{subtitle}</Text>
               {status.playlist ? (
-                <IconButton icon="queue-music" size={26} color={colors.foreground} onPress={() => setQueueOpen(true)} />
+                <IconButton icon="queue-music" size={26} color={colors.foreground} label="Show queue" onPress={() => setQueueOpen(true)} />
               ) : (
                 <View style={{ width: 28 }} />
               )}
@@ -212,17 +221,20 @@ export function NowPlayingBar() {
 
           <ScrollView
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.lg }}
+            // Generous bottom padding: Android's Modal can draw behind the
+            // system nav, and the speed slider must never sit under it.
+            contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xxl + spacing.lg }}
           >
             <View style={{ alignItems: 'center', marginVertical: spacing.md }}>
-              <PatternThumb name={patternKey(displayFile)} size={vizSize} />
+              {/* The signature view: full pattern on the sand disc, progress as the glowing rim arc. */}
+              <LiveDrawing name={displayFile} size={vizSize} pct={pct} />
             </View>
 
             <Text numberOfLines={1} style={[styles.bigTitle, { color: colors.foreground }]}>{name || 'Idle'}</Text>
             {upNextFile ? (
               <Pressable onPress={() => setQueueOpen(true)} style={styles.upNextRow}>
                 <View style={[styles.upNextThumb, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <PatternThumb name={upNextFile} size={96} />
+                  <PatternThumb name={upNextFile} size={64} />
                 </View>
                 <Text numberOfLines={1} style={[styles.upNext, { color: colors.mutedForeground }]}>
                   Up next: {prettyName(upNextFile)}
@@ -256,10 +268,10 @@ export function NowPlayingBar() {
           <Text numberOfLines={1} style={[styles.title, { color: colors.foreground }]}>{name || 'Idle'}</Text>
           <Text numberOfLines={1} style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{subtitle}</Text>
           <View style={[styles.miniTrack, { backgroundColor: colors.border }]}>
-            <View style={[styles.miniFill, { width: `${pct}%`, backgroundColor: colors.primary }]} />
+            <View style={[styles.miniFill, { width: `${pct}%`, backgroundColor: colors.live }]} />
           </View>
           {hasProgress ? (
-            <Text numberOfLines={1} style={{ color: colors.mutedForeground, fontSize: 10, marginTop: 3 }}>
+            <Text numberOfLines={1} style={{ color: colors.mutedForeground, fontFamily: font.family.mono, fontSize: font.size.xs, marginTop: 3 }}>
               {fmt(elapsedMs)} · {pct}%{remainingMs != null ? ` · -${fmt(remainingMs)}` : ''}
             </Text>
           ) : null}
@@ -275,12 +287,12 @@ function ProgressBar({ pct, elapsedMs, remainingMs }: { pct: number; elapsedMs: 
   return (
     <View style={{ paddingHorizontal: spacing.lg, marginVertical: spacing.md }}>
       <View style={[styles.track, { backgroundColor: colors.border }]}>
-        <View style={[styles.fill, { width: `${pct}%`, backgroundColor: colors.primary }]} />
+        <View style={[styles.fill, { width: `${pct}%`, backgroundColor: colors.live }]} />
       </View>
       <View style={styles.timeRow}>
-        <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{elapsedMs != null ? fmt(elapsedMs) : ''}</Text>
-        <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, fontWeight: font.weight.medium }}>{pct}%</Text>
-        <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{remainingMs != null ? `-${fmt(remainingMs)}` : ''}</Text>
+        <Text style={{ color: colors.mutedForeground, fontFamily: font.family.mono, fontSize: font.size.xs }}>{elapsedMs != null ? fmt(elapsedMs) : ''}</Text>
+        <Text style={{ color: colors.foreground, fontFamily: font.family.monoMedium, fontSize: font.size.xs }}>{pct}%</Text>
+        <Text style={{ color: colors.mutedForeground, fontFamily: font.family.mono, fontSize: font.size.xs }}>{remainingMs != null ? `-${fmt(remainingMs)}` : ''}</Text>
       </View>
     </View>
   )
@@ -297,14 +309,14 @@ const styles = StyleSheet.create({
   expandedSheet: { height: '88%', borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1 },
   grabber: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginTop: spacing.sm, marginBottom: spacing.xs },
   expandedHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg },
-  bigTitle: { fontSize: font.size.xl, fontWeight: font.weight.bold, textAlign: 'center' },
-  upNextRow: { alignItems: 'center', justifyContent: 'center', gap: spacing.xs, marginTop: spacing.md },
-  upNextThumb: { width: 96, height: 96, borderRadius: 48, borderWidth: 1, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  bigTitle: { fontSize: font.size.xl + 2, fontFamily: font.family.display, letterSpacing: -0.3, textAlign: 'center' },
+  upNextRow: { alignItems: 'center', justifyContent: 'center', gap: spacing.xs, marginTop: spacing.sm },
+  upNextThumb: { width: 64, height: 64, borderRadius: 32, borderWidth: 1, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
   upNext: { fontSize: font.size.sm, textAlign: 'center', flexShrink: 1, maxWidth: '100%' },
   track: { height: 6, borderRadius: 3, overflow: 'hidden' },
   fill: { height: 6, borderRadius: 3 },
   timeRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 5 },
-  speedWrap: { marginTop: spacing.lg, paddingTop: spacing.md, borderTopWidth: 1, gap: spacing.sm },
+  speedWrap: { marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: 1, gap: spacing.sm },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   queueSheet: { height: '70%', borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1 },
   queueHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.md },

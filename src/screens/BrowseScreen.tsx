@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, Alert, Dimensions, FlatList, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, Alert, FlatList, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board, type ClearMode } from '../api/board'
@@ -23,7 +23,6 @@ import { userMessage } from '../lib/errors'
 import { radius, spacing, font } from '../theme'
 
 const COLS = 3
-const THUMB = Math.floor((Dimensions.get('window').width - spacing.md * 2 - spacing.md * (COLS - 1)) / COLS)
 
 
 // dw "Pre-Execution Action" choices (a clear sequenced before the pattern runs).
@@ -60,6 +59,9 @@ const TOP_LEVEL = '__top__'
 
 export function BrowseScreen() {
   const colors = useTheme((s) => s.colors)
+  // Thumb size tracks the live window width (rotation / iPad split view safe).
+  const { width } = useWindowDimensions()
+  const thumb = Math.floor((width - spacing.md * 2 - spacing.md * (COLS - 1)) / COLS)
   const base = useBoards((s) => s.getActiveBase())
   const refreshStatus = useStatus((s) => s.refresh)
   const imported = useLibrary((s) => s.patterns)
@@ -293,9 +295,9 @@ export function BrowseScreen() {
           style={[styles.control, styles.iconBtn, { backgroundColor: colors.primary, borderColor: colors.primary, opacity: importing ? 0.5 : 1 }]}
         >
           {importing ? (
-            <ActivityIndicator size="small" color="#fff" />
+            <ActivityIndicator size="small" color={colors.primaryForeground} />
           ) : (
-            <MaterialIcons name="add" size={24} color="#fff" />
+            <MaterialIcons name="add" size={24} color={colors.primaryForeground} />
           )}
         </Pressable>
       </View>
@@ -319,7 +321,7 @@ export function BrowseScreen() {
                 onPress={() => setFolder(key)}
                 style={[styles.folderChip, { borderColor: on ? colors.primary : colors.border, backgroundColor: on ? colors.primary : colors.card }]}
               >
-                <Text style={{ color: on ? '#fff' : colors.foreground, fontSize: font.size.sm }}>{label}</Text>
+                <Text style={{ color: on ? colors.primaryForeground : colors.foreground, fontSize: font.size.sm }}>{label}</Text>
               </Pressable>
             )
           })}
@@ -343,8 +345,8 @@ export function BrowseScreen() {
         }
         renderItem={({ item }) => (
           <Pressable onPress={() => setSelected(item)} style={styles.tile}>
-            <View style={[styles.tileThumb, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <PatternThumb name={item} size={THUMB - 4} />
+            <View style={[styles.tileThumb, { width: thumb, height: thumb, borderRadius: thumb / 2, backgroundColor: colors.card, borderColor: colors.border }]}>
+              <PatternThumb name={item} size={thumb - 4} />
             </View>
             <Text numberOfLines={1} style={[styles.tileName, { color: colors.foreground }]}>
               {prettyName(item)}
@@ -382,7 +384,7 @@ export function BrowseScreen() {
                         disabled={busy}
                         style={[styles.preExecBtn, { borderColor: on ? colors.primary : colors.border, backgroundColor: on ? colors.primary : colors.cardElevated, opacity: busy ? 0.5 : 1 }]}
                       >
-                        <Text style={{ color: on ? '#fff' : colors.foreground, fontSize: font.size.sm, fontWeight: font.weight.medium, textAlign: 'center' }}>{label}</Text>
+                        <Text style={{ color: on ? colors.primaryForeground : colors.foreground, fontSize: font.size.sm, fontWeight: font.weight.medium, textAlign: 'center' }}>{label}</Text>
                       </Pressable>
                     )
                   })}
@@ -432,7 +434,7 @@ export function BrowseScreen() {
       <Modal visible={!!importPreview} transparent animationType="slide" onRequestClose={() => setImportPreview(null)}>
         <Pressable style={styles.modalBackdrop} onPress={() => setImportPreview(null)}>
           <Pressable style={[styles.sheet, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => {}}>
-            <View style={styles.sheetHandle} />
+            <View style={[styles.sheetHandle, { backgroundColor: colors.border }]} />
             <PolarPattern name={importPreview?.name} size={240} showRings />
             <Text numberOfLines={2} style={[styles.sheetTitle, { color: colors.foreground }]}>
               {importPreview ? prettyName(importPreview.name) : ''}
@@ -459,16 +461,16 @@ const styles = StyleSheet.create({
   sortBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: radius.pill, borderWidth: 1, paddingHorizontal: spacing.md, height: 44 },
   iconBtn: { alignItems: 'center', justifyContent: 'center', borderRadius: radius.pill, borderWidth: 1, width: 44, height: 44 },
   tile: { flex: 1 / COLS, alignItems: 'center', gap: spacing.xs, marginBottom: spacing.md },
-  tileThumb: { width: THUMB, height: THUMB, borderRadius: THUMB / 2, borderWidth: 2, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
+  tileThumb: { borderWidth: 2, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
   tileName: { fontSize: font.size.xs, fontWeight: font.weight.medium, maxWidth: '100%', textAlign: 'center' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   sheet: { borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1, padding: spacing.xl, alignItems: 'center', gap: spacing.md },
-  sheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#888', marginBottom: spacing.sm },
-  sheetTitle: { fontSize: font.size.lg, fontWeight: font.weight.semibold, textAlign: 'center' },
+  sheetHandle: { width: 40, height: 4, borderRadius: 2, marginBottom: spacing.sm },
+  sheetTitle: { fontSize: font.size.lg, fontFamily: font.family.displaySemi, textAlign: 'center' },
   sheetActions: { flexDirection: 'row', gap: spacing.md, alignSelf: 'stretch' },
   detailSheet: { borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1, padding: spacing.xl, paddingTop: spacing.lg },
   detailHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md },
-  detailTitle: { fontSize: font.size.lg, fontWeight: font.weight.bold, flex: 1 },
+  detailTitle: { fontSize: font.size.lg, fontFamily: font.family.displaySemi, flex: 1 },
   detailRule: { height: 1, marginTop: spacing.sm },
   preExecWrap: { marginBottom: spacing.md },
   preExecLabel: { fontSize: font.size.sm, fontWeight: font.weight.semibold, marginBottom: spacing.sm },

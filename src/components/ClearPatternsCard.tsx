@@ -5,7 +5,7 @@
 // clear moves their own feed. Table-wide settings, idle-gated by the firmware.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Dimensions, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
+import { FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board } from '../api/board'
@@ -26,7 +26,6 @@ const STOCK_IN = '/patterns/clear_from_in.thr'
 const STOCK_OUT = '/patterns/clear_from_out.thr'
 
 const GRID_COLS = 3
-const GRID_THUMB = Math.floor((Dimensions.get('window').width - spacing.md * 2 - spacing.md * (GRID_COLS - 1)) / GRID_COLS)
 
 type Slot = 'in' | 'out'
 
@@ -38,6 +37,8 @@ function customKey(path: string, stock: string): string | null {
 }
 
 export function ClearPatternsCard({ base }: { base: string }) {
+  const { width: winW } = useWindowDimensions()
+  const gridThumb = Math.floor((winW - spacing.md * 2 - spacing.md * (GRID_COLS - 1)) / GRID_COLS)
   const colors = useTheme((s) => s.colors)
   const tableIdle = useStatus((s) => (s.status?.state ?? 'Idle') === 'Idle')
   const tablePatterns = useLibrary((s) => s.tablePatterns)
@@ -191,11 +192,11 @@ export function ClearPatternsCard({ base }: { base: string }) {
                 const on = item === selectedKey
                 return (
                   <Pressable onPress={() => picker && choose(picker, item)} style={styles.cell}>
-                    <View style={[styles.thumb, { backgroundColor: colors.card, borderColor: on ? colors.primary : 'transparent' }]}>
-                      <PatternThumb name={item} size={GRID_THUMB - 4} />
+                    <View style={[styles.thumb, { width: gridThumb, height: gridThumb, borderRadius: gridThumb / 2, backgroundColor: colors.card, borderColor: on ? colors.primary : 'transparent' }]}>
+                      <PatternThumb name={item} size={gridThumb - 4} />
                       {on ? (
                         <View style={[styles.check, { backgroundColor: colors.primary }]}>
-                          <MaterialIcons name="check" size={14} color="#fff" />
+                          <MaterialIcons name="check" size={14} color={colors.primaryForeground} />
                         </View>
                       ) : null}
                     </View>
@@ -243,6 +244,6 @@ const styles = StyleSheet.create({
   searchInput: { flex: 1, fontSize: font.size.md, paddingVertical: 0 },
   builtinRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, marginHorizontal: spacing.md, marginTop: spacing.sm, borderRadius: radius.lg, borderWidth: 1 },
   cell: { flex: 1 / GRID_COLS, alignItems: 'center', gap: spacing.xs },
-  thumb: { width: GRID_THUMB, height: GRID_THUMB, borderRadius: GRID_THUMB / 2, borderWidth: 2, alignItems: 'center', justifyContent: 'center', overflow: 'visible' },
+  thumb: { borderWidth: 2, alignItems: 'center', justifyContent: 'center', overflow: 'visible' },
   check: { position: 'absolute', top: 2, right: 2, width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
 })

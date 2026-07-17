@@ -120,7 +120,7 @@ export function DiagnosticsCard({ base }: { base: string | null }) {
         <View style={styles.backdrop}>
           <Pressable style={{ flex: 1 }} onPress={() => setOpen(false)} />
           <View style={[styles.sheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
-            <View style={styles.sheetHandle} />
+            <View style={[styles.sheetHandle, { backgroundColor: colors.border }]} />
             <View style={styles.sheetHeader}>
               {base ? (
                 <View style={styles.tabs}>
@@ -216,7 +216,7 @@ export function DiagnosticsCard({ base }: { base: string | null }) {
 const styles = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   sheet: { maxHeight: '85%', borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1, paddingTop: spacing.sm, paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
-  sheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#888', alignSelf: 'center', marginBottom: spacing.sm },
+  sheetHandle: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: spacing.sm },
   sheetHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm },
   tabs: { flex: 1, flexDirection: 'row', gap: spacing.sm },
   tabBtn: { paddingHorizontal: spacing.md, height: 40, borderRadius: radius.pill, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },

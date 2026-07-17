@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react'
-import { StyleSheet, Switch, Text, TextInput, View, Pressable } from 'react-native'
+import { StyleSheet, Text, TextInput, View, Pressable } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board } from '../api/board'
 import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
 import { toast } from '../stores/useToast'
-import { Button, Card, CardTitle, IconButton } from './ui'
+import { Button, Card, CardTitle, IconButton, Toggle } from './ui'
 import { devicePosixTz } from '../lib/clock'
 import {
   DAYS,
@@ -138,7 +138,7 @@ export function StillSands({ base }: { base: string }) {
               Pause the table during scheduled quiet periods.
             </Text>
           </View>
-          <Switch value={enabled} onValueChange={(v) => { setEnabled(v); apply(() => board.setQuietEnabled(base, v)) }} />
+          <Toggle value={enabled} onValueChange={(v) => { setEnabled(v); apply(() => board.setQuietEnabled(base, v)) }} />
         </View>
 
         {enabled ? (
@@ -148,14 +148,14 @@ export function StillSands({ base }: { base: string }) {
                 <Text style={{ color: colors.foreground }}>Finish current pattern</Text>
                 <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>Let the pattern complete before going still (off = pause mid-pattern).</Text>
               </View>
-              <Switch value={finish} onValueChange={(v) => { setFinish(v); apply(() => board.setQuietFinishPattern(base, v)) }} />
+              <Toggle value={finish} onValueChange={(v) => { setFinish(v); apply(() => board.setQuietFinishPattern(base, v)) }} />
             </View>
             <View style={styles.optRow}>
               <View style={{ flex: 1, paddingRight: spacing.md }}>
                 <Text style={{ color: colors.foreground }}>Turn off LEDs</Text>
                 <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>Switch the LED ring off during quiet periods.</Text>
               </View>
-              <Switch value={ledOff} onValueChange={(v) => { setLedOff(v); apply(() => board.setQuietLedOff(base, v)) }} />
+              <Toggle value={ledOff} onValueChange={(v) => { setLedOff(v); apply(() => board.setQuietLedOff(base, v)) }} />
             </View>
 
             <View style={styles.headRow}>
@@ -192,7 +192,7 @@ export function StillSands({ base }: { base: string }) {
                           onPress={() => updateSlot(i, { days: val })}
                           style={[styles.chip, { borderColor: on ? colors.primary : colors.border, backgroundColor: on ? colors.primary : colors.card }]}
                         >
-                          <Text style={{ color: on ? '#fff' : colors.foreground, fontSize: font.size.sm, fontWeight: font.weight.medium }}>{label}</Text>
+                          <Text style={{ color: on ? colors.primaryForeground : colors.foreground, fontSize: font.size.sm, fontWeight: font.weight.medium }}>{label}</Text>
                         </Pressable>
                       )
                     })}
@@ -207,7 +207,7 @@ export function StillSands({ base }: { base: string }) {
                             onPress={() => toggleCustomDay(i, d)}
                             style={[styles.dayChip, { borderColor: on ? colors.primary : colors.border, backgroundColor: on ? colors.primary : colors.card }]}
                           >
-                            <Text style={{ color: on ? '#fff' : colors.foreground, fontSize: font.size.xs, fontWeight: font.weight.medium }}>{DAY_LABELS[d]}</Text>
+                            <Text style={{ color: on ? colors.primaryForeground : colors.foreground, fontSize: font.size.xs, fontWeight: font.weight.medium }}>{DAY_LABELS[d]}</Text>
                           </Pressable>
                         )
                       })}

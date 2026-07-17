@@ -1,5 +1,7 @@
-// Design tokens mirrored from the Dune Weaver web app (dark-first).
-// Values converted from the web app's HSL CSS variables to hex for RN safety.
+// Design tokens — the "table from above, at night" direction.
+// Warm basalt/sand palette grounded in the physical table (sand, walnut,
+// lamplight) instead of the old neutral-gray + stock-blue web mirror.
+// Render/spec: see the design-direction artifact (dw-design-language memory).
 
 export type ThemeMode = 'dark' | 'light'
 
@@ -16,36 +18,44 @@ export interface Palette {
   destructiveForeground: string
   inputBackground: string
   success: string
+  /** Things that are actually happening on the table right now (progress
+   * fills, the live ball, connect pulse). Distinct from `primary` so "go do
+   * this" (sand) never reads the same as "this is running" (patina). */
+  live: string
 }
 
+// Night — default. Basalt ground, walnut cards, lit-sand ink, dune accent.
 const dark: Palette = {
-  background: '#1a1a1a', // hsl(0 0% 10%)
-  card: '#2e2e2e', // hsl(0 0% 18%)
-  cardElevated: '#3a3a3a',
-  border: '#525252', // hsl(0 0% 32%)
-  foreground: '#f8fafc', // hsl(210 40% 98%)
-  mutedForeground: '#94a3b8', // hsl(215 20% 65%)
-  primary: '#1d9bf0', // hsl(207 90% 50%)
-  primaryForeground: '#ffffff',
-  destructive: '#d13434', // hsl(0 63% 51%)
-  destructiveForeground: '#ffffff',
-  inputBackground: '#474747', // hsl(0 0% 28%)
-  success: '#22c55e',
+  background: '#171310',
+  card: '#211C17',
+  cardElevated: '#2B241D',
+  border: '#352D23',
+  foreground: '#F2EAD9',
+  mutedForeground: '#A08F77',
+  primary: '#D9B98A',
+  primaryForeground: '#221A0F',
+  destructive: '#D97A66',
+  destructiveForeground: '#221A0F',
+  inputBackground: '#2B241D',
+  success: '#8FBF7F',
+  live: '#7BC4B0',
 }
 
+// Day — fine-sand paper, not an inversion; accent deepened to hold AA contrast.
 const light: Palette = {
-  background: '#f7f8fa', // hsl(220 14% 98%)
-  card: '#ffffff',
-  cardElevated: '#ffffff',
-  border: '#e2e8f0', // hsl(214 32% 91%)
-  foreground: '#0a0f1c', // hsl(222 84% 5%)
-  mutedForeground: '#64748b', // hsl(215 16% 47%)
-  primary: '#1d9bf0',
-  primaryForeground: '#ffffff',
-  destructive: '#ef4444', // hsl(0 84% 60%)
-  destructiveForeground: '#ffffff',
-  inputBackground: '#f1f5f9',
-  success: '#16a34a',
+  background: '#F5EFE6',
+  card: '#FDFAF4',
+  cardElevated: '#EDE4D4',
+  border: '#E2D6C2',
+  foreground: '#292219',
+  mutedForeground: '#8A7A63',
+  primary: '#A87F45',
+  primaryForeground: '#FFF9EE',
+  destructive: '#BC5843',
+  destructiveForeground: '#FFF9EE',
+  inputBackground: '#EDE4D4',
+  success: '#5E9950',
+  live: '#35836F',
 }
 
 export const palettes: Record<ThemeMode, Palette> = { dark, light }
@@ -68,8 +78,16 @@ export const spacing = {
 }
 
 export const font = {
-  // Plus Jakarta Sans in the web app; default system here unless the font is
-  // added. Sizes/weights chosen to match the web app's hierarchy.
   weight: { regular: '400' as const, medium: '500' as const, semibold: '600' as const, bold: '700' as const },
   size: { xs: 11, sm: 13, md: 15, lg: 18, xl: 22, xxl: 28 },
+  // Three roles (loaded in App.tsx via expo-font; body text stays the system
+  // face so controls keep the native feel):
+  //  - display: screen titles, pattern names, the state word. Use sparingly.
+  //  - mono:    telemetry — elapsed/%, feed rate, θ/ρ, IPs, versions, logs.
+  family: {
+    display: 'BricolageGrotesque_700Bold',
+    displaySemi: 'BricolageGrotesque_600SemiBold',
+    mono: 'IBMPlexMono_400Regular',
+    monoMedium: 'IBMPlexMono_500Medium',
+  },
 }

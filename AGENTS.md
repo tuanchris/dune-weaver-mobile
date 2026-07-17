@@ -194,7 +194,11 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   `Control` (home/stop/unlock/speed + quiet-hours + live status), `Led` (effect/palette/
   color pickers, brightness/speed sliders, run/idle overrides), `Settings` (tables + Wi-Fi + homing
   mode/orientation + reboot + app/firmware updates).
-- `src/components/` — `PolarPattern` (SVG path + progress + live dot), `PatternThumb`, `NowPlayingBar`
+- `src/components/` — `PolarPattern` (static SVG path preview), `LiveDrawing` (the expanded player's
+  signature view: the full pattern on a disc whose rim is a glowing progress ARC in the `live`
+  color — sweep driven by the same `pct` as the linear bar, so the between-patterns pause fills it
+  too; NO live-ball dot (owner removed it); falls back to `PatternThumb` inside the disc when no
+  local geometry exists), `PatternThumb`, `NowPlayingBar`
   (swipe up/down to expand/collapse), `Screen`, `ui.tsx` (`Button`/`Card`/`IconButton`/`Slider` —
   the `Slider` is PanResponder-based, no native dep), `Onboarding`, `Toaster`, `AlignOrientation`
   (crash-homing pattern orientation, in Settings' Homing card: crash home never moves theta — the
@@ -210,8 +214,20 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   + confirms assets resolve). There are no unit tests.
 - **Stacked Modals**: a second `<Modal>` rendered as a sibling won't present over an open one (iOS) —
   nest it inside the first Modal's tree (see the playlist pattern picker).
-- UI mimics the dw web frontend: **circular pattern thumbnails**, **pill-shaped controls** (`radius.pill`),
-  soft shadows.
+- **Design language ("the table from above, at night")**: warm basalt/sand palette (NOT the web
+  app's gray+blue — see `src/theme/index.ts`, the single token source), **circular pattern
+  thumbnails**, **pill-shaped controls** (`radius.pill`). Type roles: Bricolage Grotesque display
+  (`font.family.display`) for screen titles / pattern names / the Control state word; system font
+  for body/controls; IBM Plex Mono (`font.family.mono`) for ALL telemetry (times, %, feed, θ/ρ,
+  IPs, versions). Fonts load in App.tsx via `expo-font` (render-gated). Palette rules: `primary`
+  (sand) = user actions; `live` (patina) = things happening on the table NOW (progress fills, live
+  ball, active-state dot) — never swap them; destructive buttons are OUTLINED ember, not filled;
+  never hardcode `#fff` on a primary/destructive surface — use `primaryForeground`/
+  `destructiveForeground`; on/off settings use `ui.tsx`'s `Toggle` (sand track), NEVER a bare
+  `Switch` (the stock iOS green fights the palette). Thumb-grid sizes derive from
+  `useWindowDimensions` (NOT module-scope `Dimensions.get` — iPad split view resizes the window).
+  Every `IconButton` takes a `label` (VoiceOver). The sibling touch-panel repo intentionally uses a DIFFERENT accent (Ember) — do not
+  "reconcile" them.
 - No native discovery module installed — tables are added by IP/hostname manually. mDNS browsing
   (`react-native-zeroconf`) would need a custom dev build; the firmware advertises `_http._tcp` with TXT
   `api=sandtable/1`, `model=dune-weaver`.

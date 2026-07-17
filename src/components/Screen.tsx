@@ -69,6 +69,8 @@ export function Screen({
             onPress={() => multiTable && setSwitcherOpen(true)}
             disabled={!multiTable}
             hitSlop={8}
+            accessibilityRole={multiTable ? 'button' : 'text'}
+            accessibilityLabel={`${active?.name ?? brandName(brand)}, ${connected ? 'connected' : 'offline'}${multiTable ? '. Switch table' : ''}`}
             style={({ pressed }) => [styles.tableChip, { opacity: pressed && multiTable ? 0.6 : 1 }]}
           >
             <View style={[styles.dot, { backgroundColor: connected ? colors.success : colors.destructive }]} />
@@ -76,8 +78,8 @@ export function Screen({
             {multiTable ? <MaterialIcons name="expand-more" size={18} color={colors.mutedForeground} /> : null}
           </Pressable>
           <View style={{ flex: 1 }} />
-          <IconButton icon={mode === 'dark' ? 'light-mode' : 'dark-mode'} size={20} color={colors.mutedForeground} onPress={toggle} />
-          <IconButton icon="restart-alt" size={20} color={colors.destructive} onPress={power} disabled={!base} />
+          <IconButton icon={mode === 'dark' ? 'light-mode' : 'dark-mode'} size={20} color={colors.mutedForeground} onPress={toggle} label={mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} />
+          <IconButton icon="restart-alt" size={20} color={colors.destructive} onPress={power} disabled={!base} label="Restart table" />
         </View>
       </View>
 
@@ -138,7 +140,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   logo: { width: 30, height: 30, borderRadius: 15 },
-  brand: { fontSize: font.size.lg, fontWeight: font.weight.bold, flexShrink: 1 },
+  brand: { fontSize: font.size.md, fontFamily: font.family.displaySemi, flexShrink: 1 },
   dot: { width: 9, height: 9, borderRadius: 5 },
   tableChip: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexShrink: 1 },
   switchBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: spacing.xl },
@@ -154,5 +156,5 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
     paddingBottom: spacing.sm,
   },
-  title: { fontSize: font.size.xxl, fontWeight: font.weight.bold, flexShrink: 1 },
+  title: { fontSize: font.size.xxl, fontFamily: font.family.display, letterSpacing: -0.3, flexShrink: 1 },
 })
