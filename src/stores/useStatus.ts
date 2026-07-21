@@ -19,6 +19,15 @@ const POLL_IDLE_MS = 8000
 // signal to ease off. Mirrors the HA integration.
 const HEAP_LARGEST_WARN = 20000
 const POLL_LOWHEAP_MS = 30000
+// Per-request timeout for /sand_status. A busy single-threaded board answers
+// erratically while streaming a pattern (seen on one table in a row: 2.3s, 14s,
+// 0.1s), so a short timeout wrongly reports a working board offline. Generous,
+// and paired with the slow-response backoff + disconnect grace below.
+const POLL_TIMEOUT_MS = 12000
+// Consecutive failed/timed-out polls to tolerate before showing the table
+// offline. A single slow /sand_status mid-pattern is normal, not a disconnect —
+// keep the last status (still "connected") until several in a row fail.
+const DISCONNECT_AFTER = 3
 
 interface StatusStore {
   status: Status | null
@@ -44,7 +53,7 @@ async function pollOnce(base: string, gen: number, set: (p: Partial<StatusStore>
   if (gen !== generation) return
   const started = Date.now()
   try {
-    const raw = await board.status(base)
+    const raw = await board.status(base, POLL_TIMEOUT_MS)
     if (gen !== generation) return
     const status = translateStatus(raw)
     if (get().status?.connected === false) log.info('table', `Reachable again: ${base}`)
@@ -60,21 +69,29 @@ async function pollOnce(base: string, gen: number, set: (p: Partial<StatusStore>
     if (gen !== generation) return
     failCount++
     const prev = get().status
-    // Log the TRANSITION only — a table that stays offline would otherwise
-    // fill the diagnostics ring at one line per second.
-    if (prev?.connected) log.warn('table', `Unreachable: ${base} (${(e as Error)?.message ?? e})`)
-    set({ status: prev ? { ...prev, connected: false } : null })
+    // Disconnect grace: keep the last status (still shown as connected) through
+    // a few slow/failed polls; only declare the table offline after several in a
+    // row. One 14s /sand_status while a pattern streams is normal, not a drop.
+    if (failCount >= DISCONNECT_AFTER) {
+      // Log the TRANSITION only — a table that stays offline would otherwise
+      // fill the diagnostics ring at one line per second.
+      if (prev?.connected) log.warn('table', `Unreachable: ${base} (${(e as Error)?.message ?? e})`)
+      set({ status: prev ? { ...prev, connected: false } : null })
+    }
   } finally {
     if (gen === generation) {
       let wait: number
       if (get().status?.connected === true) {
-        // Reachable: heap pressure backs off hardest (the failure mode that
-        // matters); otherwise fast while active, slow while idle. Anchored to
-        // when this poll *started*, so updates land on a true cadence (not
-        // cadence + request latency). Never overlaps: max(0, ...) fires
-        // immediately if a request outran its budget.
+        // Reachable: heap pressure backs off hardest; otherwise fast while
+        // active, slow while idle. Normally start-anchored so updates land on a
+        // true cadence. But when a poll was SLOW (the board's single-threaded
+        // server struggling mid-pattern), the gap before the next poll grows
+        // with how long this one took — so we poll it LESS often and give it
+        // room to recover, instead of hammering it back-to-back (which would
+        // pile up and make it worse).
         const target = lowHeap ? POLL_LOWHEAP_MS : isActive(get().status) ? POLL_ACTIVE_MS : POLL_IDLE_MS
-        wait = Math.max(0, target - (Date.now() - started))
+        const elapsed = Date.now() - started
+        wait = Math.max(target - elapsed, elapsed)
       } else {
         // Unreachable: exponential backoff (2s, 4s, 5s cap) so a down board
         // isn't polled-and-aborted every second — the fleet's main abort source.
@@ -119,7 +136,7 @@ export const useStatus = create<StatusStore>((set, get) => ({
     // Suspended (no loop, e.g. mid-upload): a plain one-shot so callers still
     // get fresh status without covertly restarting polling.
     try {
-      const raw = await board.status(base)
+      const raw = await board.status(base, POLL_TIMEOUT_MS)
       set({ status: translateStatus(raw) })
     } catch {
       // next scheduled poll will reconcile

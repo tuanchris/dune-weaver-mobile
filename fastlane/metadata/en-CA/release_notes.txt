@@ -1,5 +1,9 @@
-• The between-patterns wait is now clearly labelled, showing the pattern that’s on the table and a smooth countdown
-• Install any firmware version, not just the latest — handy for rolling back
-• Motion-reactive LEDs: set the look you want, then “Save current” for playing or idle; brightness now shows as a %
-• Playlist options (shuffle, repeat, time between patterns) are remembered per table
+A big update with lots of polish:
+
+• Between patterns, the app clearly shows the table is waiting — with the pattern that’s on the sand and a live countdown to the next one
+• Install any firmware version right from the app, not just the latest
+• Motion-reactive LEDs: set the look you want, then “Save current” for playing or idle; brightness now shows as a percentage
+• Playlist options — shuffle, repeat, and time between patterns — are remembered per table
+• Table settings lock while a pattern is running, so changes don’t fail silently
+• More reliable connection to busy tables, timestamped table logs, and a smoother “copy playlist to another table”
 • Sliders no longer scroll the page while you adjust them, and long times now show hours
