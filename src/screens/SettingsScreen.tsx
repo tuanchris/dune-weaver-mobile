@@ -20,6 +20,7 @@ import { StillSands } from '../components/StillSands'
 import { UpdatesCard } from '../components/UpdatesCard'
 import { WifiCard } from '../components/WifiCard'
 import { DiagnosticsCard } from '../components/DiagnosticsCard'
+import { IdleGate, IdleGateBanner } from '../components/IdleGate'
 import { userMessage } from '../lib/errors'
 import { useDiscovery, type DiscoveredTable } from '../lib/discovery'
 import { playlistName } from '../lib/playlists'
@@ -432,6 +433,13 @@ export function SettingsScreen() {
           </View>
         </Card>
 
+        {/* Everything below locks while a pattern/playlist runs (IdleGate):
+            the firmware rejects most of these writes mid-job anyway — surface
+            that up front instead of failing after the tap. One banner with the
+            explanation + Stop; the single gate below just dims and blocks.
+            Only the Tables card above stays live (switching tables is safe). */}
+        <IdleGateBanner base={base} />
+        <IdleGate>
         <WifiCard base={base} />
 
         {/* Demo table: no real lock to manage. */}
@@ -678,6 +686,7 @@ export function SettingsScreen() {
 
         {/* About stays the last card. */}
         <UpdatesCard base={base} />
+        </IdleGate>
       </ScrollView>
     </Screen>
   )

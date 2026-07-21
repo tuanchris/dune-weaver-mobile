@@ -6,6 +6,31 @@ import { File } from 'expo-file-system'
 import { thrToXY } from '../lib/thrGeometry.mjs'
 import { THR, PREVIEW } from '../../assets/pattern-manifest'
 import { board } from '../api/board'
+import { isBusy } from '../api/status'
+import { isDemoBase } from '../api/demoBoard'
+import { useStatus } from './useStatus'
+
+// Bases whose listing fetch was deferred because the table was mid-pattern, and
+// the `force` flag to use when it retries once the table goes idle
+// (lib/catalogRefresh.ts drives the retry). A real board's web server is
+// single-threaded, so a catalog read while it's drawing competes with the
+// status poll and the running job — we hold it until the board is free.
+const deferredForce = new Set<string>()
+
+/** Is THIS board (and it's the one we're polling) mid-pattern? Demo bypasses —
+ * its listings are in-memory, no server contention. */
+function tableBusy(base: string): boolean {
+  if (isDemoBase(base)) return false
+  const st = useStatus.getState()
+  return st.base === base && isBusy(st.status)
+}
+
+/** Consume a deferred forced-refresh flag for a base (returns it, clears it). */
+export function consumeDeferredForce(base: string): boolean {
+  const had = deferredForce.has(base)
+  deferredForce.delete(base)
+  return had
+}
 
 const KEY = 'dw_library_v1'
 // On-table listings (patterns + playlists) cached per board base, so a relaunch
@@ -125,8 +150,8 @@ interface LibraryStore {
   /**
    * Point the on-table view at `base` (populating from cache instantly), and
    * fetch the pattern manifest from the board ONLY on `force` (pull-to-refresh)
-   * or the first time we've ever seen this board. /sand_patterns is motion-safe,
-   * so a refresh is fine even while a pattern is playing.
+   * or the first time we've ever seen this board. Skips the board read while the
+   * table is mid-pattern and defers it to the next idle (catalogRefresh.ts).
    */
   loadTable: (base: string | null, force?: boolean) => Promise<void>
   /** Same contract as loadTable, for the playlist listing (/sand_playlists). */
@@ -199,9 +224,11 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
     // (no cached patterns for this base). Otherwise the cached list stands.
     if (!force && cached?.patterns !== undefined) return
     if (get().tableLoading) return
-    // NOTE: /sand_patterns is NOT motion-gated by the firmware (it skips the
-    // block-during-motion gate), so the manifest is safe to read even while a
-    // pattern runs — unlike file CONTENT reads/writes, which we still guard.
+    // Don't read the manifest while the table is mid-pattern — though the
+    // firmware doesn't block motion for it, the read still contends with the
+    // status poll on the board's single-threaded server. Defer to the next idle
+    // (lib/catalogRefresh.ts); the cached list (shown above) stands meanwhile.
+    if (tableBusy(base)) { if (force) deferredForce.add(base); return }
     set({ tableLoading: true })
     try {
       // Conditional GET: send the cached ETag so an unchanged catalog returns a
@@ -237,9 +264,11 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
     }
     if (!force && cached?.playlists !== undefined) return
     if (get().playlistsLoading) return
+    // Same as loadTable: hold the listing read until the table is idle so it
+    // doesn't compete with the running job. Deferred retry in catalogRefresh.ts.
+    if (tableBusy(base)) { if (force) deferredForce.add(base); return }
     set({ playlistsLoading: true })
     try {
-      // /sand_playlists is a motion-safe listing — fine to read during playback.
       const playlists = await board.playlists(base)
       if (get().tableBase === base) set({ tablePlaylists: playlists })
       writeCache(get, set, base, { playlists })

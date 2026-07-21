@@ -17,46 +17,70 @@ export interface PlaylistPref {
   clearMode: ClearMode
 }
 
+/** Storage key for a playlist's options ON A GIVEN TABLE — so the same-named
+ * playlist can have different shuffle/pause/etc. per table. The `\u001F` unit
+ * separator never appears in a base URL or a playlist filename. */
+export function playlistPrefKey(base: string, name: string): string {
+  return `${base}\u001F${name}`
+}
+
 interface Persisted {
   clearMode: ClearMode
   playlistPrefs: Record<string, PlaylistPref>
   favorites: string[]
+  favSynced?: Record<string, string[]>
 }
 
 interface PrefsStore {
   /** Remembered Pre-Execution Action for running a pattern (Browse detail sheet). */
   clearMode: ClearMode
   setClearMode: (m: ClearMode) => void
-  /** Saved playback preferences, keyed by playlist filename. */
+  /** Saved playback preferences, keyed per table + playlist filename
+   * (playlistPrefKey). Legacy entries keyed by bare filename (pre per-table)
+   * remain as a fallback — see playlistPref. */
   playlistPrefs: Record<string, PlaylistPref>
-  setPlaylistPref: (name: string, pref: PlaylistPref) => void
+  setPlaylistPref: (base: string, name: string, pref: PlaylistPref) => void
+  /** This table's saved options for a playlist, falling back to the legacy
+   * global-by-name pref (pre per-table keying) so nothing is lost on update. */
+  playlistPref: (base: string | null, name: string) => PlaylistPref | undefined
   /** Favorited patterns, keyed by patternKey (subfolder kept, e.g.
    * "custom_patterns/x.thr"). Local to this app — a FluidNC table has no
    * backend to hold them — and shared across tables, like previews. */
   favorites: Record<string, true>
   toggleFavorite: (name: string) => void
+  /** Per saved-board id: the favorites snapshot last reconciled into that
+   * table's Favorites playlist (lib/favoritesPlaylist.ts). The baseline that
+   * distinguishes "newly favorited here" from "removed on the table". */
+  favSynced: Record<string, string[]>
+  setFavSynced: (boardId: string, keys: string[]) => void
   hydrate: () => Promise<void>
 }
 
 export const usePrefs = create<PrefsStore>((set, get) => {
   const save = () => {
-    const { clearMode, playlistPrefs, favorites } = get()
+    const { clearMode, playlistPrefs, favorites, favSynced } = get()
     AsyncStorage.setItem(
       KEY,
-      JSON.stringify({ clearMode, playlistPrefs, favorites: Object.keys(favorites) } satisfies Persisted),
+      JSON.stringify({ clearMode, playlistPrefs, favorites: Object.keys(favorites), favSynced } satisfies Persisted),
     ).catch(() => {})
   }
   return {
     clearMode: 'adaptive',
     playlistPrefs: {},
     favorites: {},
+    favSynced: {},
     setClearMode: (clearMode) => {
       set({ clearMode })
       save()
     },
-    setPlaylistPref: (name, pref) => {
-      set({ playlistPrefs: { ...get().playlistPrefs, [name]: pref } })
+    setPlaylistPref: (base, name, pref) => {
+      set({ playlistPrefs: { ...get().playlistPrefs, [playlistPrefKey(base, name)]: pref } })
       save()
+    },
+    playlistPref: (base, name) => {
+      const prefs = get().playlistPrefs
+      // Per-table key first; fall back to the legacy global-by-name entry.
+      return (base ? prefs[playlistPrefKey(base, name)] : undefined) ?? prefs[name]
     },
     toggleFavorite: (name) => {
       const key = patternKey(name)
@@ -64,6 +88,10 @@ export const usePrefs = create<PrefsStore>((set, get) => {
       if (favorites[key]) delete favorites[key]
       else favorites[key] = true
       set({ favorites })
+      save()
+    },
+    setFavSynced: (boardId, keys) => {
+      set({ favSynced: { ...get().favSynced, [boardId]: keys } })
       save()
     },
     hydrate: async () => {
@@ -75,6 +103,7 @@ export const usePrefs = create<PrefsStore>((set, get) => {
             clearMode: data.clearMode ?? 'adaptive',
             playlistPrefs: data.playlistPrefs ?? {},
             favorites: Object.fromEntries((data.favorites ?? []).map((k) => [k, true as const])),
+            favSynced: data.favSynced ?? {},
           })
         }
       } catch {

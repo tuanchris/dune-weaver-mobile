@@ -1,5 +1,10 @@
 @AGENTS.md
 
+## Verification (owner preference)
+
+- **Do NOT drive the simulator / emulator yourself to test changes.** After finishing changes, run the fast checks (`npx tsc --noEmit`, and `npx expo export --platform ios` when assets/geometry changed), then **launch the app in the simulator and hand it to the owner to test** — describe exactly what to look at. Don't screenshot-verify or click through it yourself.
+- This overrides any built-in "verify at the UI surface" habit and the `verify` skill's drive-it-yourself flow: build/typecheck are still yours; UI testing is the owner's.
+
 ## Build & release preferences (owner)
 
 - **Default to building LOCALLY** (`eas build --local -p <platform> --profile production`); don't use cloud `eas build` unless required.

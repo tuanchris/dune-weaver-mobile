@@ -4,6 +4,7 @@ import { MaterialIcons } from '@expo/vector-icons'
 import { board } from '../api/board'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
+import { useScrollLock } from '../stores/useScrollLock'
 import { usePreviews } from '../stores/usePreviews'
 import { useTheme } from '../stores/useTheme'
 import { assertNotSyncing } from '../lib/sd'
@@ -15,6 +16,18 @@ import { EmptyState } from '../components/EmptyState'
 import { radius, spacing, font } from '../theme'
 
 type IconName = React.ComponentProps<typeof MaterialIcons>['name']
+
+/** Seconds-since-boot -> compact "2d 3h" / "3h 14m" / "14m" / "9s". */
+function fmtUptime(sec: number | null | undefined): string {
+  if (sec == null || sec < 0) return '—'
+  const d = Math.floor(sec / 86400)
+  const h = Math.floor((sec % 86400) / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  if (d > 0) return `${d}d ${h}h`
+  if (h > 0) return `${h}h ${m}m`
+  if (m > 0) return `${m}m`
+  return `${Math.floor(sec)}s`
+}
 
 // The firmware clears by running its default clear patterns off the SD card
 // (same files dune-weaver uses); $SD/Run via board.runPattern.
@@ -29,6 +42,7 @@ export function ControlScreen() {
   const base = useBoards((s) => s.getActiveBase())
   const status = useStatus((s) => s.status)
   const refreshStatus = useStatus((s) => s.refresh)
+  const scrollLocked = useScrollLock((s) => s.locked)
   // Block motion-START while the app is streaming previews off the card (shared
   // single-threaded SD). Stop stays enabled — you must always be able to halt.
   const syncing = usePreviews((s) => s.syncing)
@@ -62,7 +76,7 @@ export function ControlScreen() {
 
   return (
     <Screen title="Table Control">
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160, gap: spacing.lg }}>
+      <ScrollView scrollEnabled={!scrollLocked} contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160, gap: spacing.lg }}>
         <Card>
           <View style={styles.stateRow}>
             <View
@@ -73,11 +87,14 @@ export function ControlScreen() {
             <Text style={[styles.stateWord, { color: colors.foreground }]}>{stateWord}</Text>
           </View>
           {status ? (
+            // Speed + progress live in the Now Playing bar, so here we surface
+            // things that aren't shown elsewhere: how long the table's been up,
+            // its firmware, and the live ball position (θ/ρ).
             <View style={styles.telemetry}>
-              <Text style={[styles.tele, { color: colors.mutedForeground }]}>feed <Text style={{ color: colors.foreground }}>{status.speed} mm/min</Text></Text>
-              <Text style={[styles.tele, { color: colors.mutedForeground }]}>θ <Text style={{ color: colors.foreground }}>{status.theta >= 0 ? '+' : ''}{status.theta.toFixed(2)} rad</Text></Text>
-              <Text style={[styles.tele, { color: colors.mutedForeground }]}>{status.percentage != null ? 'progress ' : 'override '}<Text style={{ color: colors.foreground }}>{status.percentage != null ? `${status.percentage}%` : `${status.feedOverride}%`}</Text></Text>
-              <Text style={[styles.tele, { color: colors.mutedForeground }]}>ρ <Text style={{ color: colors.foreground }}>{status.rho.toFixed(2)}</Text></Text>
+              <Text numberOfLines={1} style={[styles.tele, { color: colors.mutedForeground }]}>uptime <Text style={{ color: colors.foreground }}>{fmtUptime(status.uptime)}</Text></Text>
+              <Text numberOfLines={1} style={[styles.tele, { color: colors.mutedForeground }]}>θ <Text style={{ color: colors.foreground }}>{status.theta >= 0 ? '+' : ''}{status.theta.toFixed(2)} rad</Text></Text>
+              <Text numberOfLines={1} style={[styles.tele, { color: colors.mutedForeground }]}>fw <Text style={{ color: colors.foreground }}>{status.fw ?? '—'}</Text></Text>
+              <Text numberOfLines={1} style={[styles.tele, { color: colors.mutedForeground }]}>ρ <Text style={{ color: colors.foreground }}>{status.rho.toFixed(2)}</Text></Text>
             </View>
           ) : null}
         </Card>

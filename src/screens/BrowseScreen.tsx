@@ -3,6 +3,7 @@ import { ActivityIndicator, Alert, FlatList, Modal, Pressable, RefreshControl, S
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board, type ClearMode } from '../api/board'
+import { isBusy } from '../api/status'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
@@ -93,14 +94,20 @@ export function BrowseScreen() {
   const [importPreview, setImportPreview] = useState<ImportedThr | null>(null)
 
   // Load the full on-table manifest once (App also kicks this off at startup);
-  // no-op if already loaded. /sand_patterns is motion-safe, so this works even
-  // while a pattern is playing — that's how custom_patterns/ show up.
+  // no-op if already loaded. Deferred to the next idle if the table is
+  // mid-pattern — that's how custom_patterns/ show up (a beat later while busy).
   useEffect(() => {
     loadTable(base)
   }, [base, loadTable])
 
-  // Pull-to-refresh: user-initiated re-read of the manifest (motion-safe).
-  const refreshTable = () => loadTable(base, true)
+  // Pull-to-refresh: re-read the manifest. While the table is running the read
+  // is deferred (loadTable records it) — say so, then it refreshes at idle.
+  const refreshTable = () => {
+    if (isBusy(useStatus.getState().status)) {
+      toast.info('Table is running — patterns will refresh when it’s idle')
+    }
+    loadTable(base, true)
+  }
 
   // One unified library: every bundled preview (~1080: built-ins + custom_patterns)
   // + imported patterns + anything else on the table, deduped by name.
@@ -298,6 +305,9 @@ export function BrowseScreen() {
             onChangeText={setQuery}
             placeholder="Search patterns"
             placeholderTextColor={colors.mutedForeground}
+            autoCorrect={false}
+            autoCapitalize="none"
+            spellCheck={false}
             style={[styles.searchInput, { color: colors.foreground }]}
           />
           {query ? <IconButton icon="close" size={18} color={colors.mutedForeground} onPress={() => setQuery('')} /> : null}

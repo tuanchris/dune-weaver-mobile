@@ -3,6 +3,7 @@ import { ActivityIndicator, FlatList, Modal, PanResponder, Pressable, StyleSheet
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { useTheme } from '../stores/useTheme'
+import { useScrollLock } from '../stores/useScrollLock'
 import { radius, spacing, font } from '../theme'
 
 type Variant = 'primary' | 'secondary' | 'destructive' | 'ghost'
@@ -247,9 +248,21 @@ export function Slider({
 
   const pan = useRef(
     PanResponder.create({
+      // Claim the gesture in the CAPTURE phase (both start and move) so a parent
+      // ScrollView never gets to scroll while you drag — without the *Capture
+      // variants, iOS's ScrollView still scrolls at the same time as the slide.
+      // (Matches the LED ColorWheel, which is inside a ScrollView and works.)
       onStartShouldSetPanResponder: () => !disabled,
+      onStartShouldSetPanResponderCapture: () => !disabled,
       onMoveShouldSetPanResponder: () => !disabled,
+      onMoveShouldSetPanResponderCapture: () => !disabled,
+      // Once dragging, don't hand the gesture back to the ScrollView.
+      onPanResponderTerminationRequest: () => false,
+      // Android: keep the native ScrollView from becoming the responder mid-drag.
+      onShouldBlockNativeResponder: () => true,
       onPanResponderGrant: (e) => {
+        // Freeze the enclosing ScrollView so it can't scroll while we drag.
+        useScrollLock.getState().lock()
         if (holdRef.current) { clearTimeout(holdRef.current); holdRef.current = null }
         leftRef.current = e.nativeEvent.pageX - e.nativeEvent.locationX
         const v = fromX(e.nativeEvent.locationX)
@@ -262,6 +275,7 @@ export function Slider({
         onChange?.(v)
       },
       onPanResponderRelease: (e) => {
+        useScrollLock.getState().unlock()
         const v = fromX(e.nativeEvent.pageX - leftRef.current)
         onComplete?.(v)
         // Hold the released value briefly, then fall back to the live `value` prop
@@ -270,6 +284,7 @@ export function Slider({
         holdRef.current = setTimeout(() => setDrag(null), 1200)
       },
       onPanResponderTerminate: () => {
+        useScrollLock.getState().unlock()
         if (holdRef.current) { clearTimeout(holdRef.current); holdRef.current = null }
         setDrag(null)
       },

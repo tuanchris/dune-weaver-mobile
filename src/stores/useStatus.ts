@@ -1,10 +1,24 @@
 import { create } from 'zustand'
 import { board } from '../api/board'
-import { translateStatus, type Status } from '../api/status'
+import { translateStatus, isActive, type Status } from '../api/status'
 import { useBoards } from './useBoards'
 import { log } from './useAppLog'
 
-const POLL_MS = 1000
+// Poll fast while the table is doing something, slow when it's idle. A
+// decorative table is idle most of its life, and every poll is a full TCP
+// connection to a single-client board (the firmware sends Connection: close, so
+// keep-alive is a no-op) — see the firmware repo's POLLING.md. A user action
+// snaps back to the fast rate immediately via refresh().
+const POLL_ACTIVE_MS = 1000
+const POLL_IDLE_MS = 8000
+// Board-load backoff — the lever that actually targets the failure mode. When
+// the table reports heap pressure (heap_largest below the firmware's WARN
+// floor), poll slowly regardless of motion state so we stop competing for the
+// last few KB against whatever is straining it (e.g. a big /sd/ transfer). The
+// single-client server is only load-stressed when heap is tight, so that's the
+// signal to ease off. Mirrors the HA integration.
+const HEAP_LARGEST_WARN = 20000
+const POLL_LOWHEAP_MS = 30000
 
 interface StatusStore {
   status: Status | null
@@ -23,6 +37,8 @@ interface StatusStore {
 
 let timer: ReturnType<typeof setTimeout> | null = null
 let generation = 0 // bumps on every setBase to invalidate in-flight loops
+let failCount = 0 // consecutive failed polls, for unreachable backoff
+let lowHeap = false // last poll saw the board under heap pressure
 
 async function pollOnce(base: string, gen: number, set: (p: Partial<StatusStore>) => void, get: () => StatusStore) {
   if (gen !== generation) return
@@ -32,6 +48,8 @@ async function pollOnce(base: string, gen: number, set: (p: Partial<StatusStore>
     if (gen !== generation) return
     const status = translateStatus(raw)
     if (get().status?.connected === false) log.info('table', `Reachable again: ${base}`)
+    failCount = 0
+    lowHeap = typeof raw.heap_largest === 'number' && raw.heap_largest < HEAP_LARGEST_WARN
     set({ status })
     // Backfill the stable identity onto the saved board (no-op when unchanged)
     // so boards added by bare IP still dedupe against discovery and relocate.
@@ -40,6 +58,7 @@ async function pollOnce(base: string, gen: number, set: (p: Partial<StatusStore>
     }
   } catch (e) {
     if (gen !== generation) return
+    failCount++
     const prev = get().status
     // Log the TRANSITION only — a table that stays offline would otherwise
     // fill the diagnostics ring at one line per second.
@@ -47,10 +66,20 @@ async function pollOnce(base: string, gen: number, set: (p: Partial<StatusStore>
     set({ status: prev ? { ...prev, connected: false } : null })
   } finally {
     if (gen === generation) {
-      // Schedule the next poll relative to when this one *started*, so updates
-      // land on a true ~1s cadence instead of 1s + request latency. Never
-      // overlaps: if a request took longer than POLL_MS, poll again immediately.
-      const wait = Math.max(0, POLL_MS - (Date.now() - started))
+      let wait: number
+      if (get().status?.connected === true) {
+        // Reachable: heap pressure backs off hardest (the failure mode that
+        // matters); otherwise fast while active, slow while idle. Anchored to
+        // when this poll *started*, so updates land on a true cadence (not
+        // cadence + request latency). Never overlaps: max(0, ...) fires
+        // immediately if a request outran its budget.
+        const target = lowHeap ? POLL_LOWHEAP_MS : isActive(get().status) ? POLL_ACTIVE_MS : POLL_IDLE_MS
+        wait = Math.max(0, target - (Date.now() - started))
+      } else {
+        // Unreachable: exponential backoff (2s, 4s, 5s cap) so a down board
+        // isn't polled-and-aborted every second — the fleet's main abort source.
+        wait = Math.min(5000, 1000 * 2 ** failCount)
+      }
       timer = setTimeout(() => pollOnce(base, gen, set, get), wait)
     }
   }
@@ -76,6 +105,19 @@ export const useStatus = create<StatusStore>((set, get) => ({
   refresh: async () => {
     const base = get().base
     if (!base) return
+    if (timer) {
+      // The loop is running: re-arm it now (bumping generation to retire the
+      // sleeping timer). This both fetches fresh status AND recomputes the
+      // cadence, so a user action that just made the table active snaps back to
+      // the fast rate instead of waiting out an idle-length gap.
+      clearTimeout(timer)
+      timer = null
+      generation++
+      pollOnce(base, generation, set, get)
+      return
+    }
+    // Suspended (no loop, e.g. mid-upload): a plain one-shot so callers still
+    // get fresh status without covertly restarting polling.
     try {
       const raw = await board.status(base)
       set({ status: translateStatus(raw) })

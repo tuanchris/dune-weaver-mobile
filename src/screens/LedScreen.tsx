@@ -6,10 +6,11 @@ import { MaterialIcons } from '@expo/vector-icons'
 import { board, LED_EFFECTS, LED_PALETTES, ledEffectInputs } from '../api/board'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
+import { useScrollLock } from '../stores/useScrollLock'
 import { useTheme } from '../stores/useTheme'
 import { toast } from '../stores/useToast'
 import { userMessage } from '../lib/errors'
-import { Card, CardTitle, IconButton, Select, Slider, Toggle } from '../components/ui'
+import { Button, Card, CardTitle, IconButton, Select, Slider, Toggle } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { EmptyState } from '../components/EmptyState'
 import { radius, spacing, font } from '../theme'
@@ -24,7 +25,8 @@ const SWATCHES = [
 // 'ball' is promoted to its own card, so keep it out of the generic effect list.
 const EFFECT_OPTIONS = LED_EFFECTS.filter((e) => e.name !== 'ball').map((e) => ({ value: e.name, label: e.label }))
 const PALETTE_OPTIONS = LED_PALETTES.map((p) => ({ value: p, label: p[0].toUpperCase() + p.slice(1) }))
-const HOOK_OPTIONS = [{ value: 'none', label: "Don't override" }, ...LED_EFFECTS.map((e) => ({ value: e.name, label: e.label }))]
+/** Display label for an effect name (falls back to the raw name). */
+const effectLabel = (name: string) => LED_EFFECTS.find((e) => e.name === name)?.label ?? name
 // What renders behind the ball's blob: a solid color, black, or a live effect.
 const BG_OPTIONS = [
   { value: 'static', label: 'Solid color' },
@@ -76,6 +78,7 @@ function useThrottledSend(ms: number) {
 
 export function LedScreen() {
   const colors = useTheme((s) => s.colors)
+  const scrollLocked = useScrollLock((s) => s.locked)
   const base = useBoards((s) => s.getActiveBase())
   const status = useStatus((s) => s.status)
 
@@ -158,6 +161,20 @@ export function LedScreen() {
     send(() => board.setLedEffect(base!, e))
   }
 
+  // Motion-reactive hooks. Like the web app, you SAVE THE CURRENT effect as the
+  // playing/idle override instead of picking a different one from a list — the
+  // board only stores an effect per hook (palette/colours/speed/brightness are
+  // global), so this captures the effect selected above.
+  const saveHook = (which: 'run' | 'idle') => {
+    if (which === 'run') { setRunEffect(effect); send(() => board.setLedRunEffect(base!, effect)) }
+    else { setIdleEffect(effect); send(() => board.setLedIdleEffect(base!, effect)) }
+    toast.success(`${which === 'run' ? 'Playing' : 'Idle'} effect saved`)
+  }
+  const clearHook = (which: 'run' | 'idle') => {
+    if (which === 'run') { setRunEffect('none'); send(() => board.setLedRunEffect(base!, 'none')) }
+    else { setIdleEffect('none'); send(() => board.setLedIdleEffect(base!, 'none')) }
+  }
+
   const isOn = effect !== 'off'
   const togglePower = () => applyEffect(isOn ? 'off' : lastOnRef.current || 'rainbow')
 
@@ -185,13 +202,13 @@ export function LedScreen() {
 
   return (
     <Screen title="DW LEDs">
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160, gap: spacing.lg }}>
+      <ScrollView scrollEnabled={!scrollLocked} contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160, gap: spacing.lg }}>
         <View style={[styles.banner, { backgroundColor: bannerColor + '22', borderColor: bannerColor + '55' }]}>
           <MaterialIcons name={bannerOk ? 'check-circle' : 'error-outline'} size={20} color={bannerColor} />
           <Text style={{ color: bannerColor, fontSize: font.size.sm, flex: 1, fontWeight: font.weight.medium }}>
             {hasLed === false
               ? 'No LEDs configured on this table.'
-              : `LEDs ready · ${isOn ? `${effect} · ${brightness}` : 'Power OFF'}`}
+              : `LEDs ready · ${isOn ? `${effect} · ${asPercent255(brightness)}` : 'Power OFF'}`}
           </Text>
         </View>
 
@@ -233,7 +250,7 @@ export function LedScreen() {
                 onChange={(hex) => { setColor(hex); colorThrottle.run(() => board.setLedColor(base, hex).catch(() => {})) }}
                 onCommit={(hex) => { setColor(hex); colorThrottle.flush(() => send(() => board.setLedColor(base, hex))) }}
               />
-              <SliderRow label="Blob brightness" value={ballBright} min={0} max={255} onChange={setBallBright} onComplete={(v) => send(() => board.setLedBallBright(base, v))} />
+              <SliderRow label="Blob brightness" value={ballBright} min={0} max={255} format={asPercent255} onChange={setBallBright} onComplete={(v) => send(() => board.setLedBallBright(base, v))} />
               <View>
                 <Text style={[styles.label, { color: colors.foreground }]}>Direction</Text>
                 <Select value={direction} options={[{ value: 'cw', label: 'Clockwise' }, { value: 'ccw', label: 'Counter-clockwise' }]} onChange={(d) => { setDirection(d); send(() => board.setLedDirection(base, d)) }} />
@@ -272,7 +289,7 @@ export function LedScreen() {
                 <Text style={[styles.hint, { color: colors.mutedForeground }]}>This background reuses the blob color above (the firmware shares one color for both).</Text>
               ) : null}
               {ballBg !== 'off' ? (
-                <SliderRow label="Background brightness" value={ballBgBright} min={0} max={255} onChange={setBallBgBright} onComplete={(v) => send(() => board.setLedBallBgBright(base, v))} />
+                <SliderRow label="Background brightness" value={ballBgBright} min={0} max={255} format={asPercent255} onChange={setBallBgBright} onComplete={(v) => send(() => board.setLedBallBgBright(base, v))} />
               ) : null}
             </View>
           ) : null}
@@ -285,6 +302,7 @@ export function LedScreen() {
               value={brightness}
               min={0}
               max={255}
+              format={asPercent255}
               onChange={(v) => { brightnessTouchedRef.current = Date.now(); setBrightness(v) }}
               onComplete={(v) => { brightnessTouchedRef.current = Date.now(); send(() => board.setLedBrightness(base, v)) }}
             />
@@ -349,11 +367,28 @@ export function LedScreen() {
 
         <Card>
           <CardTitle>Motion-reactive</CardTitle>
-          <Text style={[styles.hint, { color: colors.mutedForeground }]}>Override the effect by machine state. “Don’t override” keeps the effect above.</Text>
-          <Text style={[styles.label, { color: colors.foreground, marginTop: spacing.md }]}>While running</Text>
-          <Select value={runEffect} options={HOOK_OPTIONS} onChange={(v) => { setRunEffect(v); send(() => board.setLedRunEffect(base, v)) }} />
-          <Text style={[styles.label, { color: colors.foreground, marginTop: spacing.md }]}>While idle</Text>
-          <Select value={idleEffect} options={HOOK_OPTIONS} onChange={(v) => { setIdleEffect(v); send(() => board.setLedIdleEffect(base, v)) }} />
+          <Text style={[styles.hint, { color: colors.mutedForeground }]}>
+            Save the effect set above to run automatically while the table plays or rests. Palette, colours, speed and brightness are shared across all effects.
+          </Text>
+
+          {([
+            { which: 'run' as const, label: 'While playing', saved: runEffect },
+            { which: 'idle' as const, label: 'While idle', saved: idleEffect },
+          ]).map(({ which, label, saved }) => {
+            const set = saved !== 'none' && saved !== ''
+            return (
+              <View key={which} style={styles.hookRow}>
+                <Text style={[styles.label, { color: colors.foreground, marginBottom: spacing.xs }]}>{label}</Text>
+                <Text style={[styles.hint, { color: set ? colors.foreground : colors.mutedForeground, marginBottom: spacing.sm }]}>
+                  {set ? `Uses “${effectLabel(saved)}”` : 'Not saved — shows the effect above'}
+                </Text>
+                <View style={styles.hookButtons}>
+                  <Button title="Save current" icon="save" variant="secondary" flex onPress={() => saveHook(which)} />
+                  {set ? <Button title="Clear" variant="ghost" onPress={() => clearHook(which)} /> : null}
+                </View>
+              </View>
+            )
+          })}
         </Card>
       </ScrollView>
     </Screen>
@@ -451,9 +486,10 @@ function ColorWheel({ size, value, onChange, onComplete }: { size: number; value
       // scroll — keep dragging the wheel instead of scrolling the page.
       onPanResponderTerminationRequest: () => false,
       onShouldBlockNativeResponder: () => true,
-      onPanResponderGrant: (e) => pick.current(e.nativeEvent.locationX, e.nativeEvent.locationY, false),
+      onPanResponderGrant: (e) => { useScrollLock.getState().lock(); pick.current(e.nativeEvent.locationX, e.nativeEvent.locationY, false) },
       onPanResponderMove: (e) => pick.current(e.nativeEvent.locationX, e.nativeEvent.locationY, false),
-      onPanResponderRelease: (e) => pick.current(e.nativeEvent.locationX, e.nativeEvent.locationY, true),
+      onPanResponderRelease: (e) => { useScrollLock.getState().unlock(); pick.current(e.nativeEvent.locationX, e.nativeEvent.locationY, true) },
+      onPanResponderTerminate: () => useScrollLock.getState().unlock(),
     })
   ).current
 
@@ -553,13 +589,36 @@ function ColorField({ label, value, onChange, onCommit }: { label: string; value
   )
 }
 
-function SliderRow({ label, value, min, max, onChange, onComplete }: { label: string; value: number; min: number; max: number; onChange: (v: number) => void; onComplete: (v: number) => void }) {
+/** Show a 0..255 brightness as a friendly 0..100%. The slider still works in
+ * raw 0..255 (what the firmware stores); only the readout is a percentage. */
+const asPercent255 = (v: number) => `${Math.round((v / 255) * 100)}%`
+
+function SliderRow({
+  label,
+  value,
+  min,
+  max,
+  onChange,
+  onComplete,
+  format,
+}: {
+  label: string
+  value: number
+  min: number
+  max: number
+  onChange: (v: number) => void
+  onComplete: (v: number) => void
+  /** Format the numeric readout (e.g. brightness as %). Default: rounded value. */
+  format?: (v: number) => string
+}) {
   const colors = useTheme((s) => s.colors)
   return (
     <View>
       <View style={styles.sliderLabelRow}>
         <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>{label}</Text>
-        <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>{Math.round(value)}</Text>
+        <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, fontFamily: font.family.mono }}>
+          {format ? format(value) : Math.round(value)}
+        </Text>
       </View>
       <Slider value={value} min={min} max={max} onChange={onChange} onComplete={onComplete} />
     </View>
@@ -572,6 +631,8 @@ const styles = StyleSheet.create({
   ballHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   sectionHead: { borderTopWidth: 1, paddingTop: spacing.md, marginTop: spacing.xs },
   hint: { fontSize: font.size.xs },
+  hookRow: { marginTop: spacing.md },
+  hookButtons: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   power: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, height: 48, borderRadius: radius.md },
   colorValue: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   colorPreview: { width: 24, height: 24, borderRadius: 12, borderWidth: 1 },

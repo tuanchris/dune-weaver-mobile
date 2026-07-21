@@ -28,8 +28,9 @@ import { usePreviews } from './src/stores/usePreviews'
 import { useUpdates, appUpdateAvailable, fwUpdateAvailable } from './src/stores/useUpdates'
 import { syncClock } from './src/lib/clock'
 import { useAutoRelocate } from './src/lib/relocate'
-import { usePreviewSync } from './src/lib/previewSync'
 import { useTableLogSync } from './src/lib/tableLogSync'
+import { useFavoritesPlaylistSync } from './src/lib/favoritesPlaylist'
+import { useCatalogRefreshOnIdle } from './src/lib/catalogRefresh'
 import { initAppLog } from './src/stores/useAppLog'
 
 const Tab = createBottomTabNavigator()
@@ -70,12 +71,12 @@ export default function App() {
   // Follow the active table to a new IP when DHCP moves it (mDNS re-scan).
   useAutoRelocate()
 
-  // Pull preview thumbnails for card-loaded patterns from the table's
-  // preview bundle (written by the SD Card Pattern Manager) — once per
-  // table per session, when the table is idle.
-  const statusBase = useStatus((s) => s.base)
-  usePreviewSync(statusBase)
+  // NOTE: preview-bundle sync is MANUAL only (Settings → "Sync previews from
+  // table"). It used to run automatically once per table per session; the owner
+  // wants it explicit so the app never reads the card's bundle on its own.
   useTableLogSync()
+  useFavoritesPlaylistSync()
+  useCatalogRefreshOnIdle()
 
   // Update-available dot on the Settings tab: a newer app in the store, or a
   // newer firmware release than what the active table reports.

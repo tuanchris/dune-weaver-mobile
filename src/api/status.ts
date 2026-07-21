@@ -28,6 +28,11 @@ export interface RawStatus {
      * unknown: the last pattern of a pass, or a single run. Absent on firmware
      * that predates it. */
     next?: string
+    /** The most recently COMPLETED pattern's full SD path — what is currently
+     * drawn on the table. Named during the between-patterns pause so clients
+     * can show its preview. "" until the run's first pattern completes.
+     * Absent before firmware v0.1.13. */
+    last?: string
   }
   /** Only present when the table has LEDs configured (`has_led`). */
   led?: {
@@ -49,6 +54,13 @@ export interface RawStatus {
   /** Boot-time SD readability probe. Absent when no SD is configured (and on
    * older firmware). false = card missing/unreadable/unformatted. */
   sd_ok?: boolean
+  /** Seconds since the board booted (esp_timer, no wrap). Absent on older
+   * firmware. Anchors the `[+N]` uptime prefixes in /sand_log to wall clock. */
+  uptime?: number
+  /** Largest free heap block (bytes) — the board's fragmentation/pressure
+   * signal. Below ~20k the single-client server is straining; clients back off
+   * their poll rate. Absent on older firmware (treat as healthy). */
+  heap_largest?: number
 }
 
 /** The table's wall clock (from /sand_time or status.time). */
@@ -70,7 +82,7 @@ export interface Status {
   feedOverride: number
   theta: number
   rho: number
-  playlist: { index: number; total: number; name: string | null; next: string | null } | null
+  playlist: { index: number; total: number; name: string | null; next: string | null; last: string | null } | null
   /** Seconds left in the between-patterns pause, or null when not pausing. */
   pauseRemaining: number | null
   /** Full length of the current between-patterns pause in seconds, or null. */
@@ -89,6 +101,8 @@ export interface Status {
   hostname: string | null
   /** SD card readable? null when unreported (no card configured / old fw). */
   sdOk: boolean | null
+  /** Seconds since the board booted, or null on firmware that doesn't report it. */
+  uptime: number | null
   state: string
   connected: boolean
 }
@@ -136,6 +150,9 @@ export function translateStatus(raw: RawStatus): Status {
           // Firmware resolves the true next pattern (shuffle-aware); "" / absent
           // -> null (the app then shows no "up next").
           next: raw.playlist.next || null,
+          // Just-finished pattern (= what's on the sand during the pause);
+          // "" / absent (pre-v0.1.13 firmware) -> null.
+          last: raw.playlist.last || null,
         }
       : null,
     pauseRemaining,
@@ -147,6 +164,7 @@ export function translateStatus(raw: RawStatus): Status {
     mac: raw.mac?.toLowerCase() ?? null,
     hostname: raw.hostname || null,
     sdOk: raw.sd_ok ?? null,
+    uptime: raw.uptime ?? null,
     state,
     connected: true,
   }
@@ -170,4 +188,15 @@ export function isActive(s: Status | null): boolean {
 export function isBusy(s: Status | null): boolean {
   if (!s) return false
   return s.isRunning || s.isPaused || s.isClearing || s.isHoming
+}
+
+/**
+ * Should board-config settings be locked? isBusy PLUS the whole playlist run:
+ * during the between-patterns pause the firmware reports Idle, but the next
+ * pattern re-busies moments later — unlocking there would flap the lock every
+ * transition and invite writes that race the pause's end.
+ */
+export function isSettingsLocked(s: Status | null): boolean {
+  if (!s) return false
+  return isBusy(s) || s.playlist != null || s.pauseRemaining != null
 }

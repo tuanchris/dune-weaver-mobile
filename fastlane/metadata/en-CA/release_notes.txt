@@ -1,4 +1,5 @@
-• A whole new look — a warm, sand-and-basalt design inspired by the table itself, in both dark and light modes
-• Favorites — tap the heart on any pattern, then filter to your favorites from the new dropdown next to search
-• New expanded player — watch progress sweep around your pattern on a glowing disc
-• New display and telemetry typefaces throughout
+• The between-patterns wait is now clearly labelled, showing the pattern that’s on the table and a smooth countdown
+• Install any firmware version, not just the latest — handy for rolling back
+• Motion-reactive LEDs: set the look you want, then “Save current” for playing or idle; brightness now shows as a %
+• Playlist options (shuffle, repeat, time between patterns) are remembered per table
+• Sliders no longer scroll the page while you adjust them, and long times now show hours

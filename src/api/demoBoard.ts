@@ -29,6 +29,9 @@ const PLAYLISTS: Record<string, string[]> = {
 
 /** A demo "pattern" takes this long to trace before looping / advancing. */
 const RUN_MS = 80_000
+// The demo table "booted" when the session started — anchors status.uptime
+// (and thus the collected-log timestamps) like a real board.
+const BOOT_MS = Date.now()
 
 type Machine = 'Idle' | 'Run' | 'Hold' | 'Home'
 
@@ -39,6 +42,12 @@ interface DemoState {
   pausedMs: number // real ms at which we entered Hold (to offset on resume)
   homeUntilMs: number // real ms until a simulated homing finishes
   feed: number
+  /** Just-finished playlist pattern (firmware playlist.last parity). */
+  lastFile: string
+  /** Real ms when the between-patterns pause ends (0 = not pausing). */
+  pauseUntilMs: number
+  /** Full length of the current pause, ms (for the countdown progress bar). */
+  pauseTotalMs: number
   playlist: { active: boolean; name: string; index: number; files: string[] }
   settings: Record<string, string>
 }
@@ -87,6 +96,9 @@ const S: DemoState = {
   pausedMs: 0,
   homeUntilMs: 0,
   feed: 200,
+  lastFile: '',
+  pauseUntilMs: 0,
+  pauseTotalMs: 0,
   playlist: { active: false, name: '', index: 0, files: [] },
   settings: defaultSettings(),
 }
@@ -101,10 +113,31 @@ function tick() {
     if (now >= S.homeUntilMs) S.machine = 'Idle'
     return
   }
+  // Between-patterns pause: motion is stopped, the just-finished pattern stays
+  // on the sand (S.lastFile) and the index stays on it, so "Up next" (index+1)
+  // is the upcoming one. When the pause elapses, advance and run it.
+  if (S.pauseUntilMs > 0) {
+    if (now >= S.pauseUntilMs) {
+      S.pauseUntilMs = 0
+      S.playlist.index = (S.playlist.index + 1) % S.playlist.files.length
+      startRun(S.playlist.files[S.playlist.index] ?? '')
+    }
+    return
+  }
   if (S.machine !== 'Run') return
   if (now - S.startMs < RUN_MS) return
   // current pattern finished
   if (S.playlist.active && S.playlist.files.length) {
+    S.lastFile = S.file // just-finished pattern, like firmware playlist.last
+    // Honour Playlist/PauseTime: pause between patterns before the next starts.
+    const pauseMs = (Number(S.settings['Playlist/PauseTime']) || 0) * 1000
+    if (pauseMs > 0) {
+      S.machine = 'Idle'
+      S.file = ''
+      S.pauseUntilMs = now + pauseMs
+      S.pauseTotalMs = pauseMs
+      return
+    }
     S.playlist.index = (S.playlist.index + 1) % S.playlist.files.length
     S.file = S.playlist.files[S.playlist.index]
   }
@@ -140,6 +173,7 @@ function buildStatus(): RawStatus {
   const p = fraction()
   const { theta, rho } = ballPos(p)
   const active = S.machine === 'Run' || S.machine === 'Hold'
+  const pausing = S.pauseUntilMs > 0
   return {
     state: S.machine,
     theta,
@@ -156,18 +190,21 @@ function buildStatus(): RawStatus {
       name: S.playlist.name,
       clearing: false,
       quiet: false,
-      pause_remaining: -1,
-      pause_total: -1,
+      // Live countdown through the between-patterns pause (like the firmware).
+      pause_remaining: pausing ? Math.max(0, Math.ceil((S.pauseUntilMs - Date.now()) / 1000)) : -1,
+      pause_total: pausing ? Math.ceil(S.pauseTotalMs / 1000) : -1,
       // Mirror the firmware's resolved "up next" (the demo doesn't shuffle, so
       // it's just the next file, wrapping on loop).
       next:
         S.playlist.active && S.playlist.files.length
           ? S.playlist.files[(S.playlist.index + 1) % S.playlist.files.length]
           : '',
+      last: S.playlist.active ? S.lastFile : '',
     },
     led: { effect: S.settings['LED/Effect'], brightness: Number(S.settings['LED/Brightness']) || 0 },
     time: nowTime(),
     fw: DEMO_FW,
+    uptime: Math.floor((Date.now() - BOOT_MS) / 1000),
   }
 }
 
@@ -204,8 +241,8 @@ export const demoBoard = {
   },
 
   // ---- Machine actions ----
-  home: async () => { S.machine = 'Home'; S.homeUntilMs = Date.now() + 4000; S.file = ''; S.playlist.active = false },
-  stop: async () => { S.machine = 'Idle'; S.file = ''; S.playlist.active = false },
+  home: async () => { S.machine = 'Home'; S.homeUntilMs = Date.now() + 4000; S.file = ''; S.pauseUntilMs = 0; S.playlist.active = false },
+  stop: async () => { S.machine = 'Idle'; S.file = ''; S.pauseUntilMs = 0; S.playlist.active = false },
   pause: async () => { if (S.machine === 'Run') { S.pausedMs = Date.now(); S.machine = 'Hold' } },
   resume: async () => { if (S.machine === 'Hold') { S.startMs += Date.now() - S.pausedMs; S.machine = 'Run' } },
   runPattern: async (_base: string, file: string, _clear?: ClearMode) => { S.playlist.active = false; startRun(file) },
@@ -223,15 +260,21 @@ export const demoBoard = {
     const key = name.endsWith('.txt') ? name : `${name}.txt`
     const files = PLAYLISTS[key] ?? []
     S.playlist = { active: true, name: name.replace(/\.txt$/i, ''), index: 0, files }
+    S.lastFile = '' // firmware clears playlist.last on a fresh run
+    S.pauseUntilMs = 0
     startRun(files[0] ?? '')
   },
   skip: async () => {
     if (S.playlist.active && S.playlist.files.length) {
+      // Mid-pause S.file is '' — keep the just-finished lastFile; mid-run
+      // capture the current pattern as what's left on the sand.
+      if (S.pauseUntilMs === 0) S.lastFile = S.file
+      S.pauseUntilMs = 0
       S.playlist.index = (S.playlist.index + 1) % S.playlist.files.length
       startRun(S.playlist.files[S.playlist.index])
     }
   },
-  stopPlaylist: async () => { S.playlist.active = false; S.machine = 'Idle'; S.file = '' },
+  stopPlaylist: async () => { S.playlist.active = false; S.machine = 'Idle'; S.file = ''; S.pauseUntilMs = 0 },
   setPlaylistMode: async (_b: string, mode: string) => setKey('Playlist/Mode', mode),
   setPlaylistShuffle: async (_b: string, on: boolean) => setKey('Playlist/Shuffle', on ? 'ON' : 'OFF'),
   setPlaylistPause: async (_b: string, s: number) => setKey('Playlist/PauseTime', String(Math.round(s))),

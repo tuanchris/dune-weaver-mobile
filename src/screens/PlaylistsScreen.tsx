@@ -3,6 +3,7 @@ import { ActivityIndicator, Alert, FlatList, Modal, Pressable, RefreshControl, S
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board, CLEAR_MODES, type ClearMode } from '../api/board'
+import { isBusy } from '../api/status'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
@@ -77,7 +78,7 @@ export function PlaylistsScreen() {
   // usePrefs) and applied to the board when Play is pressed — dw passes them as
   // run params; the firmware only holds a single global set, so we re-apply the
   // saved one each time a playlist runs.
-  const savedPrefs = usePrefs((s) => s.playlistPrefs)
+  const getPlaylistPref = usePrefs((s) => s.playlistPref)
   const setPlaylistPref = usePrefs((s) => s.setPlaylistPref)
   const [pref, setPref] = useState<PlaylistPref>(DEFAULT_PREF)
   const [clearOpen, setClearOpen] = useState(false)
@@ -94,7 +95,7 @@ export function PlaylistsScreen() {
   const updatePref = (patch: Partial<PlaylistPref>) => {
     const next = { ...pref, ...patch }
     setPref(next)
-    if (current) setPlaylistPref(current, next)
+    if (current && base) setPlaylistPref(base, current, next)
   }
 
   // Pattern picker state. The on-table list comes from the shared store (fetched
@@ -108,6 +109,14 @@ export function PlaylistsScreen() {
   // force=true is the pull-to-refresh / post-mutation path (re-reads the board);
   // the bare on-focus call is stale-while-revalidate (cache, first-load fetch).
   const load = useCallback((force?: boolean) => loadPlaylists(base, force), [base, loadPlaylists])
+  // Pull-to-refresh: deferred to idle while the table is running (loadPlaylists
+  // records it) — tell the user, then it refreshes when the table is free.
+  const refreshPlaylists = useCallback(() => {
+    if (isBusy(useStatus.getState().status)) {
+      toast.info('Table is running — playlists will refresh when it’s idle')
+    }
+    load(true)
+  }, [load])
 
   const activePlaylist = status?.playlist
   useEffect(() => {
@@ -118,7 +127,7 @@ export function PlaylistsScreen() {
   // back to the board's current global settings (deriving a friendly pause unit
   // from the stored seconds) so the controls reflect reality the first time.
   const loadPref = async (filename: string) => {
-    const saved = savedPrefs[filename]
+    const saved = getPlaylistPref(base, filename)
     if (saved) {
       setPref(saved)
       return
@@ -251,7 +260,7 @@ export function PlaylistsScreen() {
     setPicked(new Set(items))
     setPickerQuery('')
     setPickerOpen(true)
-    loadTable(base) // no-op if already loaded; never re-reads mid-job
+    loadTable(base) // no-op if already loaded; deferred to idle if mid-pattern
   }
 
   const pickerVisible = useMemo(() => {
@@ -314,15 +323,22 @@ export function PlaylistsScreen() {
     }
   }
 
-  // Copy the on-screen pattern list to another table as a .txt (verbatim — no
-  // pattern push; missing patterns just won't play there). Uses the working
-  // `items` so any unsaved edits go along too.
+  // Copy the on-screen pattern list to another table as a .txt. Items are
+  // resolved against the TARGET's own pattern catalog (re-pointed by file name
+  // when filed elsewhere; missing ones dropped — no pattern push). Uses the
+  // working `items` so any unsaved edits go along too.
   const doCopy = async (targetBase: string, targetName: string) => {
     if (!current) return
     setBusy(true)
     try {
-      await copyPlaylistTo(targetBase, playlistName(current), items)
-      toast.success(`Copied “${name}” to ${targetName}`)
+      const res = await copyPlaylistTo(targetBase, playlistName(current), items)
+      if (res.dropped.length > 0) {
+        toast.info(
+          `Copied “${name}” to ${targetName} — skipped ${res.dropped.length} pattern${res.dropped.length > 1 ? 's' : ''} that table doesn’t have`
+        )
+      } else {
+        toast.success(`Copied “${name}” to ${targetName}`)
+      }
       setCopyOpen(false)
     } catch (e) {
       toast.error(userMessage(e, `copy the playlist to ${targetName}`))
@@ -385,7 +401,7 @@ export function PlaylistsScreen() {
         data={playlists}
         keyExtractor={(p) => p}
         contentContainerStyle={{ padding: spacing.md, paddingBottom: 160 }}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={() => load(true)} tintColor={colors.primary} />}
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={refreshPlaylists} tintColor={colors.primary} />}
         ListEmptyComponent={
           loading ? <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} /> : (
             <EmptyState icon="playlist-remove" text="No playlists. Tap “New” to create one." />
@@ -582,7 +598,7 @@ export function PlaylistsScreen() {
                   <IconButton icon="close" size={26} color={colors.foreground} onPress={() => setCopyOpen(false)} />
                 </View>
                 <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, paddingHorizontal: spacing.md }}>
-                  Copies “{name}” ({items.length} pattern{items.length === 1 ? '' : 's'}) to another table. Patterns that table doesn’t have won’t play until you add them there.
+                  Copies “{name}” ({items.length} pattern{items.length === 1 ? '' : 's'}) to another table, matched to that table’s own patterns by file name. Patterns it doesn’t have are left out.
                 </Text>
                 <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}>
                   {copyTargets.map((b) => (
@@ -624,6 +640,9 @@ export function PlaylistsScreen() {
                       onChangeText={setPickerQuery}
                       placeholder="Search"
                       placeholderTextColor={colors.mutedForeground}
+                      autoCorrect={false}
+                      autoCapitalize="none"
+                      spellCheck={false}
                       style={[styles.searchInput, { color: colors.foreground }]}
                     />
                     {pickerQuery ? <IconButton icon="close" size={18} color={colors.mutedForeground} onPress={() => setPickerQuery('')} /> : null}

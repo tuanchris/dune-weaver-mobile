@@ -60,6 +60,10 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
   and snaps back with an immediate poll on foreground — no point hammering the board off-screen.
   Status also carries `playlist.quiet` (Still Sands active → `Status.isQuiet`), `fw` (firmware
   version → `Status.fw`) and, when LEDs are configured, `led:{effect,brightness}` (→ `Status.led`).
+  Firmware ≥ v0.1.13 adds `playlist.next` (shuffle-aware upcoming pattern) and `playlist.last`
+  (just-completed pattern = what's on the sand; named during the between-patterns pause) — the
+  NowPlayingBar shows `last`'s preview through the pause (falling back to an in-memory ref on
+  older firmware, which only works if the app watched the pattern run) and `next` as "Up next".
 - **OTA firmware update**: `GET /updatefw` probes (`{status:"ready"|"busy",fw}`; 409 while a pattern
   runs), `POST /updatefw` multipart (`firmware.binS` size field + `firmware.bin` file part) flashes
   and reboots. `src/lib/firmwareUpdate.ts` orchestrates: download the latest GitHub release asset
@@ -71,6 +75,12 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
   Settings (`UpdatesCard.tsx`) surface them. Checks re-run on Settings focus (10 min max-age) and
   the 6 h throttle only arms after a FULLY successful check — a failed/partial one retries, so a
   stale "up to date" self-heals. The fetched "latest" is app-global; only `status.fw` is per-table.
+  **Installing a SPECIFIC version**: `UpdatesCard` has an "Install a specific version…" button
+  (real tables only) opening `FirmwareVersionPicker` — a sheet listing every GitHub release with a
+  `firmware.bin` (`fetchFirmwareReleases`, lazy per-open, newest first), marking the installed one
+  and flagging Newer/Older/Pre-release. Any pick runs the same `runFirmwareUpdate(base, url, …)` OTA
+  flow (it already takes an arbitrary firmware URL); the confirm dialog adapts wording
+  (Install / Reinstall / Downgrade) and the splash shows the target version.
 - **WiFi control** (firmware ≥ v0.1.8 — older builds 404 these routes, which is how `WifiCard`
   detects "unsupported"): `GET /wifi_status` (`{mode:"sta"|"fallback"|"standalone", sta_ssid,
   ap_ssid, fail}`), `GET /wifi_scan` (async; `{status:"scanning"}` until done — poll ~1.5 s;
@@ -111,10 +121,13 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   read-modify-write of `/patterns/index.json` (the firmware serves it VERBATIM from `/sand_patterns`
   when present, so a push without a catalog update vanishes after the next cold start). It only ever
   MODIFIES an existing manifest — creating one on a card without it would hide every other pattern.
-- **Preview bundle sync** (`src/lib/previewSync.ts`, mounted via `usePreviewSync` in App.tsx): the
+- **Preview bundle sync** (`src/lib/previewSync.ts` — `syncPreviewBundle`, **MANUAL only**: Settings →
+  "Sync previews from table". The owner does NOT want the app reading the card's bundle on its own —
+  there is deliberately no auto-trigger (the old `usePreviewSync` App.tsx hook was removed; don't
+  re-add it): the
   website's SD Card Pattern Manager writes `/patterns/previews/shard-<0..7>.zip` (STORE-mode zips of
-  preview webps) + a ~1 KB `previews.json` sidecar with a content hash per shard. Once per table per
-  session (idle-gated), the app reads the sidecar, fetches only shards whose CONTENT hash it hasn't
+  preview webps) + a ~1 KB `previews.json` sidecar with a content hash per shard. On a manual sync
+  (idle-gated), the app reads the sidecar, fetches only shards whose CONTENT hash it hasn't
   ingested (`usePreviews.ingestedShards` — a persisted SET of content hashes, deliberately keyed by
   hash not shard-name so it's cross-table: a second table carrying the same patterns produces a
   byte-identical bundle → identical hashes → zero re-download), unzips with `fflate`, and registers
@@ -146,7 +159,12 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   / `loadPlaylists` are stale-while-revalidate: they populate `tablePatterns`/`tablePlaylists` from
   cache instantly and hit the board ONLY on `force` (pull-to-refresh) or the first-ever load, so the
   launch effect no longer force-reads the catalog every open; `addTablePattern`/`removeTablePattern`
-  write through to the cache so a push/delete survives relaunch), `useTheme`, `useToast`
+  write through to the cache so a push/delete survives relaunch. **Neither read hits the board while
+  the table is mid-pattern** (`tableBusy`/`isBusy` — demo bypasses): even though `/sand_patterns` and
+  `/sand_playlists` don't block motion firmware-side, a read still contends with the status poll on
+  the single-threaded server, so a needed fetch is DEFERRED and re-run at the next idle by
+  `lib/catalogRefresh.ts` (`useCatalogRefreshOnIdle` in App.tsx; a mid-pattern pull-to-refresh records
+  a forced retry and toasts "…will refresh when it's idle")), `useTheme`, `useToast`
   (errors linger 7 s vs 2.6 s for info/success), `useAppLog` (local diagnostics ring buffer —
   see below).
 - **Custom clear patterns** (`$Playlist/ClearIn`/`ClearOut`/`ClearSpeed`, firmware ≥ v0.1.11):
@@ -180,7 +198,10 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   history — `useTableLogSync` (App.tsx) harvests `/sand_log` (a heap-free static-buffer route on
   the board) into `useTableLog` (persisted per saved-board id, ~2000 lines) on every
   unreachable→reachable transition and every 5 min while connected, merging by the `[+uptime]`
-  line prefixes (uptime going backwards = reboot → "— table restarted —" marker). This outlives
+  line prefixes (uptime going backwards = reboot → "— table restarted —" marker). Each collected
+  line is stored as `{ts, text}`: the raw `[+uptime]` text plus an epoch-ms timestamp resolved at
+  collection time (boot anchored to wall clock via `status.uptime`, monotonic-clamped), so the
+  viewer shows wall-clock time AND uptime; pre-v2 lines and markers have `ts: null`. This outlives
   the board's ~8 KB RAM ring, which is lost on every table reboot. The app ring is the second
   tab; the share icon exports the VISIBLE tab through the system share sheet. Nothing is uploaded
   automatically, which keeps the "Data Not Collected" App Privacy label truthful.
@@ -188,7 +209,14 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   API-surface mirrors.)
 - **Favorites** are LOCAL (`usePrefs.favorites`, persisted; keyed by `patternKey` so they apply
   across tables, like previews) — a FluidNC table has no backend to hold them, and the dw web FE's
-  Favorites-playlist convention targets the Pi backend, not the firmware. UI lives in Browse: a
+  Favorites-playlist convention targets the Pi backend, not the firmware. They are additionally
+  MIRRORED into `/playlists/Favorites.txt` on the active table (`src/lib/favoritesPlaylist.ts`,
+  mounted via `useFavoritesPlaylistSync` in App.tsx): heart → added (file created on first
+  favorite), un-heart → removed. It RECONCILES rather than overwrites — only removes keys it
+  previously synced (per-board baseline `usePrefs.favSynced`), preserves entries added on-table by
+  other means, and won't re-add a favorite deleted table-side. Writes wait for
+  connected + !isBusy + !preview-sync (the SD rule), debounce 1.5 s, and retry on the next
+  toggle/reconnect/idle after a failure (logged to diagnostics, no toasts). UI lives in Browse: a
   tappable heart badge on EVERY grid tile (ember fill when on; a nested Pressable, so it wins the
   touch over the tile), the same toggle in the pattern detail sheet header, and a single-select
   "Show" filter DROPDOWN in the search row (bottom-sheet listing All patterns / Favorites /
@@ -198,19 +226,38 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   favorites shows a guidance empty state.
 - `src/screens/` — `Browse` (Library|On-Table tabs, circular thumbs, import, push, clear-before-run),
   `Playlists` (create/edit/delete, pattern picker grid, loop/shuffle/pause + pause-from-start/clear/
-  auto-home; edits are local until the editor closes, and closing dirty ASKS save/discard — never
-  silently writes; a copy-icon in the editor header copies the playlist's `.txt` VERBATIM to another
-  saved table via `copyPlaylistTo` — no pattern push, so patterns the target lacks just won't play),
+  auto-home. The firmware holds only ONE global playlist config, so these run options are remembered
+  app-side in `usePrefs.playlistPrefs` and re-applied on each run — keyed PER TABLE + filename
+  (`playlistPrefKey(base, name)`, `\u001F`-joined), so the same-named playlist can differ per table;
+  `usePrefs.playlistPref(base, name)` falls back to a legacy bare-filename entry for prefs saved
+  before per-table keying. Editor edits are local until the editor closes, and closing dirty ASKS
+  save/discard — never silently writes; a copy-icon in the editor header copies the playlist to another
+  saved table via `copyPlaylistTo`, resolving every item against the TARGET's /sand_patterns catalog:
+  same key keeps its path, a file the target keeps in a different folder is re-pointed by file
+  name (case-insensitive, target's casing wins), and files the target lacks are DROPPED with a
+  "skipped N" toast — no pattern push; an all-missing copy refuses instead of writing an empty list),
   `Control` (home/stop/unlock/speed + quiet-hours + live status), `Led` (effect/palette/
-  color pickers, brightness/speed sliders, run/idle overrides), `Settings` (tables + Wi-Fi + homing
-  mode/orientation + reboot + app/firmware updates).
+  color pickers, brightness/speed sliders, and a Motion-reactive card that mirrors the dw web app:
+  you **"Save current"** the selected effect as the `$LED/RunEffect`/`$LED/IdleEffect` override —
+  the board stores only an effect per hook, palette/colours/speed/brightness are global — plus a
+  Clear per hook, instead of picking a different effect from a dropdown), `Settings` (tables + Wi-Fi
+  + homing mode/orientation + reboot + app/firmware updates).
 - `src/components/` — `PolarPattern` (static SVG path preview), `LiveDrawing` (the expanded player's
   signature view: the full pattern on a disc whose rim is a glowing progress ARC in the `live`
   color — sweep driven by the same `pct` as the linear bar, so the between-patterns pause fills it
   too; NO live-ball dot (owner removed it); falls back to `PatternThumb` inside the disc when no
   local geometry exists), `PatternThumb`, `NowPlayingBar`
   (swipe up/down to expand/collapse), `Screen`, `ui.tsx` (`Button`/`Card`/`IconButton`/`Slider` —
-  the `Slider` is PanResponder-based, no native dep), `Onboarding`, `Toaster`, `AlignOrientation`
+  the `Slider` is PanResponder-based, no native dep), `IdleGate` + `IdleGateBanner` (Settings locks while
+  `isSettingsLocked(status)`: isBusy OR an active playlist, so the lock holds through the
+  between-patterns pause instead of flapping on the firmware's momentary Idle. ONE banner
+  ("Table running — settings locked." + inline Stop) sits under the Tables card, and ONE IdleGate
+  wraps EVERYTHING below it — dimmed to 0.55 (values stay readable), touches blocked, and the
+  dimmed view re-applies the ScrollView's card `gap` (a wrapper View otherwise collapses it).
+  Only the Tables card stays live (switching tables is safe). The banner is normal-flow, NOT an
+  absolute overlay — an overlay covers a short card's whole content and iOS height-constrains
+  overlay text to one truncated line),
+  `Onboarding`, `Toaster`, `AlignOrientation`
   (crash-homing pattern orientation, in Settings' Homing card: crash home never moves theta — the
   arm's direction at home time BECOMES theta=0 — so the sheet nudges the ball around the perimeter
   via absolute `/sand_goto?theta=` jogs (`board.rotateTo`, seeded from live status.theta, 409-retry

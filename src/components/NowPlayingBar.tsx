@@ -5,6 +5,7 @@ import { MaterialIcons } from '@expo/vector-icons'
 import { board } from '../api/board'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
+import { useScrollLock } from '../stores/useScrollLock'
 import { useTheme } from '../stores/useTheme'
 import { isActive } from '../api/status'
 import { loadPlaylist } from '../lib/playlists'
@@ -19,14 +20,20 @@ import { radius, spacing, font } from '../theme'
 
 const TAB_BAR = 58
 
-/** ms -> "M:SS" */
+/** ms -> "M:SS", or "H:MM:SS" once it's an hour or more (a long between-patterns
+ * pause can run to hours — "98:23" reads as nonsense). */
 function fmt(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000))
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  const ss = String(sec).padStart(2, '0')
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`
 }
 
 export function NowPlayingBar() {
   const colors = useTheme((s) => s.colors)
+  const scrollLocked = useScrollLock((s) => s.locked)
   const status = useStatus((s) => s.status)
   const refresh = useStatus((s) => s.refresh)
   const base = useBoards((s) => s.getActiveBase())
@@ -85,6 +92,21 @@ export function NowPlayingBar() {
     })
   ).current
 
+  // Between-patterns pause progress is anchored to a local start timestamp and
+  // driven by the device clock (below), not recomputed from the coarse,
+  // once-per-poll `pause_remaining`. This ticker advances it smoothly between
+  // status polls (a long pause would otherwise sit frozen for seconds).
+  const isPausing = status?.pauseRemaining != null && status?.pauseTotal != null
+  const [, forcePauseTick] = useState(0)
+  useEffect(() => {
+    if (!isPausing) return
+    const id = setInterval(() => forcePauseTick((n) => n + 1), 250)
+    return () => clearInterval(id)
+  }, [isPausing])
+  // Anchored pause window: { startAt (epoch ms), totalMs }. Seeded from the
+  // reported remaining, re-synced only on drift > 1.5s (see below).
+  const pauseAnchorRef = useRef<{ startAt: number; totalMs: number } | null>(null)
+
   if (!isActive(status) || !status || !base) {
     if (expanded) setExpanded(false)
     if (queueOpen) setQueueOpen(false)
@@ -92,21 +114,46 @@ export function NowPlayingBar() {
   }
 
   // During the between-patterns pause (state=Idle) the firmware reports no
-  // current file, so fall back to the pattern that just finished — keep its
-  // name + preview on screen instead of blanking to "Idle".
+  // current file, so show the pattern that just finished — it's what's on the
+  // sand right now. Firmware ≥ v0.1.13 names it (playlist.last), which also
+  // survives opening the app mid-pause — but ONLY the pause means "waiting for
+  // the next pattern"; in other file-less moments (homing, clearing lead-in)
+  // stick to the in-memory ref, which also covers older firmware.
   if (currentFile) lastFileRef.current = currentFile
-  const displayFile = currentFile ?? lastFileRef.current
+  const waitingNext = status.pauseRemaining != null
+  const displayFile = currentFile ?? (waitingNext ? status.playlist?.last : null) ?? lastFileRef.current
   const name = prettyName(displayFile)
 
-  // The between-patterns pause drives the same progress bar: it fills from the
-  // elapsed share of the pause (pause_total − pause_remaining), and the time row
-  // shows elapsed / -remaining of the pause instead of pattern progress.
+  // The between-patterns pause drives the same progress bar. Rather than
+  // recompute the fill from (pause_total − pause_remaining) every poll — which
+  // ticks in whole seconds and freezes the bar between polls — anchor the
+  // pause's START once and measure elapsed from the device clock. That gives a
+  // smooth, accurate fill (and countdown) that keeps advancing between polls.
+  // The anchor is seeded from the reported remaining and only re-synced when it
+  // drifts > 1.5s from the firmware (a new pause, or clock skew over a long one).
   const pausing = status.pauseRemaining != null && status.pauseTotal != null
-  const pauseElapsedMs = pausing ? (status.pauseTotal! - status.pauseRemaining!) * 1000 : 0
-  const pauseRemainMs = pausing ? status.pauseRemaining! * 1000 : 0
+  let pauseElapsedMs = 0
+  let pauseRemainMs = 0
+  if (pausing) {
+    const totalMs = status.pauseTotal! * 1000
+    const reportedRemainMs = status.pauseRemaining! * 1000
+    const a = pauseAnchorRef.current
+    const predictedRemainMs = a ? a.totalMs - (Date.now() - a.startAt) : Infinity
+    const anchor =
+      !a || a.totalMs !== totalMs || Math.abs(predictedRemainMs - reportedRemainMs) > 1500
+        ? // (Re)anchor: start = now − already-elapsed. From here elapsed comes
+          // from the clock, so it advances smoothly instead of derived from remaining.
+          { startAt: Date.now() - (totalMs - reportedRemainMs), totalMs }
+        : a
+    pauseAnchorRef.current = anchor
+    pauseElapsedMs = Math.min(totalMs, Math.max(0, Date.now() - anchor.startAt))
+    pauseRemainMs = Math.max(0, totalMs - pauseElapsedMs)
+  } else {
+    pauseAnchorRef.current = null
+  }
 
   const pct = pausing
-    ? Math.round(((status.pauseTotal! - status.pauseRemaining!) / status.pauseTotal!) * 100)
+    ? (status.pauseTotal! > 0 ? Math.round((pauseElapsedMs / (status.pauseTotal! * 1000)) * 100) : 0)
     : status.percentage ?? 0
 
   // Elapsed / estimated remaining. Only meaningful while a pattern is actually
@@ -157,6 +204,9 @@ export function NowPlayingBar() {
     status.isHoming ? 'Homing…'
     : status.isClearing ? 'Clearing…'
     : status.isQuiet ? 'Quiet hours'
+    // Between-patterns wait: the firmware reports Idle, but a playlist is mid-run.
+    // Say so plainly instead of showing the playlist line (which reads as "playing").
+    : pausing ? `Between patterns${status.playlist ? ` · ${status.playlist.index + 1}/${status.playlist.total}` : ''}`
     : status.playlist ? `${status.playlist.name ?? 'Playlist'} · ${status.playlist.index + 1}/${status.playlist.total}`
     : status.isPaused ? 'Paused'
     : status.state
@@ -221,6 +271,7 @@ export function NowPlayingBar() {
 
           <ScrollView
             showsVerticalScrollIndicator={false}
+            scrollEnabled={!scrollLocked}
             // Generous bottom padding: Android's Modal can draw behind the
             // system nav, and the speed slider must never sit under it.
             contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xxl + spacing.lg }}
@@ -231,6 +282,16 @@ export function NowPlayingBar() {
             </View>
 
             <Text numberOfLines={1} style={[styles.bigTitle, { color: colors.foreground }]}>{name || 'Idle'}</Text>
+            {/* Between-patterns wait: the name/preview above is what's on the sand
+                now; make it unmistakable that we're waiting, not still drawing it. */}
+            {pausing ? (
+              <View style={[styles.pausePill, { borderColor: colors.live }]}>
+                <MaterialIcons name="hourglass-top" size={14} color={colors.live} />
+                <Text style={{ color: colors.live, fontSize: font.size.sm, fontWeight: font.weight.medium }}>
+                  Waiting for the next pattern
+                </Text>
+              </View>
+            ) : null}
             {upNextFile ? (
               <Pressable onPress={() => setQueueOpen(true)} style={styles.upNextRow}>
                 <View style={[styles.upNextThumb, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -310,6 +371,7 @@ const styles = StyleSheet.create({
   grabber: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginTop: spacing.sm, marginBottom: spacing.xs },
   expandedHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg },
   bigTitle: { fontSize: font.size.xl + 2, fontFamily: font.family.display, letterSpacing: -0.3, textAlign: 'center' },
+  pausePill: { flexDirection: 'row', alignItems: 'center', alignSelf: 'center', gap: spacing.xs, marginTop: spacing.sm, borderWidth: 1, borderRadius: radius.pill, paddingVertical: 4, paddingHorizontal: spacing.md },
   upNextRow: { alignItems: 'center', justifyContent: 'center', gap: spacing.xs, marginTop: spacing.sm },
   upNextThumb: { width: 64, height: 64, borderRadius: 32, borderWidth: 1, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
   upNext: { fontSize: font.size.sm, textAlign: 'center', flexShrink: 1, maxWidth: '100%' },

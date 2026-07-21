@@ -3,6 +3,7 @@
 // as "unknown", never as "up to date".
 
 import { Platform } from 'react-native'
+import { parseVersion } from './version'
 
 /** Firmware releases live as GitHub Release assets (see the firmware repo's
  * RELEASING.md): flat .bin images + manifest.json per tag. */
@@ -17,6 +18,34 @@ export interface FirmwareRelease {
   firmwareUrl: string
   releaseUrl: string
   notes: string
+  /** ISO publish date, for the version picker. Absent on older code paths. */
+  publishedAt?: string
+  /** GitHub prerelease flag, for the version picker. */
+  prerelease?: boolean
+}
+
+interface GhRelease {
+  tag_name?: string
+  html_url?: string
+  body?: string
+  published_at?: string
+  prerelease?: boolean
+  assets?: { name: string; browser_download_url: string }[]
+}
+
+/** Map a GitHub release to a FirmwareRelease, or null if it has no flashable
+ * firmware.bin asset. */
+function toFirmwareRelease(r: GhRelease): FirmwareRelease | null {
+  const bin = r.assets?.find((a) => a.name === 'firmware.bin')
+  if (!r.tag_name || !bin) return null
+  return {
+    version: r.tag_name,
+    firmwareUrl: bin.browser_download_url,
+    releaseUrl: r.html_url ?? `https://github.com/${FIRMWARE_REPO}/releases`,
+    notes: r.body ?? '',
+    publishedAt: r.published_at,
+    prerelease: r.prerelease,
+  }
 }
 
 export interface AppRelease {
@@ -32,20 +61,31 @@ export async function fetchLatestFirmware(): Promise<FirmwareRelease | null> {
     headers: { Accept: 'application/vnd.github+json' },
   })
   if (!res.ok) return null
-  const r = (await res.json()) as {
-    tag_name?: string
-    html_url?: string
-    body?: string
-    assets?: { name: string; browser_download_url: string }[]
-  }
-  const bin = r.assets?.find((a) => a.name === 'firmware.bin')
-  if (!r.tag_name || !bin) return null
-  return {
-    version: r.tag_name,
-    firmwareUrl: bin.browser_download_url,
-    releaseUrl: r.html_url ?? `https://github.com/${FIRMWARE_REPO}/releases`,
-    notes: r.body ?? '',
-  }
+  return toFirmwareRelease((await res.json()) as GhRelease)
+}
+
+/** Every published firmware release that ships a flashable firmware.bin, newest
+ * version first — for the "install a specific version" picker. Best-effort
+ * (empty array on failure); unauthenticated GitHub API (60 req/h per IP), so
+ * this is fetched lazily when the picker opens, not on every launch. Includes
+ * prereleases; `/releases/latest` (fetchLatestFirmware) still excludes them. */
+export async function fetchFirmwareReleases(): Promise<FirmwareRelease[]> {
+  const res = await fetch(`https://api.github.com/repos/${FIRMWARE_REPO}/releases?per_page=100`, {
+    headers: { Accept: 'application/vnd.github+json' },
+  })
+  if (!res.ok) return []
+  const arr = (await res.json()) as GhRelease[]
+  if (!Array.isArray(arr)) return []
+  return arr
+    .map(toFirmwareRelease)
+    .filter((r): r is FirmwareRelease => r != null)
+    .sort((a, b) => {
+      const va = parseVersion(a.version)
+      const vb = parseVersion(b.version)
+      if (!va || !vb) return 0
+      for (let i = 0; i < va.length; i++) if (va[i] !== vb[i]) return vb[i] - va[i]
+      return 0
+    })
 }
 
 /** Latest store version of THIS app, or null if the store can't tell us.

@@ -13,9 +13,22 @@ import { useTheme } from '../stores/useTheme'
 import { useUpdates, appUpdateAvailable, fwUpdateAvailable, APP_VERSION } from '../stores/useUpdates'
 import { toast } from '../stores/useToast'
 import { runFirmwareUpdate, FW_STAGE_LABELS, type FwUpdateStage } from '../lib/firmwareUpdate'
+import { parseVersion } from '../lib/version'
+import type { FirmwareRelease } from '../lib/updates'
 import { FwUpdateSplash } from './FwUpdateSplash'
+import { FirmwareVersionPicker } from './FirmwareVersionPicker'
 import { Button, Card, CardTitle } from './ui'
 import { spacing, font } from '../theme'
+
+/** How a target version relates to what's on the table: 'up'grade, 'down'grade,
+ * 're'install, or null when either side is unknown. */
+function relation(target: string, current: string | null): 'up' | 'down' | 're' | null {
+  const pt = parseVersion(target)
+  const pc = parseVersion(current)
+  if (!pt || !pc) return null
+  for (let i = 0; i < pt.length; i++) if (pt[i] !== pc[i]) return pt[i] > pc[i] ? 'up' : 'down'
+  return 're'
+}
 
 export function UpdatesCard({ base }: { base: string | null }) {
   const colors = useTheme((s) => s.colors)
@@ -25,6 +38,10 @@ export function UpdatesCard({ base }: { base: string | null }) {
   const tableFw = useStatus((s) => s.status?.fw ?? null)
   const [stage, setStage] = useState<FwUpdateStage | null>(null)
   const [checking, setChecking] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  // The version currently being flashed (latest or a picked one) — drives the
+  // splash label so it names what's actually installing.
+  const [target, setTarget] = useState<FirmwareRelease | null>(null)
 
   // Deliberate re-check: bypasses the 6 h throttle (maxAge 0) and reports the
   // outcome, unlike the silent background checks on launch / Settings focus.
@@ -61,38 +78,51 @@ export function UpdatesCard({ base }: { base: string | null }) {
   const appNew = appUpdateAvailable(appLatest)
   const fwNew = fwUpdateAvailable(fwLatest, tableFw)
   // The demo table isn't real hardware — show its version, never an update.
-  const canFlash = !!base && !isDemoBase(base) && fwNew && !!fwLatest
+  const isRealTable = !!base && !isDemoBase(base)
+  const canFlash = isRealTable && fwNew && !!fwLatest
 
-  const startFwUpdate = () => {
-    if (!base || !fwLatest) return
-    Alert.alert(
-      'Update firmware',
-      `Install ${fwLatest.version}? The table restarts when it finishes (~1 minute). Keep the app open and don't power off the table.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Update',
-          onPress: async () => {
-            setStage('download')
-            try {
-              const newFw = await runFirmwareUpdate(base, fwLatest.firmwareUrl, setStage)
-              toast.success(newFw ? `Firmware updated to ${newFw}` : 'Firmware updated')
-            } catch (e) {
-              toast.error((e as Error).message || 'Firmware update failed')
-            } finally {
-              setStage(null)
-            }
-          },
+  // Flash any release (the latest, or one picked from the version list). The
+  // confirm wording adapts to whether it's an upgrade, downgrade, or reinstall.
+  const installFirmware = (release: FirmwareRelease) => {
+    if (!base) return
+    const rel = relation(release.version, tableFw)
+    const tail = "The table restarts when it finishes (~1 minute). Keep the app open and don't power off the table."
+    const { title, message, action } =
+      rel === 'down'
+        ? {
+            title: 'Downgrade firmware',
+            message: `Install the older ${release.version} over ${tableFw}? Newer features may stop working until you update again. ${tail}`,
+            action: 'Downgrade',
+          }
+        : rel === 're'
+          ? { title: 'Reinstall firmware', message: `Reinstall ${release.version}? ${tail}`, action: 'Reinstall' }
+          : { title: 'Update firmware', message: `Install ${release.version}? ${tail}`, action: 'Install' }
+    Alert.alert(title, message, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: action,
+        onPress: async () => {
+          setTarget(release)
+          setStage('download')
+          try {
+            const newFw = await runFirmwareUpdate(base, release.firmwareUrl, setStage)
+            toast.success(newFw ? `Firmware updated to ${newFw}` : `Firmware installed (${release.version})`)
+          } catch (e) {
+            toast.error((e as Error).message || 'Firmware update failed')
+          } finally {
+            setStage(null)
+            setTarget(null)
+          }
         },
-      ]
-    )
+      },
+    ])
   }
 
   return (
     <Card>
       {/* Full-screen splash while an update runs; during the reboot it shows
           a 60s countdown and closes on reconnect or zero, whichever first. */}
-      <FwUpdateSplash stage={stage} version={fwLatest?.version} />
+      <FwUpdateSplash stage={stage} version={target?.version ?? fwLatest?.version} />
       <CardTitle>About</CardTitle>
 
       <View style={styles.row}>
@@ -131,7 +161,7 @@ export function UpdatesCard({ base }: { base: string | null }) {
                 title={stage ? FW_STAGE_LABELS[stage] : `Update to ${fwLatest!.version}`}
                 icon={stage ? undefined : 'system-update-alt'}
                 loading={stage != null}
-                onPress={startFwUpdate}
+                onPress={() => installFirmware(fwLatest!)}
               />
               {stage ? (
                 <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, textAlign: 'center' }}>
@@ -140,12 +170,37 @@ export function UpdatesCard({ base }: { base: string | null }) {
               ) : null}
             </View>
           ) : null}
+
+          {/* Pick any released version (reinstall the current one or roll back).
+              Available on real tables whether or not an update is pending. */}
+          {isRealTable ? (
+            <View style={{ marginTop: spacing.sm }}>
+              <Button
+                title="Install a specific version…"
+                icon="history"
+                variant="secondary"
+                disabled={stage != null}
+                onPress={() => setPickerOpen(true)}
+              />
+            </View>
+          ) : null}
         </>
       ) : null}
 
       <View style={{ marginTop: spacing.md }}>
         <Button title="Check for updates" icon="refresh" variant="secondary" loading={checking} onPress={() => void checkNow()} />
       </View>
+
+      <FirmwareVersionPicker
+        visible={pickerOpen}
+        currentFw={tableFw}
+        busy={stage != null}
+        onClose={() => setPickerOpen(false)}
+        onSelect={(release) => {
+          setPickerOpen(false)
+          installFirmware(release)
+        }}
+      />
     </Card>
   )
 }

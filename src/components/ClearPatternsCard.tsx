@@ -99,7 +99,7 @@ export function ClearPatternsCard({ base }: { base: string }) {
   const openPicker = (slot: Slot) => {
     setQuery('')
     setPicker(slot)
-    loadTable(base) // no-op if already loaded; never re-reads mid-job
+    loadTable(base) // no-op if already loaded; deferred to idle if mid-pattern
   }
 
   const visible = useMemo(() => {
@@ -160,6 +160,9 @@ export function ClearPatternsCard({ base }: { base: string }) {
                 onChangeText={setQuery}
                 placeholder="Search"
                 placeholderTextColor={colors.mutedForeground}
+                autoCorrect={false}
+                autoCapitalize="none"
+                spellCheck={false}
                 style={[styles.searchInput, { color: colors.foreground }]}
               />
               {query ? <IconButton icon="close" size={18} color={colors.mutedForeground} onPress={() => setQuery('')} /> : null}

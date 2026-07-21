@@ -1,11 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
 import { Directory, File, Paths } from 'expo-file-system'
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake'
 import { unzipSync } from 'fflate'
 import { board } from '../api/board'
 import { usePreviews, previewKey } from '../stores/usePreviews'
-import { useStatus } from '../stores/useStatus'
-import { isBusy } from '../api/status'
 import { isSdBusy } from './sd'
 
 /** Tag for the keep-awake lock held while shards stream (screen off would
@@ -172,55 +169,8 @@ export async function syncPreviewBundle(
   return result
 }
 
-/** Auto-sync retry cap for a contended/unreachable table (see below). */
-const MAX_SYNC_ATTEMPTS = 4
-const RETRY_DELAY_MS = 45000
-
-/**
- * Kick a preview-bundle sync once per table per app session, as soon as the
- * active table is reachable and idle. Cheap when there's nothing to do (one
- * small JSON read), so once a session is plenty — a fresh bundle written
- * while the app runs is picked up on the next launch or table switch.
- *
- * A table is only marked done once the sidecar actually READ ('ok'). A 'busy'
- * or 'no-bundle' result (the latter also covers a timed-out sidecar fetch when
- * the board's single-threaded server is momentarily saturated by the status
- * poller) is retried a few times — otherwise a single contended first attempt
- * would leave a bundle-carrying table with no previews for the whole session.
- */
-export function usePreviewSync(base: string | null): void {
-  const done = useRef<Set<string>>(new Set())
-  const attempts = useRef<Record<string, number>>({})
-  const [tick, setTick] = useState(0)
-  const idle = useStatus((s) => (s.status ? !isBusy(s.status) : false))
-  const hydrated = usePreviews((s) => s.hydrated)
-
-  useEffect(() => {
-    if (!base || !idle || !hydrated) return
-    if (done.current.has(base)) return
-    let cancelled = false
-    void (async () => {
-      const res = await syncPreviewBundle(base)
-      if (cancelled) return
-      if (res.status === 'ok') {
-        done.current.add(base) // clean sidecar read — nothing more to do this session
-        return
-      }
-      // busy / no-bundle: possibly transient (contended or mid-pattern). Retry a
-      // bounded number of times before giving up so we don't hammer a card that
-      // genuinely has no bundle.
-      const n = (attempts.current[base] ?? 0) + 1
-      attempts.current[base] = n
-      if (n >= MAX_SYNC_ATTEMPTS) {
-        done.current.add(base)
-        return
-      }
-      setTimeout(() => {
-        if (!cancelled) setTick((t) => t + 1) // re-run the effect to try again
-      }, RETRY_DELAY_MS)
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [base, idle, hydrated, tick])
-}
+// Preview sync is MANUAL only — the owner doesn't want the app reading the
+// card's preview bundle on its own. `syncPreviewBundle` is called just from the
+// Settings "Sync previews from table" button (and the .zip-shard import path).
+// (There used to be a `usePreviewSync` hook that auto-ran it once per table per
+// session; removed on purpose — don't re-add an auto trigger without asking.)

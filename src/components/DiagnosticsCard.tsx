@@ -22,6 +22,16 @@ import { radius, spacing, font } from '../theme'
 
 type LogTab = 'table' | 'app'
 
+/** Wall-clock label for a collected line; date prefix only off-day so the
+ * common case stays compact next to the line's own `[+uptime]`. */
+function fmtLogTime(ts: number): string {
+  const d = new Date(ts)
+  const time = d.toLocaleTimeString([], { hour12: false })
+  return d.toDateString() === new Date().toDateString()
+    ? time
+    : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`
+}
+
 function reportHeader(base: string | null): string {
   const status = useStatus.getState().status
   return [
@@ -48,7 +58,7 @@ export function DiagnosticsCard({ base }: { base: string | null }) {
   const boardId = useBoards((s) => (base ? s.boards.find((b) => b.base === base)?.id : undefined))
   const stored = useTableLog((s) => (boardId ? s.logs[boardId] : undefined))
   const clearTableLog = useTableLog((s) => s.clear)
-  const tableLines = stored?.lines ?? []
+  const tableEntries = stored?.entries ?? []
 
   const fetchTableLog = async () => {
     if (!base) return
@@ -60,7 +70,7 @@ export function DiagnosticsCard({ base }: { base: string | null }) {
       // With history on screen a fetch failure is incidental — toast it; only
       // block the view when there's nothing to show at all.
       const msg = userMessage(e, 'read the table log')
-      if (tableLines.length > 0) toast.error(msg)
+      if (tableEntries.length > 0) toast.error(msg)
       else setTableErr(msg)
     } finally {
       setLoading(false)
@@ -82,9 +92,12 @@ export function DiagnosticsCard({ base }: { base: string | null }) {
   }, [open, tab, stored])
 
   const share = async () => {
+    const tableText = tableEntries
+      .map((e) => (e.ts != null ? `${new Date(e.ts).toISOString()} ${e.text}` : e.text))
+      .join('\n')
     const body =
       tab === 'table'
-        ? `--- Table log (collected from /sand_log) ---\n${tableLines.join('\n') || '(empty)'}`
+        ? `--- Table log (collected from /sand_log) ---\n${tableText || '(empty)'}`
         : `--- App log ---\n${appLogText() || '(empty)'}`
     const report = reportHeader(base) + body
     try {
@@ -164,26 +177,27 @@ export function DiagnosticsCard({ base }: { base: string | null }) {
             </View>
 
             {tab === 'table' ? (
-              loading && tableLines.length === 0 ? (
+              loading && tableEntries.length === 0 ? (
                 <ActivityIndicator color={colors.primary} style={{ paddingVertical: spacing.xl }} />
-              ) : tableErr && tableLines.length === 0 ? (
+              ) : tableErr && tableEntries.length === 0 ? (
                 <View style={{ paddingVertical: spacing.lg, gap: spacing.md }}>
                   <Text style={{ color: colors.mutedForeground }}>{tableErr}</Text>
                   <Button title="Try again" icon="refresh" variant="secondary" onPress={() => void fetchTableLog()} />
                 </View>
               ) : (
                 <ScrollView ref={scrollRef} style={{ flexShrink: 1 }} contentContainerStyle={{ paddingBottom: spacing.md }}>
-                  {tableLines.length === 0 ? (
+                  {tableEntries.length === 0 ? (
                     <Text style={{ color: colors.mutedForeground, paddingVertical: spacing.lg }}>Nothing collected yet.</Text>
                   ) : (
-                    tableLines.map((line, i) =>
-                      line === RESTART_MARKER ? (
+                    tableEntries.map((e, i) =>
+                      e.text === RESTART_MARKER ? (
                         <Text key={i} style={[styles.line, { color: colors.mutedForeground, textAlign: 'center', marginVertical: 4 }]}>
-                          {line}
+                          {e.text}
                         </Text>
                       ) : (
-                        <Text key={i} selectable style={[styles.line, { color: tableLevelColor(line) }]}>
-                          {line}
+                        <Text key={i} selectable style={[styles.line, { color: tableLevelColor(e.text) }]}>
+                          {e.ts != null && <Text style={{ color: colors.mutedForeground }}>{fmtLogTime(e.ts)} </Text>}
+                          {e.text}
                         </Text>
                       )
                     )
