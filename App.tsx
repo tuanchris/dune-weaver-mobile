@@ -32,8 +32,9 @@ import { useTableLogSync } from './src/lib/tableLogSync'
 import { useFavoritesPlaylistSync } from './src/lib/favoritesPlaylist'
 import { useCatalogRefreshOnIdle } from './src/lib/catalogRefresh'
 import { initAppLog } from './src/stores/useAppLog'
+import type { TabParamList } from './src/navigation'
 
-const Tab = createBottomTabNavigator()
+const Tab = createBottomTabNavigator<TabParamList>()
 
 const ICONS: Record<string, keyof typeof MaterialIcons.glyphMap> = {
   Browse: 'grid-view',

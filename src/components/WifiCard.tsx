@@ -17,6 +17,7 @@ import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
 import { toast } from '../stores/useToast'
 import { connectTableToWifi, switchTableToStandalone, WIFI_AP_BASE, type WifiSetupStage } from '../lib/wifiSetup'
+import { stopAndSettle, stopFirstWarning } from '../lib/stopFirst'
 import { Button, Card, CardTitle, IconButton } from './ui'
 import { radius, spacing, font } from '../theme'
 
@@ -128,9 +129,13 @@ export function WifiCard({ base }: { base: string | null }) {
   const connect = () => {
     if (!base || !info) return
     const target = ssid.trim()
+    // Saving Wi-Fi reboots the table, so anything drawing is stopped first —
+    // said plainly here rather than leaving the card locked until the owner
+    // goes and stops it by hand.
+    const warn = stopFirstWarning(useStatus.getState().status)
     Alert.alert(
       'Connect table to Wi-Fi',
-      `Connect the table to “${target}”? It restarts and joins that network (~1 minute). If that isn’t the Wi-Fi this phone is on, join it afterwards to keep controlling the table.`,
+      `${warn}Connect the table to “${target}”? It restarts and joins that network (~1 minute). If that isn’t the Wi-Fi this phone is on, join it afterwards to keep controlling the table.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -138,6 +143,7 @@ export function WifiCard({ base }: { base: string | null }) {
           onPress: async () => {
             setStage('saving')
             try {
+              await stopAndSettle(base)
               const outcome = await connectTableToWifi(base, target, password, setStage)
               finishPicker()
               if (outcome === 'connected') {
@@ -162,9 +168,12 @@ export function WifiCard({ base }: { base: string | null }) {
 
   const goStandalone = () => {
     if (!base || !info) return
+    // Only the STA -> AP flip reboots; from the hotspot it's live. Warn about
+    // the running pattern just in the case that actually ends it.
+    const warn = info.mode === 'sta' ? stopFirstWarning(useStatus.getState().status) : ''
     Alert.alert(
       'Use standalone hotspot',
-      `The table stops using home Wi-Fi and broadcasts its own network “${info.ap_ssid}” instead. To control it, join that network with this phone.${info.mode === 'sta' ? ' The table restarts now.' : ''}`,
+      `${warn}The table stops using home Wi-Fi and broadcasts its own network “${info.ap_ssid}” instead. To control it, join that network with this phone.${info.mode === 'sta' ? ' The table restarts now.' : ''}`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -172,6 +181,7 @@ export function WifiCard({ base }: { base: string | null }) {
           onPress: async () => {
             setStandaloneBusy(true)
             try {
+              if (info.mode === 'sta') await stopAndSettle(base)
               const { reboot } = await switchTableToStandalone(base)
               if (reboot) {
                 // The table is leaving this network — repoint its saved

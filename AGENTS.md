@@ -29,7 +29,8 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
 - Commands: `GET /command?plain=$...` — `$SD/Run=`, `$Sand/Run=<file> clear=<mode>` (pre-exec clear),
   `$Playlist/Run|Stop|Skip`, `$Playlist/Mode|Shuffle|PauseTime|PauseFromStart|ClearPattern|AutoHome=`,
   `$THR/Feed=`, `$LED/Effect|Palette|Color|Color2|Brightness|Speed|RunEffect|IdleEffect=`,
-  `$Sands/Enabled|Slots=` (quiet hours), `$X` (unlock from Alarm), `$Bye` (reboot). Built with
+  `$Sands/Enabled|Slots=` (quiet hours), `$Hostname=` (rename, fw ≥ v0.1.18 — see the rename
+  bullet), `$X` (unlock from Alarm), `$Bye` (reboot). Built with
   `encodeURIComponent` on the whole `plain` value (the firmware `arg("plain")` URL-decodes it).
   EnumSetting values are case-insensitive (`strcasecmp`); booleans are `ON`/`OFF`.
 - Files: `POST /upload` multipart (file part's **filename = full SD path**, e.g. `/patterns/x.thr`;
@@ -81,6 +82,17 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
   and flagging Newer/Older/Pre-release. Any pick runs the same `runFirmwareUpdate(base, url, …)` OTA
   flow (it already takes an arbitrary firmware URL); the confirm dialog adapts wording
   (Install / Reinstall / Downgrade) and the splash shows the target version.
+  **Release notes ("What's new")**: both rows in the About card link to a shared
+  `ReleaseNotesSheet` — a bottom sheet with a deliberately small markdown renderer (headings,
+  bullets, inline `**bold**`/`` `code` ``/links; hard-wrapped lines are JOINED into the bullet
+  above, since the firmware's release bodies wrap at ~80 cols). Firmware notes are the GitHub
+  release bodies via `fetchFirmwareReleases` (lazy on first open, installed one badged). App notes
+  come from **`src/lib/appChangelog.ts`, a BUNDLED list** — there is no fetchable source that works
+  on both stores (iOS has `releaseNotes` in the iTunes lookup, which `fetchLatestApp` now returns
+  and the sheet shows on top for a pending update; Play does NOT put "What's new" in the page HTML,
+  so it can't be scraped alongside the version) and bundling also works offline on a table-only
+  Wi-Fi. **Add an entry to `APP_CHANGELOG` whenever `app.json`'s `version` is bumped**, with the
+  same copy that goes into `fastlane/metadata/*/release_notes.txt`.
 - **WiFi control** (firmware ≥ v0.1.8 — older builds 404 these routes, which is how `WifiCard`
   detects "unsupported"): `GET /wifi_status` (`{mode:"sta"|"fallback"|"standalone", sta_ssid,
   ap_ssid, fail}`), `GET /wifi_scan` (async; `{status:"scanning"}` until done — poll ~1.5 s;
@@ -134,7 +146,14 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   images via `usePreviews.addMany` — same store as manual preview imports, keyed by `previewKey`
   basename (path-stripped, so the same pattern filed under a different folder on another table still
   resolves the same image → **previews are shared across all tables**). This is what gives bulk-loaded
-  card patterns thumbnails; 404 sidecar (no bundle) is a quiet no-op. Manual import
+  card patterns thumbnails; 404 sidecar (no bundle) is a quiet no-op. Since the sync never runs
+  itself, Browse ASKS for it: `MissingPreviewsBanner` (the FlatList header) counts patterns that can
+  only render the blank placeholder — no bundled webp, no ingested image, no local `.thr`
+  (`lib/previewCoverage.ts`, `useMissingPreviewCount`) — and taps through to Settings via
+  `navigate('Settings', {focus:'previews'})` (`src/navigation.ts` types the tab params; Settings
+  scrolls its Pattern previews card into view and outlines it for ~2.5 s). Dismissal is persisted
+  (`usePrefs.previewNagDismissedCount` = the missing count when dismissed) and the banner returns only
+  if MORE patterns end up without a thumbnail, so a partial sync doesn't re-nag. Manual import
   (`importPreviews.ts`, Settings) accepts individual images OR the bundle's `.zip` shards directly
   (unzipped with `fflate`) — the offline path to load a bundle into every table without pulling it off
   each card. **iOS container gotcha**: `usePreviews` persists preview image refs as bare FILENAMES and
@@ -148,6 +167,14 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   pattern/playlist, home, clear, center/perimeter, skip) disable + refuse via `assertNotSyncing()`
   (`sd.ts`; Stop/pause/resume never gate). The streaming phase also holds an `expo-keep-awake` lock
   so a screen-off suspend can't abandon a half-fetched shard.
+- **Imported pattern catalog** (`src/lib/importCatalog.ts` + `components/CatalogCard.tsx`, Settings —
+  the weak-Wi-Fi escape hatch): pick the card's `/patterns/index.json` off the phone (a saved
+  `/sand_patterns` response or `{patterns:[…]}` also parse) and the On-Table list is FROZEN to it —
+  `loadTable` returns early on `catalogSource === 'imported'` and never reads the board. The two
+  lists live side by side in `tableCache[base]` (`importedPatterns` vs `patterns`), so flipping the
+  toggle back and forth costs no re-import and no refetch; `addTablePattern`/`removeTablePattern`
+  write through to whichever one is active. Browse's pull-to-refresh says so instead of silently
+  doing nothing.
 - **Shared geometry**: `src/lib/thrGeometry.mjs` (plain ESM `.mjs` so BOTH the Node build script and
   Metro import it — `mjs` is in Expo's `sourceExts`). `parseThr` / `decimate` / `toXY` / `decimateThrText`.
 
@@ -183,6 +210,22 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   sets/changes/removes the password on the table (`board.setSandPassword` — carries the old key
   automatically) or just saves an existing password locally (`board.testKey` probes with `$G`;
   401 = wrong). Lost password: `$Sand/Password=` over USB serial (never gated).
+- **Renaming a table renames it on the network too** (`src/lib/renameTable.ts`, wired into Settings'
+  inline row rename): the local rename lands first and ALWAYS sticks; pushing `$Hostname=` to the
+  table is best-effort on top. The two names are different strings — the display name is free text,
+  the firmware hostname takes only `[A-Za-z0-9-]{1,32}` — so `toHostname()` derives a legal one
+  ("Living Room" → `Living-Room`, NFKD-folded) and the toast names it when it differs. **The
+  firmware version gate is not optional**: before **v0.1.18** `$Hostname=` was swallowed by
+  config.yaml's top-level `hostname:` key (in-memory only), so the board answered Ok, read the new
+  name back, and lost it on the next boot — indistinguishable from success over HTTP. So
+  `supportsRename(status.fw)` skips the push entirely on older firmware and the rename just stays
+  local (exactly the pre-feature behavior). Gated by `isSettingsLocked` like every other board-config
+  write, not `isBusy` — the between-patterns Idle would otherwise race the next pattern's start into
+  a 503 "Try again when not moving" (now mapped in `errors.ts`). On success the saved board's
+  `hostname` is updated immediately, and a base written as the OLD mDNS name (`http://dwmp.local`)
+  is re-pointed at the new one — otherwise the rename makes the table unreachable. Every non-applied
+  outcome (`unsupported`/`busy`/`invalid`/`failed`) has its own toast; the demo table supports it
+  (virtual `$Hostname`, fw `v99.0.0`) so App Review can see it work.
 - **User-facing errors go through `userMessage(e, 'create the playlist')`** (`src/lib/errors.ts`):
   it maps raw causes to actionable sentences — SD card missing/unformatted (firmware's
   "No SD card"/"filesystem inaccessible" 503s, plus `status.sd_ok === false` for otherwise-opaque
@@ -230,7 +273,11 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   app-side in `usePrefs.playlistPrefs` and re-applied on each run — keyed PER TABLE + filename
   (`playlistPrefKey(base, name)`, `\u001F`-joined), so the same-named playlist can differ per table;
   `usePrefs.playlistPref(base, name)` falls back to a legacy bare-filename entry for prefs saved
-  before per-table keying. Editor edits are local until the editor closes, and closing dirty ASKS
+  before per-table keying. A playlist with no saved pref gets `DEFAULT_PREF` — **loop + shuffle +
+  a 3 h pause between patterns + adaptive clear** (a living sculpture, not a slideshow). That
+  default is authoritative: `loadPref` no longer seeds the controls from the board's global
+  `$Playlist/*`, which held whatever the last-run playlist pushed and so made a NEW playlist
+  inherit an unrelated one's options. Editor edits are local until the editor closes, and closing dirty ASKS
   save/discard — never silently writes; a copy-icon in the editor header copies the playlist to another
   saved table via `copyPlaylistTo`, resolving every item against the TARGET's /sand_patterns catalog:
   same key keeps its path, a file the target keeps in a different folder is re-pointed by file
@@ -248,15 +295,49 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   too; NO live-ball dot (owner removed it); falls back to `PatternThumb` inside the disc when no
   local geometry exists), `PatternThumb`, `NowPlayingBar`
   (swipe up/down to expand/collapse), `Screen`, `ui.tsx` (`Button`/`Card`/`IconButton`/`Slider` —
-  the `Slider` is PanResponder-based, no native dep), `IdleGate` + `IdleGateBanner` (Settings locks while
-  `isSettingsLocked(status)`: isBusy OR an active playlist, so the lock holds through the
-  between-patterns pause instead of flapping on the firmware's momentary Idle. ONE banner
-  ("Table running — settings locked." + inline Stop) sits under the Tables card, and ONE IdleGate
-  wraps EVERYTHING below it — dimmed to 0.55 (values stay readable), touches blocked, and the
-  dimmed view re-applies the ScrollView's card `gap` (a wrapper View otherwise collapses it).
-  Only the Tables card stays live (switching tables is safe). The banner is normal-flow, NOT an
+  the `Slider` is PanResponder-based, no native dep), `IdleGate` + `IdleGateBanner`
+  (**the gate covers writes to the BOARD, and nothing else** — its scope is a contiguous block of
+  Settings, from `WifiCard` down to `StillSands`. **A PAUSE is not a stop**:
+  `IdleGate`/`isSettingsLocked(status)` gates board-CONFIG writes and OPENS while the table is
+  paused — a feed hold isn't stepping and firmware ≥ `SETTINGS_IN_HOLD_MIN_FW` (v0.1.18-rc2) accepts
+  those NVS writes in `Hold` via its `holdOk()` opt-in, so pausing is the quick way into Settings
+  mid-playlist. The version gate lives INSIDE `isSettingsLocked` (older firmware answers every
+  write with IdleError, so a pause there stays locked) — callers can't forget it. The
+  between-patterns gap unlocks too (the firmware genuinely sits in Idle there), but only with
+  >`PAUSE_UNLOCK_FLOOR_S` (10 s) left, so a 3 s gap can't flap the lock open or let a write race
+  the next pattern's start.
+  **What is deliberately OUTSIDE the gate, and why** — a running table is no reason to lock a
+  screen that isn't writing to it, and a locked-out log viewer is worst exactly when something is
+  going wrong mid-pattern: the Tables card (above the banner; switching tables is safe),
+  `CatalogCard` (imports from a picked file — its only board read, flipping back to the live
+  catalog, is `loadTable`, which already defers itself to the next idle), the preview library,
+  App branding, `DiagnosticsCard`, and `UpdatesCard` (release notes + the update check are
+  GitHub/App-Store reads, never the board). Wi-Fi and OTA stay INSIDE the gate but are not dead
+  ends in the window a pause opens: they reboot the table, which no pause survives, so instead of
+  refusing they stop it themselves after saying so in the confirm dialog (`lib/stopFirst.ts`).
+  The ONE control a pause doesn't free is **preview sync** — it streams shards off the same
+  single-threaded SD the paused job still holds its `.thr` open on — so that single Button is
+  disabled on `isJobLocked(status)` (isBusy OR a live playlist, gap included) with its own inline
+  reason, rather than dimming a card whose other half (importing from Files) is local.
+  Homing MODE + sensor offset are `holdOk` firmware-side — they're consulted at home time and
+  resuming never re-homes — so they change freely while paused; only `AlignOrientation` inside
+  that card stays strictly idle-gated, since it JOGS via
+  `/sand_goto` and `SandApi::goTo` requires a true `Idle` (it 409s in `Hold`, which the sheet's
+  retry would spin on forever).
+  ONE banner sits under the Tables card, with exactly ONE inline button: **Pause** wherever a
+  pause would help (it opens Settings without ending the run — pairing it with Stop only invites
+  the destructive one), **Stop** exactly where a pause can't (already held, or firmware too old to
+  unlock on a hold). A feed hold works from Idle too (FluidNC goes straight to `Hold`, and the
+  playlist only starts its next pattern from `Idle`), so Pause is also the button during the
+  between-patterns gap: it keeps the next pattern from starting and holds Settings open past the
+  gap instead of relocking as it winds down — which is why the banner STAYS UP through that gap
+  ("Between patterns — pause to keep settings open.") but not through a manual pause, where
+  nothing is dimmed and nothing is about to relock. The gate dims to 0.55 (values stay readable), blocks touches, and
+  re-applies the ScrollView's card `gap` (a wrapper View otherwise collapses it).
+  The banner is normal-flow, NOT an
   absolute overlay — an overlay covers a short card's whole content and iOS height-constrains
-  overlay text to one truncated line),
+  overlay text to one truncated line. `ClearPatternsCard` follows the same `!isSettingsLocked`
+  rule for its own row-level disabling),
   `Onboarding`, `Toaster`, `AlignOrientation`
   (crash-homing pattern orientation, in Settings' Homing card: crash home never moves theta — the
   arm's direction at home time BECOMES theta=0 — so the sheet nudges the ball around the perimeter

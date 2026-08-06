@@ -29,6 +29,7 @@ interface Persisted {
   playlistPrefs: Record<string, PlaylistPref>
   favorites: string[]
   favSynced?: Record<string, string[]>
+  previewNagDismissedCount?: number
 }
 
 interface PrefsStore {
@@ -53,15 +54,28 @@ interface PrefsStore {
    * distinguishes "newly favorited here" from "removed on the table". */
   favSynced: Record<string, string[]>
   setFavSynced: (boardId: string, keys: string[]) => void
+  /** How many patterns were missing a thumbnail when the user last dismissed
+   * Browse's "sync previews" banner (0 = never dismissed). The banner only comes
+   * back if MORE patterns lose their thumbnails — a sync that fills in some but
+   * not all of them lowers the count, so the nag stays gone. Global, like the
+   * previews themselves. */
+  previewNagDismissedCount: number
+  dismissPreviewNag: (missing: number) => void
   hydrate: () => Promise<void>
 }
 
 export const usePrefs = create<PrefsStore>((set, get) => {
   const save = () => {
-    const { clearMode, playlistPrefs, favorites, favSynced } = get()
+    const { clearMode, playlistPrefs, favorites, favSynced, previewNagDismissedCount } = get()
     AsyncStorage.setItem(
       KEY,
-      JSON.stringify({ clearMode, playlistPrefs, favorites: Object.keys(favorites), favSynced } satisfies Persisted),
+      JSON.stringify({
+        clearMode,
+        playlistPrefs,
+        favorites: Object.keys(favorites),
+        favSynced,
+        previewNagDismissedCount,
+      } satisfies Persisted),
     ).catch(() => {})
   }
   return {
@@ -69,6 +83,7 @@ export const usePrefs = create<PrefsStore>((set, get) => {
     playlistPrefs: {},
     favorites: {},
     favSynced: {},
+    previewNagDismissedCount: 0,
     setClearMode: (clearMode) => {
       set({ clearMode })
       save()
@@ -94,6 +109,10 @@ export const usePrefs = create<PrefsStore>((set, get) => {
       set({ favSynced: { ...get().favSynced, [boardId]: keys } })
       save()
     },
+    dismissPreviewNag: (missing) => {
+      set({ previewNagDismissedCount: Math.max(0, missing) })
+      save()
+    },
     hydrate: async () => {
       try {
         const raw = await AsyncStorage.getItem(KEY)
@@ -104,6 +123,7 @@ export const usePrefs = create<PrefsStore>((set, get) => {
             playlistPrefs: data.playlistPrefs ?? {},
             favorites: Object.fromEntries((data.favorites ?? []).map((k) => [k, true as const])),
             favSynced: data.favSynced ?? {},
+            previewNagDismissedCount: data.previewNagDismissedCount ?? 0,
           })
         }
       } catch {

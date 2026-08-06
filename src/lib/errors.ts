@@ -21,7 +21,10 @@ export function userMessage(e: unknown, doing: string): string {
     return `Couldn’t ${doing} — the app is syncing previews from the table. Try again in a moment.`
   }
 
-  if (e instanceof SdBusyError || /requires idle|http 409/.test(m)) {
+  // "not moving" is the /command route's own motion block (HTTP/BlockDuringMotion
+  // answers 503 "Try again when not moving") — same situation as a 409, and it
+  // races any client-side idle check, so it has to map here too.
+  if (e instanceof SdBusyError || /requires idle|http 409|not moving/.test(m)) {
     return `Couldn’t ${doing} — the table is busy. Stop the current pattern and try again.`
   }
 

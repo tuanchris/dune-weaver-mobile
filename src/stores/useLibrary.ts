@@ -99,6 +99,15 @@ export function previewSource(name: string | null | undefined): PreviewSource {
 }
 
 /**
+ * True when the app holds this pattern's .thr in its bundle — i.e. its shape can
+ * be drawn live from geometry (<PolarPattern>) with no preview image at all.
+ */
+export function hasBundledThr(name: string | null | undefined): boolean {
+  const key = bareName(name)
+  return !!key && key in THR_MAP
+}
+
+/**
  * Every pattern the app ships a bundled preview for — the ~100 DEFAULT
  * (top-level) patterns, keyed by filename. Custom pattern previews are no longer
  * bundled (they live in app storage), so they surface in Browse once the
@@ -119,8 +128,24 @@ interface TableCacheEntry {
   /** ETag of the last /sand_patterns manifest, sent as If-None-Match on refresh
    * so an unchanged catalog is a cheap 304 instead of a full re-download. */
   patternsEtag?: string | null
+  /** A pattern catalog imported from a file (the card's index.json), kept
+   * SEPARATE from the board-fetched `patterns` so the two sources survive each
+   * other — flipping `catalogSource` back and forth needs no re-import/refetch. */
+  importedPatterns?: string[]
+  /** Which list the On-Table view reflects. 'imported' FREEZES the catalog:
+   * loadTable never touches the board (the weak-Wi-Fi escape hatch). Absent =
+   * 'board' (normal stale-while-revalidate fetch). */
+  catalogSource?: 'board' | 'imported'
 }
 type TableCache = Record<string, TableCacheEntry>
+
+/** The pattern list a cache entry currently exposes to the On-Table view. */
+function activeCatalog(entry: TableCacheEntry | undefined): string[] {
+  if (!entry) return []
+  return entry.catalogSource === 'imported'
+    ? entry.importedPatterns ?? []
+    : entry.patterns ?? []
+}
 
 function persistTableCache(cache: TableCache) {
   AsyncStorage.setItem(TABLE_KEY, JSON.stringify(cache)).catch(() => {})
@@ -159,6 +184,19 @@ interface LibraryStore {
   /** Optimistically reflect a push/delete without re-reading the manifest. */
   addTablePattern: (name: string) => void
   removeTablePattern: (name: string) => void
+
+  /** Replace this board's IMPORTED catalog from a picked file and switch its
+   * source to 'imported' (freezing board reads). `keys` are raw pattern refs;
+   * they're normalized + deduped here. */
+  importTableCatalog: (base: string, keys: string[]) => void
+  /** Flip a board between the board-fetched catalog and the imported one.
+   * Switching to 'board' kicks a normal SWR load; 'imported' restores the
+   * stored imported list with no network. */
+  setCatalogSource: (base: string, source: 'board' | 'imported') => void
+  /** The catalog source for a board base ('board' when unset). */
+  catalogSource: (base: string | null | undefined) => 'board' | 'imported'
+  /** Count of patterns in this board's imported catalog (0 if none). */
+  importedCatalogCount: (base: string | null | undefined) => number
 
   /** True if we hold this pattern locally (bundled default or imported). */
   has: (name: string | null | undefined) => boolean
@@ -216,10 +254,14 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
     if (!base) return
     const s = get()
     const cached = s.tableCache[base]
-    // Switch the view to this board from cache (instant, no network).
+    // Switch the view to this board from cache (instant, no network). The
+    // pattern list follows the active source (imported vs board-fetched).
     if (s.tableBase !== base) {
-      set({ tableBase: base, tablePatterns: cached?.patterns ?? [], tablePlaylists: cached?.playlists ?? [] })
+      set({ tableBase: base, tablePatterns: activeCatalog(cached), tablePlaylists: cached?.playlists ?? [] })
     }
+    // Imported catalog: FROZEN. Never read /sand_patterns — this is the whole
+    // point over weak Wi-Fi. Switch the source back to 'board' to refetch.
+    if (cached?.catalogSource === 'imported') return
     // SWR: hit the board only on an explicit refresh, or the first time ever
     // (no cached patterns for this base). Otherwise the cached list stands.
     if (!force && cached?.patterns !== undefined) return
@@ -260,7 +302,7 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
     const s = get()
     const cached = s.tableCache[base]
     if (s.tableBase !== base) {
-      set({ tableBase: base, tablePatterns: cached?.patterns ?? [], tablePlaylists: cached?.playlists ?? [] })
+      set({ tableBase: base, tablePatterns: activeCatalog(cached), tablePlaylists: cached?.playlists ?? [] })
     }
     if (!force && cached?.playlists !== undefined) return
     if (get().playlistsLoading) return
@@ -282,14 +324,38 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
   addTablePattern: (name) => {
     set((s) => (s.tablePatterns.includes(name) ? s : { tablePatterns: [...s.tablePatterns, name] }))
     const base = get().tableBase
-    if (base) writeCache(get, set, base, { patterns: get().tablePatterns })
+    if (!base) return
+    // Write the mutation back to whichever list the view is showing, so a
+    // push/delete survives relaunch under both sources.
+    const field = get().tableCache[base]?.catalogSource === 'imported' ? 'importedPatterns' : 'patterns'
+    writeCache(get, set, base, { [field]: get().tablePatterns })
   },
 
   removeTablePattern: (name) => {
     set((s) => ({ tablePatterns: s.tablePatterns.filter((p) => p !== name) }))
     const base = get().tableBase
-    if (base) writeCache(get, set, base, { patterns: get().tablePatterns })
+    if (!base) return
+    const field = get().tableCache[base]?.catalogSource === 'imported' ? 'importedPatterns' : 'patterns'
+    writeCache(get, set, base, { [field]: get().tablePatterns })
   },
+
+  importTableCatalog: (base, keys) => {
+    const patterns = [...new Set(keys.map((k) => patternKey(k)).filter(Boolean))]
+    writeCache(get, set, base, { importedPatterns: patterns, catalogSource: 'imported' })
+    if (get().tableBase === base) set({ tablePatterns: patterns })
+  },
+
+  setCatalogSource: (base, source) => {
+    writeCache(get, set, base, { catalogSource: source })
+    if (get().tableBase === base) set({ tablePatterns: activeCatalog(get().tableCache[base]) })
+    // Back to board: revalidate through the normal SWR path (cheap 304 if the
+    // cached list is still current). Imported: nothing to fetch.
+    if (source === 'board') void get().loadTable(base)
+  },
+
+  catalogSource: (base) => (base ? get().tableCache[base]?.catalogSource ?? 'board' : 'board'),
+
+  importedCatalogCount: (base) => (base ? get().tableCache[base]?.importedPatterns?.length ?? 0 : 0),
 
   hydrate: async () => {
     // Load the per-board listing cache alongside the imported library so the
@@ -350,7 +416,7 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
   has: (name) => {
     const key = bareName(name)
     if (!key) return false
-    return key in THR_MAP || get().patterns.some((p) => p.name === key)
+    return hasBundledThr(key) || get().patterns.some((p) => p.name === key)
   },
 
   imported: (name) => {

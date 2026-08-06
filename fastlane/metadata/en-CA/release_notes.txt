@@ -1,9 +1,7 @@
-A big update with lots of polish:
-
-• Between patterns, the app clearly shows the table is waiting — with the pattern that’s on the sand and a live countdown to the next one
-• Install any firmware version right from the app, not just the latest
-• Motion-reactive LEDs: set the look you want, then “Save current” for playing or idle; brightness now shows as a percentage
-• Playlist options — shuffle, repeat, and time between patterns — are remembered per table
-• Table settings lock while a pattern is running, so changes don’t fail silently
-• More reliable connection to busy tables, timestamped table logs, and a smoother “copy playlist to another table”
-• Sliders no longer scroll the page while you adjust them, and long times now show hours
+• Pause the table to change its settings — no more waiting out a whole playlist (needs Dune Weaver Firmware v0.1.18 or newer)
+• Renaming a table in the app now renames it on your network too, so it shows up under the name you picked (needs Dune Weaver Firmware v0.1.18 or newer)
+• Read what changed — release notes for both the app and your table’s firmware, right in Settings
+• Patterns with no thumbnail are now flagged in Browse, with a tap through to sync previews from your table
+• Load a table’s pattern list from a file when Wi-Fi is weak, instead of waiting on the table
+• Tap the speed to type an exact value
+• A long list of pattern folders now scrolls inside the filter sheet

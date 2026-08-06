@@ -50,6 +50,8 @@ interface DemoState {
   pauseTotalMs: number
   playlist: { active: boolean; name: string; index: number; files: string[] }
   settings: Record<string, string>
+  /** Virtual $Hostname — renaming the demo table reports back like a real one. */
+  hostname: string
 }
 
 function defaultSettings(): Record<string, string> {
@@ -101,6 +103,7 @@ const S: DemoState = {
   pauseTotalMs: 0,
   playlist: { active: false, name: '', index: 0, files: [] },
   settings: defaultSettings(),
+  hostname: 'duneweaver-demo',
 }
 
 const wait = (ms = 120) => new Promise<void>((r) => setTimeout(r, ms))
@@ -204,6 +207,7 @@ function buildStatus(): RawStatus {
     led: { effect: S.settings['LED/Effect'], brightness: Number(S.settings['LED/Brightness']) || 0 },
     time: nowTime(),
     fw: DEMO_FW,
+    hostname: S.hostname,
     uptime: Math.floor((Date.now() - BOOT_MS) / 1000),
   }
 }
@@ -352,6 +356,7 @@ export const demoBoard = {
 
   // ---- Clock / system / SD (no-ops that resolve) ----
   syncTime: ok,
+  setHostname: async (_b: string, hostname: string) => { await wait(80); S.hostname = hostname },
   unlock: async () => { if (S.machine !== 'Run') S.machine = 'Idle' },
   reboot: ok,
   uploadTextFile: ok,

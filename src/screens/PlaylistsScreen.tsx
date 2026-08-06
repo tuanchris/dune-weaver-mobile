@@ -20,7 +20,7 @@ import { prettyName } from '../lib/patternName'
 import { assertNotSyncing } from '../lib/sd'
 import { usePreviews } from '../stores/usePreviews'
 import { useBoardAction } from '../lib/useBoardAction'
-import { pauseToSeconds, secondsToPause } from '../lib/pauseUnits'
+import { pauseToSeconds } from '../lib/pauseUnits'
 import { userMessage } from '../lib/errors'
 import { radius, spacing, font } from '../theme'
 
@@ -37,7 +37,10 @@ const CLEAR_DESC: Record<ClearMode, string> = {
 }
 
 const UNIT_SUFFIX: Record<PauseUnit, string> = { sec: 's', min: 'm', hr: 'h' }
-const DEFAULT_PREF: PlaylistPref = { loop: false, shuffle: false, pauseTime: 0, pauseUnit: 'sec', clearMode: 'none' }
+/** How a playlist plays until the user says otherwise: repeat forever, shuffled,
+ * three hours of stillness between patterns, and an adaptive clear before each
+ * one — the "living sand sculpture" cadence rather than a back-to-back slideshow. */
+const DEFAULT_PREF: PlaylistPref = { loop: true, shuffle: true, pauseTime: 3, pauseUnit: 'hr', clearMode: 'adaptive' }
 
 export function PlaylistsScreen() {
   // Thumb size tracks the live window width (iPad split view safe).
@@ -123,33 +126,13 @@ export function PlaylistsScreen() {
     load()
   }, [load])
 
-  // Load the saved playback options for a playlist. If it has none yet, fall
-  // back to the board's current global settings (deriving a friendly pause unit
-  // from the stored seconds) so the controls reflect reality the first time.
-  const loadPref = async (filename: string) => {
-    const saved = getPlaylistPref(base, filename)
-    if (saved) {
-      setPref(saved)
-      return
-    }
-    setPref(DEFAULT_PREF)
-    if (!base) return
-    try {
-      const s = await board.settings(base)
-      const secs = parseInt(s['Playlist/PauseTime'] ?? '0', 10) || 0
-      const { unit, value } = secondsToPause(secs)
-      const seeded: PlaylistPref = {
-        loop: (s['Playlist/Mode'] ?? '').toLowerCase() === 'loop',
-        shuffle: (s['Playlist/Shuffle'] ?? '').toUpperCase() === 'ON' || s['Playlist/Shuffle'] === '1',
-        clearMode: CLEAR_MODES.find((c) => c.mode === s['Playlist/ClearPattern'])?.mode ?? 'none',
-        pauseUnit: unit,
-        pauseTime: value,
-      }
-      // Only adopt the board seed if the user hasn't already navigated away.
-      setPref((p) => (p === DEFAULT_PREF ? seeded : p))
-    } catch {
-      // keep defaults
-    }
+  // Load the saved playback options for a playlist, or DEFAULT_PREF if it has
+  // none yet. It deliberately does NOT seed from the board's global
+  // $Playlist/* settings any more: those hold whatever the last-run playlist
+  // pushed, so seeding from them made a brand-new playlist inherit an
+  // unrelated one's options instead of the intended defaults.
+  const loadPref = (filename: string) => {
+    setPref(getPlaylistPref(base, filename) ?? DEFAULT_PREF)
   }
 
   const openCreate = () => {

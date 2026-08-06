@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Alert, Image, ScrollView, StyleSheet, Text, TextInput, View, Pressable } from 'react-native'
+import { ActivityIndicator, Alert, Image, type LayoutChangeEvent, ScrollView, StyleSheet, Text, TextInput, View, Pressable } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
+import { useNavigation, useRoute } from '@react-navigation/native'
 import { board, normalizeBase, testBoard, CLEAR_MODES, type ClearMode } from '../api/board'
 import { isDemoBase } from '../api/demoBoard'
+import { isJobLocked, isSettingsLocked } from '../api/status'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
@@ -14,6 +16,7 @@ import { syncPreviewBundle } from '../lib/previewSync'
 import { Button, Card, CardTitle, IconButton, Select, Toggle } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { AlignOrientation } from '../components/AlignOrientation'
+import { CatalogCard } from '../components/CatalogCard'
 import { ClearPatternsCard } from '../components/ClearPatternsCard'
 import { SecurityCard } from '../components/SecurityCard'
 import { StillSands } from '../components/StillSands'
@@ -23,9 +26,11 @@ import { DiagnosticsCard } from '../components/DiagnosticsCard'
 import { IdleGate, IdleGateBanner } from '../components/IdleGate'
 import { userMessage } from '../lib/errors'
 import { useDiscovery, type DiscoveredTable } from '../lib/discovery'
+import { syncHostname, renameMessage } from '../lib/renameTable'
 import { playlistName } from '../lib/playlists'
 import { pickLogo, clearLogo } from '../lib/branding'
 import { pauseToSeconds, secondsToPause } from '../lib/pauseUnits'
+import type { SettingsRoute, TabNav } from '../navigation'
 import { radius, spacing, font } from '../theme'
 
 // Homing modes the firmware exposes via $Sand/HomingMode (mirrors dw).
@@ -52,17 +57,37 @@ export function SettingsScreen() {
   const [name, setName] = useState('')
   const [host, setHost] = useState('')
   const [testing, setTesting] = useState(false)
-  // Inline rename of an existing table row.
+  // Inline rename of an existing table row. Renaming here also renames the
+  // table ON the network ($Hostname) when its firmware supports it — see
+  // lib/renameTable.ts; the local rename lands first and always sticks.
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
+  // The row's TextInput fires onSubmitEditing AND onEndEditing, which can both
+  // land before a re-render — a ref (not the state) is what makes commit
+  // idempotent, so the hostname push never runs twice.
+  const editingIdRef = useRef<string | null>(null)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
   const startEdit = (id: string, current: string) => {
+    editingIdRef.current = id
     setEditingId(id)
     setEditName(current)
   }
   const commitEdit = () => {
-    if (!editingId) return
-    renameBoard(editingId, editName)
+    const id = editingIdRef.current
+    if (!id) return
+    editingIdRef.current = null
     setEditingId(null)
+    const before = useBoards.getState().boards.find((b) => b.id === id)
+    const next = editName.trim()
+    if (!before || !next || next === before.name) return
+    renameBoard(id, next)
+    setRenamingId(id)
+    void syncHostname(id, next)
+      .then((outcome) => {
+        const msg = renameMessage(outcome, next)
+        if (msg) toast[msg.kind](msg.text)
+      })
+      .finally(() => setRenamingId((cur) => (cur === id ? null : cur)))
   }
   // Auto-play on boot: which playlist runs after the table powers on + homes,
   // plus the boot-run options (separate from the manual-run $Playlist/* settings).
@@ -75,14 +100,26 @@ export function SettingsScreen() {
   const [bootPauseFromStart, setBootPauseFromStart] = useState(false)
   const [bootClear, setBootClear] = useState<ClearMode>('none')
   // Homing mode ($Sand/HomingMode) + sensor offset ($Sand/ThetaOffset, degrees).
-  // Both are idle-gated by the firmware, so we only allow changes when idle.
+  // Both are holdOk firmware-side, so they follow the settings lock (writable
+  // while paused), not a strict Idle — see homingWritable below.
   const [homingMode, setHomingMode] = useState<'crash' | 'sensor'>('sensor')
   const [thetaOffset, setThetaOffset] = useState('0')
   // Auto-home during playlists ($Playlist/AutoHome=<n>, 0 = off): re-home every N
   // patterns to correct mechanical drift over long runs.
   const [autoHomeEnabled, setAutoHomeEnabled] = useState(false)
   const [autoHomeEvery, setAutoHomeEvery] = useState('5')
-  // The firmware rejects homing-mode/offset writes unless the table is Idle.
+  // Homing MODE + sensor offset are consulted at home time only, and resuming a
+  // paused job never re-homes — so firmware >= SETTINGS_IN_HOLD_MIN_FW takes
+  // these writes during a pause like the other settings (holdOk in the
+  // firmware's SettingsDefinitions.cpp).
+  const homingWritable = useStatus((s) => !isSettingsLocked(s.status))
+  // Preview sync is the one thing here a pause doesn't free — it streams shards
+  // off the SD card the running job is playing from. Everything else on this
+  // screen below the gate is local to the phone.
+  const syncBlocked = useStatus((s) => isJobLocked(s.status))
+  // ALIGNING the orientation is different: it jogs via /sand_goto, and
+  // SandApi::goTo requires a true Idle (it 409s in Hold, which the sheet would
+  // retry against forever). So that one stays strictly idle-gated.
   const tableIdle = useStatus((s) => (s.status?.state ?? 'Idle') === 'Idle')
   // Remember the last playlist so the Enable toggle can restore it.
   const lastPlaylistRef = useRef('')
@@ -119,9 +156,51 @@ export function SettingsScreen() {
   const [syncingPreviews, setSyncingPreviews] = useState(false)
   const [syncMsg, setSyncMsg] = useState<string | null>(null)
 
+  // Deep link from Browse's "N patterns without a thumbnail" banner
+  // (navigate('Settings', {focus: 'previews'})): scroll the Pattern previews
+  // card into view and outline it briefly — it sits well below the fold.
+  const route = useRoute<SettingsRoute>()
+  const navigation = useNavigation<TabNav>()
+  const scrollRef = useRef<ScrollView>(null)
+  const previewsY = useRef(0)
+  const pendingFocus = useRef(false)
+  const [flashPreviews, setFlashPreviews] = useState(false)
+
+  const scrollToPreviews = useCallback((): boolean => {
+    if (!previewsY.current) return false // not laid out yet — onLayout will do it
+    scrollRef.current?.scrollTo({ y: Math.max(0, previewsY.current - spacing.lg), animated: true })
+    return true
+  }, [])
+
+  const onPreviewsLayout = (e: LayoutChangeEvent) => {
+    previewsY.current = e.nativeEvent.layout.y
+    if (pendingFocus.current && scrollToPreviews()) pendingFocus.current = false
+  }
+
+  useEffect(() => {
+    if (route.params?.focus !== 'previews') return
+    pendingFocus.current = true
+    setFlashPreviews(true)
+    // First mount of this tab: give the ScrollView a beat to lay out (onLayout
+    // covers the case where it's still not measured by then).
+    const scroll = setTimeout(() => {
+      if (scrollToPreviews()) pendingFocus.current = false
+    }, 300)
+    // Clearing the param last means tapping the banner again re-runs this.
+    const done = setTimeout(() => {
+      pendingFocus.current = false
+      setFlashPreviews(false)
+      navigation.setParams({ focus: undefined })
+    }, 2800)
+    return () => {
+      clearTimeout(scroll)
+      clearTimeout(done)
+    }
+  }, [route.params?.focus, navigation, scrollToPreviews])
+
   // Pull the preview bundle the SD Card Pattern Manager writes to the card.
-  // This also runs automatically once per session; the button is for "I just
-  // updated the card" moments and for making the outcome visible.
+  // Manual only (see lib/previewSync.ts) — this button is the single trigger,
+  // for "I just updated the card" moments, with the outcome made visible.
   const doSyncPreviews = async () => {
     if (!base) return
     setSyncingPreviews(true)
@@ -273,7 +352,7 @@ export function SettingsScreen() {
     const prev = homingMode
     setHomingMode(mode)
     board.setHomingMode(base, mode).catch(() => {
-      toast.error(tableIdle ? 'Could not save homing mode' : 'Stop the pattern to change homing mode')
+      toast.error(homingWritable ? 'Could not save homing mode' : 'Pause or stop the table to change the homing mode')
       setHomingMode(prev)
       loadSettings()
     })
@@ -283,7 +362,7 @@ export function SettingsScreen() {
     const deg = (((Math.round(Number(thetaOffset) || 0)) % 360) + 360) % 360 // 0..359
     setThetaOffset(String(deg))
     board.setThetaOffset(base, deg).catch(() => {
-      toast.error(tableIdle ? 'Could not save sensor offset' : 'Stop the pattern to change sensor offset')
+      toast.error(homingWritable ? 'Could not save sensor offset' : 'Pause or stop the table to change the sensor offset')
       loadSettings()
     })
   }
@@ -333,7 +412,7 @@ export function SettingsScreen() {
 
   return (
     <Screen title="Settings">
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160, gap: spacing.lg }}>
+      <ScrollView ref={scrollRef} contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160, gap: spacing.lg }}>
         <Card>
           <CardTitle>Tables</CardTitle>
           {boards.length === 0 ? (
@@ -365,9 +444,16 @@ export function SettingsScreen() {
                     ) : (
                       <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>{b.name}</Text>
                     )}
-                    <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{b.base}</Text>
+                    <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>
+                      {b.base}
+                      {/* The name the network knows it by — only worth showing
+                          when it differs from the display name above. */}
+                      {b.hostname && b.hostname.toLowerCase() !== b.name.trim().toLowerCase() ? ` · ${b.hostname}.local` : ''}
+                    </Text>
                   </View>
-                  {editing ? (
+                  {renamingId === b.id ? (
+                    <ActivityIndicator color={colors.primary} style={{ width: 34 }} />
+                  ) : editing ? (
                     <IconButton icon="check" size={20} color={colors.primary} onPress={commitEdit} />
                   ) : (
                     <IconButton icon="edit" size={18} color={colors.mutedForeground} onPress={() => startEdit(b.id, b.name)} />
@@ -433,11 +519,20 @@ export function SettingsScreen() {
           </View>
         </Card>
 
-        {/* Everything below locks while a pattern/playlist runs (IdleGate):
+        {/* The BOARD-CONFIG cards lock while a pattern/playlist runs (IdleGate):
             the firmware rejects most of these writes mid-job anyway — surface
             that up front instead of failing after the tap. One banner with the
-            explanation + Stop; the single gate below just dims and blocks.
-            Only the Tables card above stays live (switching tables is safe). */}
+            explanation + Pause/Stop; the single gate just dims and blocks.
+            PAUSING the table opens the gate (firmware ≥ v0.1.18-rc2 takes the
+            writes in Hold).
+
+            The gate ENDS after Still Sands. Everything past it is local to the
+            phone or read-only — the pattern catalog (imported from a file), the
+            preview library, app branding, logs, and About's release notes and
+            update check — so none of it locks; see IdleGate.tsx. Wi-Fi and
+            firmware updates stay inside the gate but are not dead ends while
+            paused: they reboot the table, so they stop it themselves after
+            saying so in their confirm dialog (lib/stopFirst.ts). */}
         <IdleGateBanner base={base} />
         <IdleGate>
         <WifiCard base={base} />
@@ -542,8 +637,8 @@ export function SettingsScreen() {
                 <Pressable
                   key={mode}
                   onPress={() => changeHomingMode(mode)}
-                  disabled={!tableIdle}
-                  style={[styles.homingOpt, { borderColor: on ? colors.primary : colors.border, backgroundColor: on ? colors.cardElevated : 'transparent', opacity: tableIdle ? 1 : 0.5 }]}
+                  disabled={!homingWritable}
+                  style={[styles.homingOpt, { borderColor: on ? colors.primary : colors.border, backgroundColor: on ? colors.cardElevated : 'transparent', opacity: homingWritable ? 1 : 0.5 }]}
                 >
                   <MaterialIcons name={on ? 'radio-button-checked' : 'radio-button-unchecked'} size={20} color={on ? colors.primary : colors.mutedForeground} />
                   <View style={{ flex: 1 }}>
@@ -555,8 +650,13 @@ export function SettingsScreen() {
             })}
 
             {homingMode === 'crash' ? (
-              <View style={{ marginTop: spacing.sm }}>
+              <View style={{ marginTop: spacing.sm, opacity: tableIdle ? 1 : 0.5 }} pointerEvents={tableIdle ? 'auto' : 'none'}>
                 <AlignOrientation base={base} />
+                {!tableIdle ? (
+                  <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.xs }}>
+                    Aligning moves the ball, so it needs the table stopped — not just paused.
+                  </Text>
+                ) : null}
               </View>
             ) : null}
 
@@ -567,9 +667,9 @@ export function SettingsScreen() {
                   value={thetaOffset}
                   onChangeText={(t) => setThetaOffset(t.replace(/[^0-9]/g, ''))}
                   onEndEditing={commitThetaOffset}
-                  editable={tableIdle}
+                  editable={homingWritable}
                   keyboardType="number-pad"
-                  style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground, opacity: tableIdle ? 1 : 0.5 }]}
+                  style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground, opacity: homingWritable ? 1 : 0.5 }]}
                 />
                 <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.sm }}>
                   Angle the radial arm is offset by — pick a value so it points East.
@@ -577,9 +677,9 @@ export function SettingsScreen() {
               </View>
             ) : null}
 
-            {!tableIdle ? (
+            {!homingWritable ? (
               <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.sm }}>
-                Homing mode and offset can only change while the table is idle.
+                Pause or stop the table to change the homing mode or offset.
               </Text>
             ) : null}
 
@@ -616,21 +716,35 @@ export function SettingsScreen() {
         {base ? <ClearPatternsCard base={base} /> : null}
 
         {base ? <StillSands base={base} /> : null}
+        </IdleGate>
 
-        <Card>
+        {base && !isDemoBase(base) ? <CatalogCard base={base} /> : null}
+
+        <View onLayout={onPreviewsLayout}>
+        <Card style={flashPreviews ? { borderColor: colors.primary } : undefined}>
           <CardTitle>Pattern previews</CardTitle>
           <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginBottom: spacing.md }}>
-            Thumbnails for patterns loaded straight onto the SD card. “Sync previews from table” pulls the preview bundle the SD Card Pattern Manager writes to the card (it also happens automatically once per session, and is shared across every table). Or import manually — pick individual images or the bundle’s .zip shards directly. Everything’s matched to patterns by file name (e.g. “star.thr.webp” → the “star.thr” pattern); use black-on-transparent exports like the built-in library.
+            Thumbnails for patterns loaded straight onto the SD card. “Sync previews from table” pulls the preview bundle the SD Card Pattern Manager writes to the card — only when you ask, and what it finds is shared across every table. Or import manually — pick individual images or the bundle’s .zip shards directly. Everything’s matched to patterns by file name (e.g. “star.thr.webp” → the “star.thr” pattern); use black-on-transparent exports like the built-in library.
           </Text>
           {base ? (
             <View style={{ marginBottom: spacing.sm }}>
+              {/* The one control on this screen a PAUSE doesn't free: syncing
+                  streams shards off the same single-threaded SD the paused job
+                  still holds its .thr open on. Disabling the button (rather
+                  than dimming the card) keeps the local import beside it live. */}
               <Button
                 title="Sync previews from table"
                 icon="sync"
                 variant="secondary"
                 loading={syncingPreviews}
+                disabled={syncBlocked}
                 onPress={doSyncPreviews}
               />
+              {syncBlocked && !syncingPreviews ? (
+                <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.xs, textAlign: 'center' }}>
+                  Syncing reads the SD card the pattern is playing from — stop the table first.
+                </Text>
+              ) : null}
               {syncingPreviews ? (
                 <Text
                   style={{
@@ -660,6 +774,7 @@ export function SettingsScreen() {
             </View>
           ) : null}
         </Card>
+        </View>
 
         <Card>
           <CardTitle>App branding</CardTitle>
@@ -686,7 +801,6 @@ export function SettingsScreen() {
 
         {/* About stays the last card. */}
         <UpdatesCard base={base} />
-        </IdleGate>
       </ScrollView>
     </Screen>
   )

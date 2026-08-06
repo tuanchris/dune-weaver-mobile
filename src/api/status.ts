@@ -1,6 +1,8 @@
 // Board status types + translation to the app's view model.
 // Mirrors fluidncAdapter.translateStatus from the web app.
 
+import { isNewer } from '../lib/version'
+
 export interface RawStatus {
   state: string // Idle | Run | Hold | Home | Jog | Alarm | ...
   theta: number // radians (table's native theta-rho frame, same as .thr)
@@ -191,12 +193,56 @@ export function isBusy(s: Status | null): boolean {
 }
 
 /**
- * Should board-config settings be locked? isBusy PLUS the whole playlist run:
- * during the between-patterns pause the firmware reports Idle, but the next
- * pattern re-busies moments later — unlocking there would flap the lock every
- * transition and invite writes that race the pause's end.
+ * Should board-config settings be locked? A PAUSE is not a lock: pausing is the
+ * owner's way of saying "hold still while I change something", and firmware
+ * ≥ SETTINGS_IN_HOLD_MIN_FW accepts the sand settings' NVS writes in Hold (see
+ * Setting::check_state / allowInHold in the firmware). Two kinds of pause count:
+ *
+ *  - a manual pause (`isPaused`, state Hold) — only on firmware that takes the
+ *    write, since older builds answer every one with IdleError. The gate lives
+ *    here rather than in each caller so none of them can forget it.
+ *  - the between-patterns gap, where the firmware genuinely sits in Idle and
+ *    always accepted writes. Only unlocked when there is real time left
+ *    (PAUSE_UNLOCK_FLOOR_S), so a 3 s gap doesn't flap the lock open and a
+ *    write can't race the next pattern's start.
+ *
+ * Everything else about a run still locks. Note this gates CONFIG writes only —
+ * SD file work (preview sync) follows `isJobLocked`, because a paused job still
+ * holds its file open, and reboots (Wi-Fi, OTA) stop the table themselves
+ * (lib/stopFirst.ts) rather than being locked out.
  */
 export function isSettingsLocked(s: Status | null): boolean {
   if (!s) return false
+  if (s.isPaused) return !settingsWritableInHold(s.fw)
+  if (s.pauseRemaining != null) return s.pauseRemaining <= PAUSE_UNLOCK_FLOOR_S
+  return isBusy(s) || s.playlist != null
+}
+
+/**
+ * Is there a job a pause wouldn't make safe? Stricter than isSettingsLocked:
+ * the whole playlist run counts, including its between-patterns gap. For the
+ * few actions that stream off the SD card the running job still owns — the
+ * preview-bundle sync — where a pause isn't enough and only a stop will do.
+ */
+export function isJobLocked(s: Status | null): boolean {
+  if (!s) return false
   return isBusy(s) || s.playlist != null || s.pauseRemaining != null
+}
+
+/** Seconds of between-patterns pause below which settings stay locked. */
+const PAUSE_UNLOCK_FLOOR_S = 10
+
+/** First firmware whose sand settings accept writes while paused (Hold).
+ * Names the exact prerelease that carries it — v0.1.18-rc1 predates it, and
+ * parseVersion ranks rc tails, so that build correctly reads as too old. */
+export const SETTINGS_IN_HOLD_MIN_FW = 'v0.1.18-rc2'
+
+/**
+ * Will this table take a settings write while PAUSED? Older firmware rejects
+ * every NVS write outside Idle/Alarm, so a paused table there is still locked.
+ * Unknown version (very old build) => no.
+ */
+export function settingsWritableInHold(fw: string | null | undefined): boolean {
+  if (!fw) return false
+  return !isNewer(SETTINGS_IN_HOLD_MIN_FW, fw)
 }

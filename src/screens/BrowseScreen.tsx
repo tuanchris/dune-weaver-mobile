@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, Alert, FlatList, Modal, Pressable, RefreshControl, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
+import { ActivityIndicator, Alert, FlatList, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board, type ClearMode } from '../api/board'
@@ -16,6 +16,8 @@ import { updateTableManifest } from '../lib/tableManifest'
 import { importThr, type ImportedThr } from '../lib/importPattern'
 import { PatternThumb } from '../components/PatternThumb'
 import { PolarPattern } from '../components/PolarPattern'
+import { MissingPreviewsBanner } from '../components/MissingPreviewsBanner'
+import { useMissingPreviewCount } from '../lib/previewCoverage'
 import { Button, IconButton } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { EmptyState } from '../components/EmptyState'
@@ -62,7 +64,7 @@ const FAVORITES = '__fav__'
 export function BrowseScreen() {
   const colors = useTheme((s) => s.colors)
   // Thumb size tracks the live window width (rotation / iPad split view safe).
-  const { width } = useWindowDimensions()
+  const { width, height } = useWindowDimensions()
   const thumb = Math.floor((width - spacing.md * 2 - spacing.md * (COLS - 1)) / COLS)
   const base = useBoards((s) => s.getActiveBase())
   const refreshStatus = useStatus((s) => s.refresh)
@@ -103,6 +105,12 @@ export function BrowseScreen() {
   // Pull-to-refresh: re-read the manifest. While the table is running the read
   // is deferred (loadTable records it) — say so, then it refreshes at idle.
   const refreshTable = () => {
+    // Imported catalog is frozen — a board read would defeat the point. Point
+    // the user at the switch instead of silently doing nothing.
+    if (useLibrary.getState().catalogSource(base) === 'imported') {
+      toast.info('Using an imported catalog — switch it off in Settings to refresh from the table')
+      return
+    }
     if (isBusy(useStatus.getState().status)) {
       toast.info('Table is running — patterns will refresh when it’s idle')
     }
@@ -119,6 +127,11 @@ export function BrowseScreen() {
   }, [imported, patterns])
 
   const onTableSet = useMemo(() => new Set(patterns), [patterns])
+
+  // Patterns that can only render the blank placeholder — no bundled webp, no
+  // ingested preview image, no local geometry. Always on-table ones the card was
+  // bulk-loaded with; the banner points at Settings' preview sync.
+  const missingPreviews = useMissingPreviewCount(allNames)
 
   // Distinct subfolders present in the library. Only worth showing the filter
   // when patterns actually live in subfolders (e.g. custom_patterns/).
@@ -363,7 +376,13 @@ export function BrowseScreen() {
               <IconButton icon="close" size={26} color={colors.foreground} onPress={() => setFilterOpen(false)} />
             </View>
             <View style={[styles.detailRule, { backgroundColor: colors.border }]} />
-            <View style={styles.filterList}>
+            {/* Cap the list height so a big catalog's folders scroll inside the
+                sheet instead of overflowing the screen. */}
+            <ScrollView
+              style={[styles.filterList, { maxHeight: height * 0.55 }]}
+              contentContainerStyle={{ gap: 2 }}
+              showsVerticalScrollIndicator
+            >
               {filterOptions.map(({ key, label, icon }) => {
                 const on = filter === key
                 const fav = key === FAVORITES
@@ -389,7 +408,7 @@ export function BrowseScreen() {
                   </Pressable>
                 )
               })}
-            </View>
+            </ScrollView>
             <SafeAreaView edges={['bottom']} />
           </Pressable>
         </Pressable>
@@ -403,6 +422,7 @@ export function BrowseScreen() {
         contentContainerStyle={{ padding: spacing.md, paddingBottom: 160 }}
         columnWrapperStyle={{ gap: spacing.md }}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={refreshTable} tintColor={colors.primary} />}
+        ListHeaderComponent={<MissingPreviewsBanner missing={missingPreviews} />}
         ListEmptyComponent={
           loading ? (
             <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} />
@@ -543,7 +563,7 @@ export function BrowseScreen() {
 const styles = StyleSheet.create({
   searchRow: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.md, paddingTop: spacing.sm, marginBottom: spacing.sm },
   favBadge: { position: 'absolute', top: -2, right: -2, width: 26, height: 26, borderRadius: 13, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  filterList: { marginTop: spacing.sm, gap: 2 },
+  filterList: { marginTop: spacing.sm },
   filterRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 52, borderRadius: radius.md, paddingHorizontal: spacing.md },
   filterLabel: { flex: 1, fontSize: font.size.md, fontWeight: font.weight.medium, textTransform: 'capitalize' },
   control: { shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 1 },

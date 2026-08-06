@@ -714,6 +714,15 @@ const realBoard = {
   unlock: (base: string) => command(base, '$X'),
   /** Reboot the controller ($Bye); it needs ~25-30s to rejoin Wi-Fi. */
   reboot: (base: string) => command(base, '$Bye'),
+  /**
+   * Rename the table on the network ($Hostname; firmware >= v0.1.18 — older
+   * builds accept the write, answer Ok, and silently drop it, so callers MUST
+   * version-gate; see lib/renameTable.ts). Applies live to /sand_status and
+   * <name>.local; the router's DHCP name follows on the table's next reboot.
+   * Letters/digits/"-" only, 1..32 chars — the firmware rejects anything else.
+   * Idle-gated like every /command write (503 during motion).
+   */
+  setHostname: (base: string, hostname: string) => command(base, `$Hostname=${hostname}`),
   /** Ask whether an OTA firmware update can start ("ready" vs "busy"). */
   updateProbe,
   /** Flash a firmware image over OTA; the board reboots itself on success. */

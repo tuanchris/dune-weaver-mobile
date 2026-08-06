@@ -9,6 +9,7 @@ import { FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View, useWindo
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board } from '../api/board'
+import { isSettingsLocked } from '../api/status'
 import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
 import { useLibrary, patternKey } from '../stores/useLibrary'
@@ -40,7 +41,9 @@ export function ClearPatternsCard({ base }: { base: string }) {
   const { width: winW } = useWindowDimensions()
   const gridThumb = Math.floor((winW - spacing.md * 2 - spacing.md * (GRID_COLS - 1)) / GRID_COLS)
   const colors = useTheme((s) => s.colors)
-  const tableIdle = useStatus((s) => (s.status?.state ?? 'Idle') === 'Idle')
+  // Writable whenever the settings lock is open — which now includes a paused
+  // table, not just an idle one ($Playlist/Clear* accept writes in Hold).
+  const writable = useStatus((s) => !isSettingsLocked(s.status))
   const tablePatterns = useLibrary((s) => s.tablePatterns)
   const loadTable = useLibrary((s) => s.loadTable)
 
@@ -75,7 +78,7 @@ export function ClearPatternsCard({ base }: { base: string }) {
     else setOutPath(sdPath)
     const fn = slot === 'in' ? board.setPlaylistClearIn : board.setPlaylistClearOut
     fn(base, sdPath).catch((e) => {
-      toast.error(tableIdle ? userMessage(e, 'save the clear pattern') : 'Stop the pattern to change the clear pattern')
+      toast.error(writable ? userMessage(e, 'save the clear pattern') : 'Pause or stop the table to change the clear pattern')
       setInPath(prevIn)
       setOutPath(prevOut)
     })
@@ -91,7 +94,7 @@ export function ClearPatternsCard({ base }: { base: string }) {
     const n = Math.max(0, Math.round(Number(speed) || 0))
     setSpeed(String(n))
     board.setPlaylistClearSpeed(base, n).catch((e) => {
-      toast.error(tableIdle ? userMessage(e, 'save the clear speed') : 'Stop the pattern to change the clear speed')
+      toast.error(writable ? userMessage(e, 'save the clear speed') : 'Pause or stop the table to change the clear speed')
       load()
     })
   }
@@ -117,8 +120,8 @@ export function ClearPatternsCard({ base }: { base: string }) {
         Choose which pattern erases the sand before the next one. The built-ins work for most tables; pick your own for a custom look. Needs firmware v0.1.11 or newer.
       </Text>
 
-      <ClearRow label="Clear from center" iconKey={inKey} disabled={!tableIdle} onChange={() => openPicker('in')} />
-      <ClearRow label="Clear from edge" iconKey={outKey} disabled={!tableIdle} onChange={() => openPicker('out')} />
+      <ClearRow label="Clear from center" iconKey={inKey} disabled={!writable} onChange={() => openPicker('in')} />
+      <ClearRow label="Clear from edge" iconKey={outKey} disabled={!writable} onChange={() => openPicker('out')} />
 
       <View style={{ marginTop: spacing.md }}>
         <Text style={[styles.label, { color: colors.foreground }]}>Clear speed (mm/min)</Text>
@@ -126,18 +129,18 @@ export function ClearPatternsCard({ base }: { base: string }) {
           value={speed}
           onChangeText={(t) => setSpeed(t.replace(/[^0-9]/g, ''))}
           onEndEditing={commitSpeed}
-          editable={tableIdle}
+          editable={writable}
           keyboardType="number-pad"
-          style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground, opacity: tableIdle ? 1 : 0.5 }]}
+          style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground, opacity: writable ? 1 : 0.5 }]}
         />
         <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.sm }}>
           How fast the clear runs. 0 = same speed as the pattern.
         </Text>
       </View>
 
-      {!tableIdle ? (
+      {!writable ? (
         <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.sm }}>
-          Clear settings can only change while the table is idle.
+          Pause or stop the table to change the clear settings.
         </Text>
       ) : null}
 

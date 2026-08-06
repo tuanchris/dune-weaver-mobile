@@ -52,6 +52,9 @@ export interface AppRelease {
   version: string
   /** Store page to send the user to. */
   url: string
+  /** The store's "What's new" for that version. iOS only — Play doesn't put it
+   * in the page HTML, so Android falls back to the bundled changelog. */
+  notes?: string
 }
 
 /** Latest published firmware release, or null if unreachable / no firmware.bin
@@ -97,10 +100,14 @@ export async function fetchLatestApp(): Promise<AppRelease | null> {
     for (const q of [`bundleId=${APP_BUNDLE_ID}`, `id=${APP_STORE_ID}`]) {
       const res = await fetch(`https://itunes.apple.com/lookup?${q}`)
       if (!res.ok) continue
-      const r = (await res.json()) as { results?: { version?: string; trackViewUrl?: string }[] }
+      const r = (await res.json()) as { results?: { version?: string; trackViewUrl?: string; releaseNotes?: string }[] }
       const hit = r.results?.[0]
       if (hit?.version) {
-        return { version: hit.version, url: hit.trackViewUrl ?? `https://apps.apple.com/app/id${APP_STORE_ID}` }
+        return {
+          version: hit.version,
+          url: hit.trackViewUrl ?? `https://apps.apple.com/app/id${APP_STORE_ID}`,
+          notes: hit.releaseNotes?.trim() || undefined,
+        }
       }
     }
     return null
