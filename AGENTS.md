@@ -92,7 +92,13 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
   and the sheet shows on top for a pending update; Play does NOT put "What's new" in the page HTML,
   so it can't be scraped alongside the version) and bundling also works offline on a table-only
   Wi-Fi. **Add an entry to `APP_CHANGELOG` whenever `app.json`'s `version` is bumped**, with the
-  same copy that goes into `fastlane/metadata/*/release_notes.txt`.
+  same copy that goes into `fastlane/metadata/en-CA/release_notes.txt` (App Store, 4000 chars) AND
+  a SHORTER cut in `fastlane/metadata/android/en-CA/changelogs/<versionCode>.txt` — **Play caps
+  "What's new" at 500 characters** and rejects the whole edit commit above it
+  (`403 … notes in language en-CA with length N, which is too long`). Play notes are not set by
+  `eas submit` at all: attach them afterwards via the androidpublisher API (create edit → GET
+  `tracks/production` → add `releaseNotes` to the release holding the new versionCode → PUT →
+  `:commit`), authenticating with the same service-account key `eas.json` uses.
 - **WiFi control** (firmware ≥ v0.1.8 — older builds 404 these routes, which is how `WifiCard`
   detects "unsupported"): `GET /wifi_status` (`{mode:"sta"|"fallback"|"standalone", sta_ssid,
   ap_ssid, fail}`), `GET /wifi_scan` (async; `{status:"scanning"}` until done — poll ~1.5 s;

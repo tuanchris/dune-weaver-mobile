@@ -1,0 +1,7 @@
+• Pause the table to change its settings — no more waiting out a whole playlist (needs firmware v0.1.18+)
+• Renaming a table now renames it on your network too (needs firmware v0.1.18+)
+• Release notes for the app and your table’s firmware, right in Settings
+• Browse flags patterns with no thumbnail, and takes you to preview sync
+• Load a table’s pattern list from a file when Wi-Fi is weak
+• Tap the speed to type an exact value
+• Long folder lists now scroll in the filter sheet

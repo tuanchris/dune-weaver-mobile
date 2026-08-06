@@ -8,8 +8,10 @@
 // platforms, and it works offline (the phone is often on a table-only Wi-Fi).
 //
 // MAINTENANCE: add an entry here whenever app.json's `version` is bumped, with
-// the same copy that goes into fastlane/metadata/*/release_notes.txt. Newest
-// first. Notes are shown verbatim, so write them for owners, not developers.
+// the same copy that goes into fastlane/metadata/en-CA/release_notes.txt (and a
+// ≤500-char cut in fastlane/metadata/android/en-CA/changelogs/<versionCode>.txt
+// — Play rejects longer ones). Newest first. Notes are shown verbatim, so write
+// them for owners, not developers.
 
 export interface AppReleaseNote {
   /** Bare version, matching app.json's `version` (no "v" prefix). */
