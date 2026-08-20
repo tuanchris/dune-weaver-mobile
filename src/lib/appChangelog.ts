@@ -21,6 +21,16 @@ export interface AppReleaseNote {
 
 export const APP_CHANGELOG: AppReleaseNote[] = [
   {
+    version: '1.1.2',
+    notes: [
+      '• Support for tables with the new ESP32-S3 board — firmware updates pick the right update file for your board automatically, and the app asks which board you have when the table can’t say',
+      '• Beta firmware is now hidden from the version picker unless you turn on “Show beta versions” — the build on your table is always listed either way',
+      '• The version picker now badges the installed build correctly, so a table on a beta build can install its final release',
+      '• The LED screen shows what your lights are really doing — when quiet hours or a saved “while playing / while idle” effect is overriding your choice, it says so and explains how to get control back',
+      '• Saving “Off” as a playing or idle effect is now clearly called out, so LEDs that stay dark are no longer a mystery',
+    ].join('\n'),
+  },
+  {
     version: '1.1.1',
     notes: [
       '• Pause the table to change its settings — no more waiting out a whole playlist (needs Dune Weaver Firmware v0.1.18 or newer)',

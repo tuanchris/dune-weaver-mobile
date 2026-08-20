@@ -1,0 +1,3 @@
+• Firmware updates now support tables with the new ESP32-S3 board — the app picks the right update file, or asks which board you have
+• Beta firmware is hidden unless you turn on “Show beta versions”, and the installed build is always badged correctly
+• The LED screen shows what your lights are really doing — quiet hours or a saved playing/idle effect that overrides them is explained, and an “Off” playing/idle effect is called out
