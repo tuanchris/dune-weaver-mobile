@@ -12,15 +12,16 @@ import { Alert, Linking, Pressable, StyleSheet, Text, View } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
 import { useFocusEffect } from '@react-navigation/native'
 import { isDemoBase } from '../api/demoBoard'
+import { usePrefs } from '../stores/usePrefs'
 import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
 import { useUpdates, appUpdateAvailable, fwUpdateAvailable, APP_VERSION } from '../stores/useUpdates'
 import { toast } from '../stores/useToast'
 import { runFirmwareUpdate, FW_STAGE_LABELS, type FwUpdateStage } from '../lib/firmwareUpdate'
 import { stopAndSettle, stopFirstWarning } from '../lib/stopFirst'
-import { parseVersion } from '../lib/version'
+import { parseVersion, sameVersion } from '../lib/version'
 import { APP_CHANGELOG } from '../lib/appChangelog'
-import { fetchFirmwareReleases, type FirmwareRelease } from '../lib/updates'
+import { fetchFirmwareReleases, type BoardMcu, type FirmwareRelease } from '../lib/updates'
 import { FwUpdateSplash } from './FwUpdateSplash'
 import { FirmwareVersionPicker } from './FirmwareVersionPicker'
 import { ReleaseNotesSheet, type NotesEntry } from './ReleaseNotesSheet'
@@ -28,13 +29,17 @@ import { Button, Card, CardTitle } from './ui'
 import { spacing, font } from '../theme'
 
 /** How a target version relates to what's on the table: 'up'grade, 'down'grade,
- * 're'install, or null when either side is unknown. */
+ * 're'install, or null when either side is unknown. 're' needs an exact TAG
+ * match, not just an equal numeric key — two builds can share a key when one
+ * carries a prerelease tail parseVersion doesn't model, and calling that a
+ * reinstall would mislabel a real upgrade (null falls back to plain "Install"). */
 function relation(target: string, current: string | null): 'up' | 'down' | 're' | null {
+  if (sameVersion(target, current)) return 're'
   const pt = parseVersion(target)
   const pc = parseVersion(current)
   if (!pt || !pc) return null
   for (let i = 0; i < pt.length; i++) if (pt[i] !== pc[i]) return pt[i] > pc[i] ? 'up' : 'down'
-  return 're'
+  return null
 }
 
 function fmtDate(iso?: string): string {
@@ -65,7 +70,9 @@ export function UpdatesCard({ base }: { base: string | null }) {
   const appLatest = useUpdates((s) => s.appLatest)
   const fwLatest = useUpdates((s) => s.fwLatest)
   const check = useUpdates((s) => s.check)
+  const showPre = usePrefs((s) => s.showPrereleaseFirmware)
   const tableFw = useStatus((s) => s.status?.fw ?? null)
+  const tableMcu = useStatus((s) => s.status?.mcu ?? null)
   const [stage, setStage] = useState<FwUpdateStage | null>(null)
   const [checking, setChecking] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -139,22 +146,67 @@ export function UpdatesCard({ base }: { base: string | null }) {
     return entries
   }, [appLatest, appNew])
 
+  // Notes follow the picker's beta toggle — a reader who hides test builds
+  // shouldn't have to scroll past their notes. The installed build is always
+  // listed, even when it's an rc.
   const fwEntries = useMemo<NotesEntry[]>(
     () =>
-      (fwReleases ?? []).map((r) => ({
-        version: r.version,
-        notes: r.notes.trim() || 'No notes were published for this release.',
-        badge:
-          relation(r.version, tableFw) === 're' ? 'Installed'
-          : r.prerelease ? 'Pre-release'
-          : undefined,
-        meta: fmtDate(r.publishedAt),
-      })),
-    [fwReleases, tableFw]
+      (fwReleases ?? [])
+        .filter((r) => showPre || !r.prerelease || sameVersion(r.version, tableFw))
+        .map((r) => ({
+          version: r.version,
+          notes: r.notes.trim() || 'No notes were published for this release.',
+          badge:
+            relation(r.version, tableFw) === 're' ? 'Installed'
+            : r.prerelease ? 'Pre-release'
+            : undefined,
+          meta: fmtDate(r.publishedAt),
+        })),
+    [fwReleases, tableFw, showPre]
   )
   // The demo table isn't real hardware — show its version, never an update.
   const isRealTable = !!base && !isDemoBase(base)
   const canFlash = isRealTable && fwNew && !!fwLatest
+
+  // The flash itself (after the confirm). `forceMcu` is the user's answer to
+  // the which-board dialog below, on firmware too old to report its MCU.
+  const doInstall = async (release: FirmwareRelease, forceMcu?: BoardMcu) => {
+    if (!base) return
+    setTarget(release)
+    setStage('download')
+    try {
+      await stopAndSettle(base)
+      const newFw = await runFirmwareUpdate(base, release, setStage, forceMcu)
+      toast.success(newFw ? `Firmware updated to ${newFw}` : `Firmware installed (${release.version})`)
+    } catch (e) {
+      toast.error((e as Error).message || 'Firmware update failed')
+    } finally {
+      setStage(null)
+      setTarget(null)
+    }
+  }
+
+  // Start an install, asking WHICH BOARD first when the running firmware is
+  // too old to report its MCU (status.mcu absent) and the release ships more
+  // than one image — the wrong image uploads completely and is only rejected
+  // by the board's final chip-ID check, so guessing wastes a whole flash
+  // cycle. Once the table runs mcu-reporting firmware the question disappears.
+  const startInstall = (release: FirmwareRelease) => {
+    const mcu = useStatus.getState().status?.mcu ?? null
+    if (mcu || !release.images.esp32s3) {
+      void doInstall(release)
+      return
+    }
+    Alert.alert(
+      'Which board is this table?',
+      'This firmware is too old to say which chip it has, and each needs its own image. Most tables are ESP32; the MKS DLC32 MAX is an ESP32-S3. A wrong pick is rejected safely — just try again with the other one.',
+      [
+        { text: 'ESP32 (most tables)', onPress: () => void doInstall(release, 'esp32') },
+        { text: 'ESP32-S3 (DLC32 MAX)', onPress: () => void doInstall(release, 'esp32s3') },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    )
+  }
 
   // Flash any release (the latest, or one picked from the version list). The
   // confirm wording adapts to whether it's an upgrade, downgrade, or reinstall.
@@ -177,23 +229,7 @@ export function UpdatesCard({ base }: { base: string | null }) {
           : { title: 'Update firmware', message: `${warn}Install ${release.version}? ${tail}`, action: 'Install' }
     Alert.alert(title, message, [
       { text: 'Cancel', style: 'cancel' },
-      {
-        text: action,
-        onPress: async () => {
-          setTarget(release)
-          setStage('download')
-          try {
-            await stopAndSettle(base)
-            const newFw = await runFirmwareUpdate(base, release.firmwareUrl, setStage)
-            toast.success(newFw ? `Firmware updated to ${newFw}` : `Firmware installed (${release.version})`)
-          } catch (e) {
-            toast.error((e as Error).message || 'Firmware update failed')
-          } finally {
-            setStage(null)
-            setTarget(null)
-          }
-        },
-      },
+      { text: action, onPress: () => startInstall(release) },
     ])
   }
 
@@ -290,6 +326,7 @@ export function UpdatesCard({ base }: { base: string | null }) {
       <FirmwareVersionPicker
         visible={pickerOpen}
         currentFw={tableFw}
+        mcu={tableMcu}
         busy={stage != null}
         onClose={() => setPickerOpen(false)}
         onSelect={(release) => {

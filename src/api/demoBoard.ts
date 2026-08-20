@@ -207,6 +207,7 @@ function buildStatus(): RawStatus {
     led: { effect: S.settings['LED/Effect'], brightness: Number(S.settings['LED/Brightness']) || 0 },
     time: nowTime(),
     fw: DEMO_FW,
+    mcu: 'esp32',
     hostname: S.hostname,
     uptime: Math.floor((Date.now() - BOOT_MS) / 1000),
   }

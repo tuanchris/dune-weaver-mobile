@@ -38,7 +38,15 @@ export interface RawStatus {
   }
   /** Only present when the table has LEDs configured (`has_led`). */
   led?: {
+    /** `$LED/Effect` — the effect the user picked. */
     effect: string
+    /** What the strip is ACTUALLY showing. Differs from `effect` while a state
+     * hook (`$LED/RunEffect` / `$LED/IdleEffect`) or Still Sands overrides it.
+     * Absent on firmware older than v0.1.19 — fall back to `effect`. */
+    active?: string
+    /** Why `active` differs from `effect`: the hook that is winning ("run" /
+     * "idle") or Still Sands ("quiet"). Absent when nothing is overriding. */
+    override?: 'run' | 'idle' | 'quiet'
     brightness: number
   }
   /** Wall clock — same shape as /sand_time. `synced:false` means the clock isn't
@@ -47,6 +55,11 @@ export interface RawStatus {
   /** Firmware version (git_info, e.g. "v0.1.2" or "v0.1.2 (main-abc1234)").
    * Absent on firmware older than the OTA-capable builds. */
   fw?: string
+  /** Build target ("esp32" | "esp32s3") — picks which MCU-prefixed release
+   * image OTA flashes; the board only rejects a wrong one AFTER the whole
+   * upload. Absent on firmware that predates it — the app then asks the user
+   * which board it is before flashing. */
+  mcu?: string
   /** Lowercase STA MAC ("a0:b1:c2:d3:e4:f5") — the table's stable hardware
    * identity (also in the mDNS TXT record as `mac=`). Absent on firmware
    * v0.1.7 and older. */
@@ -91,12 +104,17 @@ export interface Status {
   pauseTotal: number | null
   /** Still Sands quiet hours currently suppressing motion. */
   isQuiet: boolean
-  /** LED state, or null if the table has no LEDs configured. */
-  led: { effect: string; brightness: number } | null
+  /** LED state, or null if the table has no LEDs configured. `effect` is the
+   * user's choice, `active` is what the strip is really showing, and `override`
+   * names what is holding the two apart (null = nothing). */
+  led: { effect: string; active: string; override: 'run' | 'idle' | 'quiet' | null; brightness: number } | null
   /** Table wall clock, or null on firmware that doesn't report it. */
   clock: RawTime | null
   /** Firmware version string, or null on firmware that doesn't report it. */
   fw: string | null
+  /** Board build target ("esp32" | "esp32s3"), or null on firmware that
+   * doesn't report it — the app then asks which board before flashing. */
+  mcu: string | null
   /** Stable hardware ID (lowercase MAC), or null on older firmware. */
   mac: string | null
   /** Table's network hostname, or null on older firmware. */
@@ -160,9 +178,19 @@ export function translateStatus(raw: RawStatus): Status {
     pauseRemaining,
     pauseTotal,
     isQuiet: raw.playlist?.quiet ?? false,
-    led: raw.led ? { effect: raw.led.effect, brightness: raw.led.brightness } : null,
+    led: raw.led
+      ? {
+          effect: raw.led.effect,
+          // Older firmware doesn't report what's really showing; the chosen
+          // effect is then the best we know.
+          active: raw.led.active ?? raw.led.effect,
+          override: raw.led.override ?? null,
+          brightness: raw.led.brightness,
+        }
+      : null,
     clock: raw.time ?? null,
     fw: raw.fw ?? null,
+    mcu: raw.mcu || null,
     mac: raw.mac?.toLowerCase() ?? null,
     hostname: raw.hostname || null,
     sdOk: raw.sd_ok ?? null,

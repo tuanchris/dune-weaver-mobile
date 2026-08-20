@@ -59,18 +59,33 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
 - **No WebSocket** — `useStatus` polls `/sand_status` every 1s, scheduled relative to request start.
   The poll is **paused while the app is backgrounded** (`AppState` in App.tsx → `suspend()`/`resume()`)
   and snaps back with an immediate poll on foreground — no point hammering the board off-screen.
-  Status also carries `playlist.quiet` (Still Sands active → `Status.isQuiet`), `fw` (firmware
+  Status also carries `playlist.quiet` (Still Sands active → `Status.isQuiet`), `mcu` (board build
+  target `esp32`/`esp32s3` → `Status.mcu`, picks the OTA image; absent on older firmware), `fw` (firmware
   version → `Status.fw`) and, when LEDs are configured, `led:{effect,brightness}` (→ `Status.led`).
   Firmware ≥ v0.1.13 adds `playlist.next` (shuffle-aware upcoming pattern) and `playlist.last`
   (just-completed pattern = what's on the sand; named during the between-patterns pause) — the
   NowPlayingBar shows `last`'s preview through the pause (falling back to an in-memory ref on
   older firmware, which only works if the app watched the pattern run) and `next` as "Up next".
-- **OTA firmware update**: `GET /updatefw` probes (`{status:"ready"|"busy",fw}`; 409 while a pattern
-  runs), `POST /updatefw` multipart (`firmware.binS` size field + `firmware.bin` file part) flashes
-  and reboots. `src/lib/firmwareUpdate.ts` orchestrates: download the latest GitHub release asset
-  (`tuanchris/dune-weaver-firmware` releases → `firmware.bin`), suspend the status poller (the
-  board's web server is single-threaded), flash via `board.uploadFirmware` (binary body needs
-  `expo/fetch` — RN's fetch can't send typed arrays), poll until the board is back. Update checks
+- **OTA firmware update**: `GET /updatefw` probes (`{status:"ready"|"busy",fw,mcu}`; 409 while a
+  pattern runs), `POST /updatefw` multipart (`firmware.binS` size field + `firmware.bin` file part)
+  flashes and reboots. `src/lib/firmwareUpdate.ts` orchestrates: download the matching GitHub
+  release asset, suspend the status poller (the board's web server is single-threaded), flash via
+  `board.uploadFirmware` (binary body needs `expo/fetch` — RN's fetch can't send typed arrays),
+  poll until the board is back.
+  **The image is per-MCU** (`tuanchris/dune-weaver-firmware` releases ship `esp32-firmware.bin` +
+  `esp32s3-firmware.bin`; the bare `firmware.bin` is a compatibility alias OF THE ESP32 IMAGE, and
+  the only asset pre-S3 releases have): a wrong-MCU image uploads completely and is only rejected
+  by the board's chip-ID check at the very end (both chips share the 0xE9 magic byte — the app's
+  own header check cannot catch this), which surfaced as "The table rejected the update" on every
+  S3 OTA. So `FirmwareRelease.images` maps mcu→URL (`firmwareUrlFor` picks), and
+  `runFirmwareUpdate(base, release, onStage, forceMcu?)` reads `mcu` from the /updatefw probe
+  (fw ≥ the field; also in `status.mcu`) and refuses releases with no image for a KNOWN mcu. When
+  the firmware is too old to report its mcu and the release ships BOTH images, `UpdatesCard`'s
+  `startInstall` asks the user which board it is up front ("ESP32 (most tables)" / "ESP32-S3
+  (DLC32 MAX)") and passes the answer as `forceMcu` — asking beats guess-flash-fail-retry (owner
+  call), a wrong pick is rejected safely (old firmware keeps running; the failure toast says to
+  try the other choice), and the question disappears once the table runs mcu-reporting firmware.
+  Update checks
   live in `src/lib/updates.ts` + `src/stores/useUpdates.ts` (app: iTunes lookup / Play page scrape;
   both fail-safe to "unknown"); a red dot on the Settings tab (App.tsx) + an Updates card in
   Settings (`UpdatesCard.tsx`) surface them. Checks re-run on Settings focus (10 min max-age) and
@@ -78,10 +93,23 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
   stale "up to date" self-heals. The fetched "latest" is app-global; only `status.fw` is per-table.
   **Installing a SPECIFIC version**: `UpdatesCard` has an "Install a specific version…" button
   (real tables only) opening `FirmwareVersionPicker` — a sheet listing every GitHub release with a
-  `firmware.bin` (`fetchFirmwareReleases`, lazy per-open, newest first), marking the installed one
-  and flagging Newer/Older/Pre-release. Any pick runs the same `runFirmwareUpdate(base, url, …)` OTA
-  flow (it already takes an arbitrary firmware URL); the confirm dialog adapts wording
-  (Install / Reinstall / Downgrade) and the splash shows the target version.
+  flashable image (`fetchFirmwareReleases`, lazy per-open, newest first), marking the installed one
+  and flagging Newer/Older/Pre-release. Any pick runs the same `runFirmwareUpdate` OTA flow (it
+  takes the whole release and picks the per-MCU image); the confirm dialog adapts wording
+  (Install / Reinstall / Downgrade) and the splash shows the target version. **EVERY row is
+  tappable, including the installed one** (that's the Reinstall path, and the escape hatch when the
+  app misreads which build is on the table — an rc3 table that couldn't reach its own final release
+  is exactly how this was found) — with ONE exception: when the table's mcu is KNOWN and a release
+  has no image for it (pre-S3 releases on an S3 table), the row is disabled and tagged "Not for
+  this board", because that flash can only ever be rejected. "Installed" identity uses `sameVersion`/`versionTag` (exact tag
+  string, `v`-stripped, git_info tail dropped) and NOT `parseVersion`'s numeric key: the key
+  deliberately ignores prerelease tails it doesn't model, so any unknown tail (`-beta1`) or, before
+  v1.1.1, `-rcN` collapses several distinct builds onto one key and badges the wrong one as
+  installed. `relation()` in `UpdatesCard` returns `re` only on that exact match — an equal key with
+  differing tags falls through to the neutral "Install" wording. **Beta toggle**: prereleases are
+  HIDDEN by default behind "Show beta versions" (`usePrefs.showPrereleaseFirmware`, persisted;
+  also filters the firmware "What's new" list) — except the build on the table, which is always
+  listed so a tester on an rc can see and re-flash where they are.
   **Release notes ("What's new")**: both rows in the About card link to a shared
   `ReleaseNotesSheet` — a bottom sheet with a deliberately small markdown renderer (headings,
   bullets, inline `**bold**`/`` `code` ``/links; hard-wrapped lines are JOINED into the bullet

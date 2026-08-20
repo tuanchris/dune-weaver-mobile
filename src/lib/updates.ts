@@ -12,16 +12,40 @@ const FIRMWARE_REPO = 'tuanchris/dune-weaver-firmware'
 const APP_BUNDLE_ID = 'com.duneweaver'
 const APP_STORE_ID = '6785920802'
 
+/** Board MCUs a release can ship an image for. Matches both the release asset
+ * prefixes (`esp32-firmware.bin` / `esp32s3-firmware.bin`) and the `mcu` the
+ * firmware reports in /sand_status and the /updatefw probe. */
+export type BoardMcu = 'esp32' | 'esp32s3'
+
 export interface FirmwareRelease {
   version: string // tag, e.g. "v0.1.2"
-  /** Direct download URL of the app-partition image (firmware.bin asset). */
-  firmwareUrl: string
+  /** Direct download URL of the app-partition image, per MCU. `esp32` is
+   * always present (releases predating the S3 board shipped only the bare
+   * `firmware.bin`, which IS the ESP32 image — newer ones keep it as an
+   * alias); `esp32s3` exists only on releases cut since the S3 board landed.
+   * Flashing the wrong MCU's image is safe but useless: the board accepts the
+   * whole upload, then rejects it at the final chip-ID check. */
+  images: Partial<Record<BoardMcu, string>>
   releaseUrl: string
   notes: string
   /** ISO publish date, for the version picker. Absent on older code paths. */
   publishedAt?: string
   /** GitHub prerelease flag, for the version picker. */
   prerelease?: boolean
+}
+
+/** The image to flash on a table whose firmware reports `mcu` (from
+ * /sand_status or the /updatefw probe). An unreported mcu (older firmware)
+ * falls back to the ESP32 image — but UpdatesCard asks the user which board
+ * it is BEFORE flashing whenever the release ships more than one image, so
+ * this fallback is only reached when there is nothing to choose (an
+ * esp32-only release; a mis-fit there is rejected harmlessly by the board).
+ * Returns null when the release has no image for a KNOWN mcu (e.g. an S3
+ * table picking a release that predates the S3 board) — refuse up front
+ * rather than flash an image the board can only reject. */
+export function firmwareUrlFor(release: FirmwareRelease, mcu: string | null): string | null {
+  if (!mcu) return release.images.esp32 ?? null
+  return (release.images as Record<string, string | undefined>)[mcu] ?? null
 }
 
 interface GhRelease {
@@ -34,13 +58,20 @@ interface GhRelease {
 }
 
 /** Map a GitHub release to a FirmwareRelease, or null if it has no flashable
- * firmware.bin asset. */
+ * image. The ESP32 image is the explicit `esp32-firmware.bin` when present,
+ * else the bare `firmware.bin` (pre-S3 releases shipped only that name;
+ * post-S3 releases keep it as an alias OF the ESP32 image — see the firmware
+ * repo's release workflow). */
 function toFirmwareRelease(r: GhRelease): FirmwareRelease | null {
-  const bin = r.assets?.find((a) => a.name === 'firmware.bin')
-  if (!r.tag_name || !bin) return null
+  const asset = (name: string) => r.assets?.find((a) => a.name === name)?.browser_download_url
+  const esp32 = asset('esp32-firmware.bin') ?? asset('firmware.bin')
+  const esp32s3 = asset('esp32s3-firmware.bin')
+  if (!r.tag_name || !esp32) return null
+  const images: FirmwareRelease['images'] = { esp32 }
+  if (esp32s3) images.esp32s3 = esp32s3
   return {
     version: r.tag_name,
-    firmwareUrl: bin.browser_download_url,
+    images,
     releaseUrl: r.html_url ?? `https://github.com/${FIRMWARE_REPO}/releases`,
     notes: r.body ?? '',
     publishedAt: r.published_at,

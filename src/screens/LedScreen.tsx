@@ -83,6 +83,11 @@ export function LedScreen() {
   const status = useStatus((s) => s.status)
 
   const [effect, setEffect] = useState('off')
+  // What the strip is really showing, and what is holding it apart from
+  // `effect` (a Run/Idle state hook, or Still Sands quiet hours). Reported by
+  // firmware v0.1.19+; older boards report only `effect`, so these mirror it.
+  const [active, setActive] = useState('off')
+  const [override, setOverride] = useState<'run' | 'idle' | 'quiet' | null>(null)
   const [palette, setPalette] = useState('rainbow')
   const [color, setColor] = useState('#FFB060')
   const [color2, setColor2] = useState('#0040FF')
@@ -117,7 +122,10 @@ export function LedScreen() {
     if (!base) return
     try {
       const s = await board.settings(base)
-      if (s['LED/Effect']) setEffect(s['LED/Effect'])
+      if (s['LED/Effect']) {
+        setEffect(s['LED/Effect'])
+        setActive(s['LED/Effect'])  // corrected by the first status poll
+      }
       if (s['LED/Palette']) setPalette(s['LED/Palette'])
       if (s['LED/Color']) setColor(`#${s['LED/Color'].replace(/^#/, '')}`)
       if (s['LED/Color2']) setColor2(`#${s['LED/Color2'].replace(/^#/, '')}`)
@@ -145,10 +153,12 @@ export function LedScreen() {
   useEffect(() => {
     if (status?.led) {
       setEffect(status.led.effect)
+      setActive(status.led.active)
+      setOverride(status.led.override)
       if (Date.now() - brightnessTouchedRef.current > 1500) setBrightness(status.led.brightness)
       if (status.led.effect !== 'off') lastOnRef.current = status.led.effect
     }
-  }, [status?.led?.effect, status?.led?.brightness])
+  }, [status?.led?.effect, status?.led?.active, status?.led?.override, status?.led?.brightness])
 
   const send = (fn: () => Promise<void>) => {
     if (!base) return
@@ -157,6 +167,13 @@ export function LedScreen() {
 
   const applyEffect = (e: string) => {
     setEffect(e)
+    // An explicit choice outranks a state hook on the board too, so show it
+    // immediately instead of waiting a poll. Still Sands is the exception: it
+    // holds the strip off whatever the effect is, so don't promise light.
+    if (override !== 'quiet') {
+      setActive(e)
+      setOverride(null)
+    }
     if (e !== 'off') lastOnRef.current = e
     send(() => board.setLedEffect(base!, e))
   }
@@ -168,15 +185,35 @@ export function LedScreen() {
   const saveHook = (which: 'run' | 'idle') => {
     if (which === 'run') { setRunEffect(effect); send(() => board.setLedRunEffect(base!, effect)) }
     else { setIdleEffect(effect); send(() => board.setLedIdleEffect(base!, effect)) }
-    toast.success(`${which === 'run' ? 'Playing' : 'Idle'} effect saved`)
+    // Name the saved effect: "Off" is a legitimate choice but a silent one, and
+    // saving it by accident is what makes the LEDs look broken later.
+    const label = which === 'run' ? 'Playing' : 'Idle'
+    toast.success(effect === 'off' ? `${label} effect saved: LEDs off` : `${label} effect saved: ${effectLabel(effect)}`)
   }
   const clearHook = (which: 'run' | 'idle') => {
     if (which === 'run') { setRunEffect('none'); send(() => board.setLedRunEffect(base!, 'none')) }
     else { setIdleEffect('none'); send(() => board.setLedIdleEffect(base!, 'none')) }
   }
 
-  const isOn = effect !== 'off'
+  // Judge on/off by what the strip is SHOWING, not by the stored effect: with
+  // $LED/IdleEffect=off the board keeps the strip dark while $LED/Effect still
+  // reads "rainbow", and a button labelled "Turn OFF" against dark LEDs is how
+  // this looked like "only brightness 0 works".
+  const isOn = active !== 'off'
   const togglePower = () => applyEffect(isOn ? 'off' : lastOnRef.current || 'rainbow')
+  // Still Sands overrides in memory and outranks an effect change, so the power
+  // button genuinely cannot help until quiet hours end -- say so instead.
+  const powerBlocked = override === 'quiet'
+  // Only worth explaining when the hook is showing something OTHER than what
+  // the user picked — a hook that happens to match is not a surprise.
+  const overrideNote =
+    override === 'quiet'
+      ? 'Still Sands is holding the LEDs off during quiet hours. They come back when quiet hours end.'
+      : (override === 'run' || override === 'idle') && active !== effect
+        ? `“${effectLabel(active)}” is showing instead of “${effectLabel(effect)}” because the “${
+            override === 'run' ? 'While playing' : 'While idle'
+          }” effect below is set to it. Clear that, or pick an effect here to override it until the table next starts or stops.`
+        : null
 
   const isBall = effect === 'ball'
   // Remember the last non-ball effect so toggling the ball off can restore it.
@@ -208,7 +245,9 @@ export function LedScreen() {
           <Text style={{ color: bannerColor, fontSize: font.size.sm, flex: 1, fontWeight: font.weight.medium }}>
             {hasLed === false
               ? 'No LEDs configured on this table.'
-              : `LEDs ready · ${isOn ? `${effect} · ${asPercent255(brightness)}` : 'Power OFF'}`}
+              : `LEDs ready · ${isOn ? `${effectLabel(active)} · ${asPercent255(brightness)}` : 'Power OFF'}${
+                  override ? ` · ${override === 'quiet' ? 'Still Sands' : override === 'run' ? 'playing effect' : 'idle effect'}` : ''
+                }`}
           </Text>
         </View>
 
@@ -216,13 +255,17 @@ export function LedScreen() {
           <CardTitle>Power</CardTitle>
           <Pressable
             onPress={togglePower}
-            style={({ pressed }) => [styles.power, { backgroundColor: isOn ? colors.cardElevated : colors.success, opacity: pressed ? 0.85 : 1, borderColor: colors.border, borderWidth: isOn ? 1 : 0 }]}
+            disabled={powerBlocked}
+            style={({ pressed }) => [styles.power, { backgroundColor: isOn ? colors.cardElevated : colors.success, opacity: powerBlocked ? 0.45 : pressed ? 0.85 : 1, borderColor: colors.border, borderWidth: isOn ? 1 : 0 }]}
           >
             <MaterialIcons name="power-settings-new" size={20} color={isOn ? colors.foreground : colors.background} />
             <Text style={{ color: isOn ? colors.foreground : colors.background, fontWeight: font.weight.semibold, fontSize: font.size.md }}>
               {isOn ? 'Turn OFF' : 'Turn ON'}
             </Text>
           </Pressable>
+          {overrideNote ? (
+            <Text style={[styles.hint, { color: colors.mutedForeground, marginTop: spacing.sm }]}>{overrideNote}</Text>
+          ) : null}
         </Card>
 
         {/* Ball tracker — promoted out of the effect list so it's easy to find. */}
@@ -376,11 +419,19 @@ export function LedScreen() {
             { which: 'idle' as const, label: 'While idle', saved: idleEffect },
           ]).map(({ which, label, saved }) => {
             const set = saved !== 'none' && saved !== ''
+            // Saving while the LEDs are off stores "Off" as the hook, which then
+            // holds the strip dark for good in that state — the row has to say so
+            // rather than read like a harmless "Uses Off".
+            const note = !set
+              ? 'Not saved — shows the effect above'
+              : saved === 'off'
+                ? `Set to “Off” — the LEDs stay dark whenever the table is ${which === 'run' ? 'playing' : 'idle'}. Clear it to control them here.`
+                : `Uses “${effectLabel(saved)}”`
             return (
               <View key={which} style={styles.hookRow}>
                 <Text style={[styles.label, { color: colors.foreground, marginBottom: spacing.xs }]}>{label}</Text>
-                <Text style={[styles.hint, { color: set ? colors.foreground : colors.mutedForeground, marginBottom: spacing.sm }]}>
-                  {set ? `Uses “${effectLabel(saved)}”` : 'Not saved — shows the effect above'}
+                <Text style={[styles.hint, { color: set ? (saved === 'off' ? colors.destructive : colors.foreground) : colors.mutedForeground, marginBottom: spacing.sm }]}>
+                  {note}
                 </Text>
                 <View style={styles.hookButtons}>
                   <Button title="Save current" icon="save" variant="secondary" flex onPress={() => saveHook(which)} />

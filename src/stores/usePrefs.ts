@@ -30,6 +30,7 @@ interface Persisted {
   favorites: string[]
   favSynced?: Record<string, string[]>
   previewNagDismissedCount?: number
+  showPrereleaseFirmware?: boolean
 }
 
 interface PrefsStore {
@@ -61,12 +62,17 @@ interface PrefsStore {
    * previews themselves. */
   previewNagDismissedCount: number
   dismissPreviewNag: (missing: number) => void
+  /** Show -rc/-pre firmware builds in the version picker. Off by default —
+   * betas are for testers — but the picker always shows the build that's
+   * actually on the table, so a tester on an rc can still see where they are. */
+  showPrereleaseFirmware: boolean
+  setShowPrereleaseFirmware: (v: boolean) => void
   hydrate: () => Promise<void>
 }
 
 export const usePrefs = create<PrefsStore>((set, get) => {
   const save = () => {
-    const { clearMode, playlistPrefs, favorites, favSynced, previewNagDismissedCount } = get()
+    const { clearMode, playlistPrefs, favorites, favSynced, previewNagDismissedCount, showPrereleaseFirmware } = get()
     AsyncStorage.setItem(
       KEY,
       JSON.stringify({
@@ -75,6 +81,7 @@ export const usePrefs = create<PrefsStore>((set, get) => {
         favorites: Object.keys(favorites),
         favSynced,
         previewNagDismissedCount,
+        showPrereleaseFirmware,
       } satisfies Persisted),
     ).catch(() => {})
   }
@@ -84,6 +91,7 @@ export const usePrefs = create<PrefsStore>((set, get) => {
     favorites: {},
     favSynced: {},
     previewNagDismissedCount: 0,
+    showPrereleaseFirmware: false,
     setClearMode: (clearMode) => {
       set({ clearMode })
       save()
@@ -113,6 +121,10 @@ export const usePrefs = create<PrefsStore>((set, get) => {
       set({ previewNagDismissedCount: Math.max(0, missing) })
       save()
     },
+    setShowPrereleaseFirmware: (showPrereleaseFirmware) => {
+      set({ showPrereleaseFirmware })
+      save()
+    },
     hydrate: async () => {
       try {
         const raw = await AsyncStorage.getItem(KEY)
@@ -124,6 +136,7 @@ export const usePrefs = create<PrefsStore>((set, get) => {
             favorites: Object.fromEntries((data.favorites ?? []).map((k) => [k, true as const])),
             favSynced: data.favSynced ?? {},
             previewNagDismissedCount: data.previewNagDismissedCount ?? 0,
+            showPrereleaseFirmware: data.showPrereleaseFirmware ?? false,
           })
         }
       } catch {

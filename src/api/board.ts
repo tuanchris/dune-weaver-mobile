@@ -20,6 +20,10 @@ function logHttpFail(path: string, e: unknown): void {
 export interface UpdateFwResponse {
   status: 'ready' | 'busy' | 'ok' | 'failed'
   fw?: string
+  /** Build target ("esp32" | "esp32s3") — which MCU-prefixed release image to
+   * flash. Absent on firmware predating it (UpdatesCard then asks the user
+   * which board it is before flashing). */
+  mcu?: string
 }
 
 // ---- WiFi (firmware >= v0.1.8) ----
@@ -274,18 +278,26 @@ async function getListConditional(
 }
 
 /** Fetch a small text file streamed from the SD card (e.g. a playlist). */
-async function getText(base: string, path: string, timeoutMs = 8000): Promise<string> {
-  const { signal, cancel } = withTimeout(timeoutMs)
-  try {
-    const res = await fetch(`${base}${encodePath(path)}`, { signal, headers: keyHeaders(base) })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return await res.text()
-  } catch (e) {
-    logHttpFail(path, e)
-    throw e
-  } finally {
-    cancel()
+async function getText(base: string, path: string, timeoutMs = 8000, tries = 3): Promise<string> {
+  let lastErr: unknown
+  for (let attempt = 0; attempt < tries; attempt++) {
+    const { signal, cancel } = withTimeout(timeoutMs)
+    try {
+      const res = await fetch(`${base}${encodePath(path)}`, { signal, headers: keyHeaders(base) })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return await res.text()
+    } catch (e) {
+      lastErr = e
+      if (!isBusy503(e) || attempt === tries - 1) {
+        logHttpFail(path, e)
+        throw e
+      }
+      await sleep(500 * 2 ** attempt + Math.floor(Math.random() * 300))
+    } finally {
+      cancel()
+    }
   }
+  throw lastErr
 }
 
 /**
@@ -439,7 +451,14 @@ async function uploadTextFile(
     })
   let r = await attempt()
   if (!r.ok) logHttpFail(`/upload ${sdPath}`, new Error(httpErrorMessage(r.status, r.text)))
-  if (!r.ok && r.status !== 401 && r.status !== 507) {
+  // Transient 503 (low heap / SD mount ESP_ERR_NO_MEM): back off and retry —
+  // an unretried 503 here is how a delete's manifest update silently failed
+  // and let the refetch resurrect the deleted pattern.
+  for (let i = 0; !r.ok && r.status === 503 && i < 2; i++) {
+    await sleep(600 * 2 ** i + Math.floor(Math.random() * 300))
+    r = await attempt()
+  }
+  if (!r.ok && r.status !== 401 && r.status !== 503 && r.status !== 507) {
     // Most likely a missing target folder (a fresh or computer-wiped SD card
     // has no /playlists or /patterns, and the firmware's fopen doesn't create
     // parents) — create the folders and retry once.
@@ -447,6 +466,54 @@ async function uploadTextFile(
     r = await attempt()
   }
   if (!r.ok) throw new Error(httpErrorMessage(r.status, r.text))
+}
+
+/**
+ * Delete a file on the SD card, e.g. dir "/playlists/", filename "Old.txt".
+ * Idempotent: a manifest entry can outlive its file (a delete whose response
+ * was lost — e.g. the pre-dontlist panic era — removed the file but the app
+ * never learned), so when the board reports it cannot delete, probe the path:
+ * if the file is already gone, treat the delete as done so the caller still
+ * clears the ghost from the manifest instead of erroring on it forever.
+ */
+async function deleteSdFile(base: string, dir: string, filename: string, tries = 3): Promise<void> {
+  // dontlist=yes is load-bearing: without it the firmware follows the delete
+  // with a full JSON listing of `dir`, and building that in RAM for the
+  // ~2000-entry /patterns tree exhausts the heap and panics the board.
+  const q = `path=${encodeURIComponent(dir)}&action=delete&filename=${encodeURIComponent(filename)}&dontlist=yes`
+  for (let attempt = 0; attempt < tries; attempt++) {
+    try {
+      await hit(base, `/upload?${q}`)
+      return
+    } catch (e) {
+      // The board's first SD touch can bounce with a transient 503 ("No SD
+      // card", ESP_ERR_NO_MEM mounting the card) — the immediate retry is
+      // what users were doing by hand ("delete twice and it works").
+      if (isBusy503(e) && attempt < tries - 1) {
+        await sleep(500 * 2 ** attempt + Math.floor(Math.random() * 300))
+        continue
+      }
+      if (await sdFileMissing(base, `${dir}${filename}`)) return
+      throw e
+    }
+  }
+}
+
+/** True only when a 1-byte ranged read of the SD path answers 404 (no such file). */
+async function sdFileMissing(base: string, sdPath: string): Promise<boolean> {
+  const { signal, cancel } = withTimeout(6000)
+  try {
+    const enc = sdPath.split('/').map(encodeURIComponent).join('/')
+    const res = await fetch(`${base}/sd${enc.startsWith('/') ? '' : '/'}${enc}`, {
+      signal,
+      headers: { ...keyHeaders(base), Range: 'bytes=0-0' },
+    })
+    return res.status === 404
+  } catch {
+    return false // can't tell — let the original delete error surface
+  } finally {
+    cancel()
+  }
 }
 
 /**
@@ -730,9 +797,7 @@ const realBoard = {
 
   // ---- SD file ops (upload / delete) ----
   uploadTextFile,
-  /** Delete a file on the SD card, e.g. dir "/playlists/", filename "Old.txt". */
-  deleteSdFile: (base: string, dir: string, filename: string) =>
-    hit(base, `/upload?path=${encodeURIComponent(dir)}&action=delete&filename=${encodeURIComponent(filename)}`),
+  deleteSdFile,
 }
 
 // ---- Client-side concurrency gate (PER BOARD) ----
