@@ -21,6 +21,12 @@ export interface AppReleaseNote {
 
 export const APP_CHANGELOG: AppReleaseNote[] = [
   {
+    version: '1.2.0',
+    notes: [
+      '• Fixed: with more than one table, the brightness, LED speed and table speed sliders could change the first table you opened instead of the one you’re controlling. Sliders now always act on the selected table',
+    ].join('\n'),
+  },
+  {
     version: '1.1.2',
     notes: [
       '• Support for tables with the new ESP32-S3 board — firmware updates pick the right update file for your board automatically, and the app asks which board you have when the table can’t say',

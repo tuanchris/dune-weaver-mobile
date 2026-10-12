@@ -245,6 +245,11 @@ export function Slider({
     const w = widthRef.current || 1
     return quantize(min + Math.max(0, Math.min(1, x / w)) * (max - min))
   }
+  // The PanResponder below is created ONCE, so its handlers must read the
+  // current props through this ref — capturing them directly froze the first
+  // render's callbacks, which kept sending to the first table after switching.
+  const latest = useRef({ fromX, onChange, onComplete, disabled })
+  latest.current = { fromX, onChange, onComplete, disabled }
 
   const pan = useRef(
     PanResponder.create({
@@ -252,10 +257,10 @@ export function Slider({
       // ScrollView never gets to scroll while you drag — without the *Capture
       // variants, iOS's ScrollView still scrolls at the same time as the slide.
       // (Matches the LED ColorWheel, which is inside a ScrollView and works.)
-      onStartShouldSetPanResponder: () => !disabled,
-      onStartShouldSetPanResponderCapture: () => !disabled,
-      onMoveShouldSetPanResponder: () => !disabled,
-      onMoveShouldSetPanResponderCapture: () => !disabled,
+      onStartShouldSetPanResponder: () => !latest.current.disabled,
+      onStartShouldSetPanResponderCapture: () => !latest.current.disabled,
+      onMoveShouldSetPanResponder: () => !latest.current.disabled,
+      onMoveShouldSetPanResponderCapture: () => !latest.current.disabled,
       // Once dragging, don't hand the gesture back to the ScrollView.
       onPanResponderTerminationRequest: () => false,
       // Android: keep the native ScrollView from becoming the responder mid-drag.
@@ -265,19 +270,19 @@ export function Slider({
         useScrollLock.getState().lock()
         if (holdRef.current) { clearTimeout(holdRef.current); holdRef.current = null }
         leftRef.current = e.nativeEvent.pageX - e.nativeEvent.locationX
-        const v = fromX(e.nativeEvent.locationX)
+        const v = latest.current.fromX(e.nativeEvent.locationX)
         setDrag(v)
-        onChange?.(v)
+        latest.current.onChange?.(v)
       },
       onPanResponderMove: (e) => {
-        const v = fromX(e.nativeEvent.pageX - leftRef.current)
+        const v = latest.current.fromX(e.nativeEvent.pageX - leftRef.current)
         setDrag(v)
-        onChange?.(v)
+        latest.current.onChange?.(v)
       },
       onPanResponderRelease: (e) => {
         useScrollLock.getState().unlock()
-        const v = fromX(e.nativeEvent.pageX - leftRef.current)
-        onComplete?.(v)
+        const v = latest.current.fromX(e.nativeEvent.pageX - leftRef.current)
+        latest.current.onComplete?.(v)
         // Hold the released value briefly, then fall back to the live `value` prop
         // (which the board's poll should have caught up to by then).
         if (holdRef.current) clearTimeout(holdRef.current)

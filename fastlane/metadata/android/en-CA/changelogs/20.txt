@@ -1,0 +1,1 @@
+• Fixed: with more than one table, the brightness, LED speed and table speed sliders could change the first table you opened instead of the one you’re controlling. Sliders now always act on the selected table
