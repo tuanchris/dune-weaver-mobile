@@ -28,7 +28,7 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
 - Actions (plain text "ok"): `/sand_home`, `/sand_stop`, `/sand_pause`, `/sand_resume`, `/sand_feed?d=`.
 - Commands: `GET /command?plain=$...` — `$SD/Run=`, `$Sand/Run=<file> clear=<mode>` (pre-exec clear),
   `$Playlist/Run|Stop|Skip`, `$Playlist/Mode|Shuffle|PauseTime|PauseFromStart|ClearPattern|AutoHome=`,
-  `$THR/Feed=`, `$LED/Effect|Palette|Color|Color2|Brightness|Speed|RunEffect|IdleEffect=`,
+  `$THR/Feed=`, `$LED/Effect|Palette|Color|Color2|Brightness|Speed|Intensity|RunEffect|IdleEffect=`,
   `$Sands/Enabled|Slots=` (quiet hours), `$Hostname=` (rename, fw ≥ v0.1.18 — see the rename
   bullet), `$X` (unlock from Alarm), `$Bye` (reboot). Built with
   `encodeURIComponent` on the whole `plain` value (the firmware `arg("plain")` URL-decodes it).
@@ -318,7 +318,9 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   name (case-insensitive, target's casing wins), and files the target lacks are DROPPED with a
   "skipped N" toast — no pattern push; an all-missing copy refuses instead of writing an empty list),
   `Control` (home/stop/unlock/speed + quiet-hours + live status), `Led` (effect/palette/
-  color pickers, brightness/speed sliders, and a Motion-reactive card that mirrors the dw web app:
+  color pickers, brightness/speed sliders, an intensity slider — WLED's 2nd slider, labelled per
+  effect from `LED_EFFECTS[].uses.intensity` (Density/Trail/Flame/Flicker), hidden for effects that
+  ignore it and on firmware whose `/sand_settings` lacks `LED/Intensity` — and a Motion-reactive card that mirrors the dw web app:
   you **"Save current"** the selected effect as the `$LED/RunEffect`/`$LED/IdleEffect` override —
   the board stores only an effect per hook, palette/colours/speed/brightness are global — plus a
   Clear per hook, instead of picking a different effect from a dropdown), `Settings` (tables + Wi-Fi

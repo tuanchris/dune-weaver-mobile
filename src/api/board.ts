@@ -85,6 +85,9 @@ export interface LedInputs {
   /** ball effect: rotation direction (cw/ccw) and start alignment (0..359°). */
   direction?: boolean
   align?: boolean
+  /** $LED/Intensity: the slider's label for this effect (what it controls);
+   *  absent = the effect ignores intensity. */
+  intensity?: string
 }
 
 export interface LedEffectDef {
@@ -101,27 +104,27 @@ export const LED_EFFECTS: LedEffectDef[] = [
   { name: 'breathe', label: 'Breathe', uses: { color: true } },
   { name: 'colorloop', label: 'Color loop', uses: { palette: true } },
   { name: 'theater', label: 'Theater', uses: { color: true } },
-  { name: 'scan', label: 'Scan', uses: { color: true } },
+  { name: 'scan', label: 'Scan', uses: { color: true, intensity: 'Trail' } },
   { name: 'running', label: 'Running', uses: { color: true } },
   { name: 'sine', label: 'Sine', uses: { color: true } },
   { name: 'gradient', label: 'Gradient', uses: { color: true, color2: true } },
-  { name: 'sinelon', label: 'Sinelon', uses: { palette: true } },
-  { name: 'twinkle', label: 'Twinkle', uses: { palette: true } },
-  { name: 'sparkle', label: 'Sparkle', uses: { color: true } },
-  { name: 'fire', label: 'Fire', uses: { palette: true } },
-  { name: 'candle', label: 'Candle', uses: { color: true } },
-  { name: 'meteor', label: 'Meteor', uses: { color: true } },
-  { name: 'bouncing', label: 'Bouncing', uses: { color: true } },
+  { name: 'sinelon', label: 'Sinelon', uses: { palette: true, intensity: 'Trail' } },
+  { name: 'twinkle', label: 'Twinkle', uses: { palette: true, intensity: 'Density' } },
+  { name: 'sparkle', label: 'Sparkle', uses: { color: true, intensity: 'Density' } },
+  { name: 'fire', label: 'Fire', uses: { palette: true, intensity: 'Flame' } },
+  { name: 'candle', label: 'Candle', uses: { color: true, intensity: 'Flicker' } },
+  { name: 'meteor', label: 'Meteor', uses: { color: true, intensity: 'Trail' } },
+  { name: 'bouncing', label: 'Bouncing', uses: { color: true, intensity: 'Trail' } },
   { name: 'wipe', label: 'Wipe', uses: { color: true, color2: true } },
-  { name: 'dualscan', label: 'Dual scan', uses: { color: true, color2: true } },
-  { name: 'juggle', label: 'Juggle', uses: { palette: true } },
-  { name: 'multicomet', label: 'Multi-comet', uses: { palette: true } },
-  { name: 'glitter', label: 'Glitter', uses: { palette: true } },
+  { name: 'dualscan', label: 'Dual scan', uses: { color: true, color2: true, intensity: 'Trail' } },
+  { name: 'juggle', label: 'Juggle', uses: { palette: true, intensity: 'Trail' } },
+  { name: 'multicomet', label: 'Multi-comet', uses: { palette: true, intensity: 'Trail' } },
+  { name: 'glitter', label: 'Glitter', uses: { palette: true, intensity: 'Density' } },
   { name: 'dissolve', label: 'Dissolve', uses: { color: true, color2: true } },
-  { name: 'ripple', label: 'Ripple', uses: { palette: true } },
-  { name: 'drip', label: 'Drip', uses: { color: true } },
-  { name: 'lightning', label: 'Lightning', uses: {} },
-  { name: 'fireworks', label: 'Fireworks', uses: { palette: true } },
+  { name: 'ripple', label: 'Ripple', uses: { palette: true, intensity: 'Trail' } },
+  { name: 'drip', label: 'Drip', uses: { color: true, intensity: 'Trail' } },
+  { name: 'lightning', label: 'Lightning', uses: { intensity: 'Density' } },
+  { name: 'fireworks', label: 'Fireworks', uses: { palette: true, intensity: 'Density' } },
   { name: 'plasma', label: 'Plasma', uses: { palette: true } },
   { name: 'heartbeat', label: 'Heartbeat', uses: { color: true } },
   { name: 'strobe', label: 'Strobe', uses: { color: true } },
@@ -717,6 +720,8 @@ const realBoard = {
   setLedColor2: (base: string, hex: string) => command(base, `$Sand/Led=color2=${hexRRGGBB(hex)}`),
   setLedBrightness: (base: string, value: number) => command(base, `$Sand/Led=brightness=${clampInt(value, 0, 255)}`),
   setLedSpeed: (base: string, value: number) => command(base, `$Sand/Led=speed=${clampInt(value, 1, 255)}`),
+  /** fw ≥ the release that adds `LED/Intensity` to /sand_settings (older rejects the key). */
+  setLedIntensity: (base: string, value: number) => command(base, `$Sand/Led=intensity=${clampInt(value, 0, 255)}`),
   /** Ball effect: rotation direction. */
   setLedDirection: (base: string, dir: 'cw' | 'ccw') => command(base, `$Sand/Led=direction=${dir}`),
   /** Ball effect: start alignment in degrees (0..359). */

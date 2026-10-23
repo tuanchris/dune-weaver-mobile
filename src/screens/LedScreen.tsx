@@ -93,6 +93,10 @@ export function LedScreen() {
   const [color2, setColor2] = useState('#0040FF')
   const [brightness, setBrightness] = useState(40)
   const [speed, setSpeed] = useState(50)
+  const [intensity, setIntensity] = useState(128)
+  // Older firmware has no $LED/Intensity (and rejects the key): show the slider
+  // only when /sand_settings reports it.
+  const [hasIntensity, setHasIntensity] = useState(false)
   const [direction, setDirection] = useState<'cw' | 'ccw'>('cw')
   const [align, setAlign] = useState(0)
   // Ball-effect controls (blob/background brightness, background sub-effect, size).
@@ -131,6 +135,8 @@ export function LedScreen() {
       if (s['LED/Color2']) setColor2(`#${s['LED/Color2'].replace(/^#/, '')}`)
       if (s['LED/Brightness']) setBrightness(Number(s['LED/Brightness']))
       if (s['LED/Speed']) setSpeed(Number(s['LED/Speed']))
+      if (s['LED/Intensity'] != null) setIntensity(Number(s['LED/Intensity']) || 0)
+      setHasIntensity('LED/Intensity' in s)
       if (s['LED/Direction']) setDirection(s['LED/Direction'] === 'ccw' ? 'ccw' : 'cw')
       if (s['LED/Align'] != null) setAlign(Number(s['LED/Align']) || 0)
       if (s['LED/BallSize'] != null) setBallSize(Number(s['LED/BallSize']) || 3)
@@ -351,6 +357,12 @@ export function LedScreen() {
             />
             <View style={{ height: spacing.lg }} />
             <SliderRow label="Speed" value={speed} min={1} max={255} onChange={setSpeed} onComplete={(v) => send(() => board.setLedSpeed(base, v))} />
+            {hasIntensity && inputs.intensity ? (
+              <>
+                <View style={{ height: spacing.lg }} />
+                <SliderRow label={inputs.intensity} value={intensity} min={0} max={255} onChange={setIntensity} onComplete={(v) => send(() => board.setLedIntensity(base, v))} />
+              </>
+            ) : null}
           </Card>
         ) : null}
 
@@ -411,7 +423,7 @@ export function LedScreen() {
         <Card>
           <CardTitle>Motion-reactive</CardTitle>
           <Text style={[styles.hint, { color: colors.mutedForeground }]}>
-            Save the effect set above to run automatically while the table plays or rests. Palette, colours, speed and brightness are shared across all effects.
+            Save the effect set above to run automatically while the table plays or rests. Palette, colours, speed, intensity and brightness are shared across all effects.
           </Text>
 
           {([
