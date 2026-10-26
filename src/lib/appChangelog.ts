@@ -21,6 +21,21 @@ export interface AppReleaseNote {
 
 export const APP_CHANGELOG: AppReleaseNote[] = [
   {
+    version: '1.3.0',
+    notes: [
+      'A redesign of the whole app:',
+      '',
+      '• Control shows your table from above, with the ball where it really is and plain words for what the table is doing',
+      '• The LEDs screen previews your ring live, and a gallery shows every effect in your own colours. Tap one to play it',
+      '• Settings is reorganized into simple groups, and each row shows its current value',
+      '• Playlists show their first patterns as a cover, and the one playing is marked',
+      '• In Browse, Play sends a pattern to the table and draws it in one tap. Sorting moved into the Show menu',
+      '• Read each firmware version’s release notes before you install it',
+      '• On iOS 26, the tab bar and the now-playing bar use the new system look',
+      '• Light and dark now follow your phone’s appearance setting',
+    ].join('\n'),
+  },
+  {
     version: '1.2.0',
     notes: [
       '• Fixed: with more than one table, the brightness, LED speed and table speed sliders could change the first table you opened instead of the one you’re controlling. Sliders now always act on the selected table',

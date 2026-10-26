@@ -1,0 +1,8 @@
+A redesign of the whole app:
+• Control shows your table from above, with the ball where it is
+• LEDs: a live preview of your ring and a gallery of every effect in your colours
+• Settings reorganized into groups that show each value
+• Playlists show their first patterns, and the one playing is marked
+• Play sends a pattern to the table and draws it in one tap
+• Read firmware release notes before installing
+• Light and dark follow your phone’s setting
