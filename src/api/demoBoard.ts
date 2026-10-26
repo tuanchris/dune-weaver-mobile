@@ -7,7 +7,7 @@
 
 import { PREVIEW } from '../../assets/pattern-manifest'
 import type { RawStatus, RawTime } from './status'
-import type { ClearMode, WifiMode, WifiScanResult, WifiStatus, WifiWriteResult } from './board'
+import type { ClearMode, LedSliderReset, WifiMode, WifiScanResult, WifiStatus, WifiWriteResult } from './board'
 
 /** Sentinel base for the demo table. Real bases are http(s) URLs, so this never
  *  collides; `isDemoBase` gates the dispatch. */
@@ -63,6 +63,8 @@ function defaultSettings(): Record<string, string> {
     'LED/Brightness': '160',
     'LED/Speed': '120',
     'LED/Intensity': '128',
+    'LED/Count': '49',
+    'LED/Order': 'GRB',
     'LED/Direction': 'cw',
     'LED/Align': '0',
     'LED/BallSize': '3',
@@ -300,13 +302,19 @@ export const demoBoard = {
   setPlaylistAutostartClear: async (_b: string, m: ClearMode) => setKey('Playlist/AutostartClear', m),
 
   // ---- LEDs ----
-  setLedEffect: async (_b: string, e: string) => setKey('LED/Effect', e),
+  setLedEffect: async (_b: string, e: string, reset?: LedSliderReset) => {
+    setKey('LED/Effect', e)
+    if (reset) setKey('LED/Speed', String(reset.speed))
+    if (reset?.intensity != null) setKey('LED/Intensity', String(reset.intensity))
+  },
   setLedPalette: async (_b: string, p: string) => setKey('LED/Palette', p),
   setLedColor: async (_b: string, hex: string) => setKey('LED/Color', hex.replace(/^#/, '').toUpperCase()),
   setLedColor2: async (_b: string, hex: string) => setKey('LED/Color2', hex.replace(/^#/, '').toUpperCase()),
   setLedBrightness: async (_b: string, v: number) => setKey('LED/Brightness', String(Math.round(v))),
   setLedSpeed: async (_b: string, v: number) => setKey('LED/Speed', String(Math.round(v))),
   setLedIntensity: async (_b: string, v: number) => setKey('LED/Intensity', String(Math.round(v))),
+  setLedCount: async (_b: string, n: number) => setKey('LED/Count', String(Math.round(n))),
+  setLedOrder: async (_b: string, order: string) => setKey('LED/Order', order.toUpperCase()),
   setLedDirection: async (_b: string, d: 'cw' | 'ccw') => setKey('LED/Direction', d),
   setLedAlign: async (_b: string, deg: number) => setKey('LED/Align', String(Math.round(deg))),
   setLedBallSize: async (_b: string, n: number) => setKey('LED/BallSize', String(Math.round(n))),

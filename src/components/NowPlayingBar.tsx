@@ -1,13 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { FlatList, Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native'
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import { FlatList, PanResponder, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
+import { create } from 'zustand'
 import { board } from '../api/board'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
 import { useScrollLock } from '../stores/useScrollLock'
 import { useTheme } from '../stores/useTheme'
-import { isActive } from '../api/status'
+import { isActive, type Status } from '../api/status'
 import { loadPlaylist } from '../lib/playlists'
 import { prettyName } from '../lib/patternName'
 import { useBoardAction } from '../lib/useBoardAction'
@@ -15,10 +15,9 @@ import { PatternThumb } from './PatternThumb'
 import { LiveDrawing } from './LiveDrawing'
 import { patternKey } from '../stores/useLibrary'
 import { IconButton } from './ui'
+import { Sheet, useAnySheetOpen } from './Sheet'
 import { SpeedControl } from './SpeedControl'
 import { radius, spacing, font } from '../theme'
-
-const TAB_BAR = 58
 
 /** ms -> "M:SS", or "H:MM:SS" once it's an hour or more (a long between-patterns
  * pause can run to hours — "98:23" reads as nonsense). */
@@ -31,28 +30,245 @@ function fmt(ms: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`
 }
 
-export function NowPlayingBar() {
+/** Whether the expanded player sheet is up. A store, not state: the mini player
+ * lives in the tab bar's accessory (or each Screen), the sheet once in App.tsx. */
+export const usePlayerSheet = create<{ expanded: boolean; setExpanded: (v: boolean) => void }>((set) => ({
+  expanded: false,
+  setExpanded: (expanded) => set({ expanded }),
+}))
+
+// ONE clock for every copy of the player: the iOS accessory mounts two, the
+// fallback one per visited tab, plus the sheet. Per-instance refs would disagree
+// (and reset whenever a copy mounts late).
+//  - file/at: when the current pattern started (the firmware reports only 0..100
+//    progress, no clock) → elapsed + estimated remaining.
+//  - lastFile: last pattern we had a file for, kept on screen while idle/paused.
+//  - pause: anchored between-patterns window { startAt (epoch ms), totalMs }.
+const session: { file: string | null; at: number; lastFile: string | null; pause: { startAt: number; totalMs: number } | null } = {
+  file: null,
+  at: Date.now(),
+  lastFile: null,
+  pause: null,
+}
+
+interface NowPlaying {
+  status: Status
+  base: string
+  displayFile: string | null
+  name: string
+  pausing: boolean
+  pct: number
+  hasProgress: boolean
+  elapsedMs: number
+  remainingMs: number | null
+  subtitle: string
+}
+
+/** Everything the player shows, derived from status + the shared session. null = nothing playing. */
+function useNowPlaying(): NowPlaying | null {
+  const status = useStatus((s) => s.status)
+  const base = useBoards((s) => s.getActiveBase())
+  const currentFile = status?.currentFile ?? null
+  // Render-time and idempotent (a mount effect would reset the clock whenever a copy mounts).
+  if (session.file !== currentFile) {
+    session.file = currentFile
+    session.at = Date.now()
+  }
+
+  // Between-patterns pause progress is anchored to a local start timestamp and
+  // driven by the device clock (below), not recomputed from the coarse,
+  // once-per-poll `pause_remaining`. This ticker advances it smoothly between
+  // status polls (a long pause would otherwise sit frozen for seconds).
+  const pausing = status?.pauseRemaining != null && status?.pauseTotal != null
+  const [, forcePauseTick] = useState(0)
+  useEffect(() => {
+    if (!pausing) return
+    const id = setInterval(() => forcePauseTick((n) => n + 1), 250)
+    return () => clearInterval(id)
+  }, [pausing])
+
+  if (!isActive(status) || !status || !base) return null
+
+  // During the between-patterns pause (state=Idle) the firmware reports no
+  // current file, so show the pattern that just finished — it's what's on the
+  // sand right now. Firmware ≥ v0.1.13 names it (playlist.last), which also
+  // survives opening the app mid-pause — but ONLY the pause means "waiting for
+  // the next pattern"; in other file-less moments (homing, clearing lead-in)
+  // stick to the in-memory last file, which also covers older firmware.
+  if (currentFile) session.lastFile = currentFile
+  const waitingNext = status.pauseRemaining != null
+  const displayFile = currentFile ?? (waitingNext ? status.playlist?.last : null) ?? session.lastFile
+
+  // The between-patterns pause drives the same progress bar. Rather than
+  // recompute the fill from (pause_total − pause_remaining) every poll — which
+  // ticks in whole seconds and freezes the bar between polls — anchor the
+  // pause's START once and measure elapsed from the device clock. That gives a
+  // smooth, accurate fill (and countdown) that keeps advancing between polls.
+  // The anchor is seeded from the reported remaining and only re-synced when it
+  // drifts > 1.5s from the firmware (a new pause, or clock skew over a long one).
+  let pauseElapsedMs = 0
+  let pauseRemainMs = 0
+  if (pausing) {
+    const totalMs = status.pauseTotal! * 1000
+    const reportedRemainMs = status.pauseRemaining! * 1000
+    const a = session.pause
+    const predictedRemainMs = a ? a.totalMs - (Date.now() - a.startAt) : Infinity
+    const anchor =
+      !a || a.totalMs !== totalMs || Math.abs(predictedRemainMs - reportedRemainMs) > 1500
+        ? // (Re)anchor: start = now − already-elapsed. From here elapsed comes
+          // from the clock, so it advances smoothly instead of derived from remaining.
+          { startAt: Date.now() - (totalMs - reportedRemainMs), totalMs }
+        : a
+    session.pause = anchor
+    pauseElapsedMs = Math.min(totalMs, Math.max(0, Date.now() - anchor.startAt))
+    pauseRemainMs = Math.max(0, totalMs - pauseElapsedMs)
+  } else {
+    session.pause = null
+  }
+
+  const pct = pausing
+    ? (status.pauseTotal! > 0 ? Math.round((pauseElapsedMs / (status.pauseTotal! * 1000)) * 100) : 0)
+    : status.percentage ?? 0
+
+  // Elapsed / estimated remaining. Only meaningful while a pattern is actually
+  // progressing; remaining is a linear extrapolation, hence "~".
+  const hasProgress = pausing || (status.percentage != null && !status.isHoming && !status.isClearing)
+  const elapsedMs = pausing ? pauseElapsedMs : Date.now() - session.at
+  const remainingMs = pausing ? pauseRemainMs : hasProgress && pct > 1 && pct < 100 ? (elapsedMs * (100 - pct)) / pct : null
+
+  const subtitle =
+    status.isHoming ? 'Homing…'
+    : status.isClearing ? 'Clearing…'
+    : status.isQuiet ? 'Quiet hours'
+    // Between-patterns wait: the firmware reports Idle, but a playlist is mid-run.
+    // Say so plainly instead of showing the playlist line (which reads as "playing").
+    : pausing ? `Between patterns${status.playlist ? ` · ${status.playlist.index + 1}/${status.playlist.total}` : ''}`
+    : status.playlist ? `${status.playlist.name ?? 'Playlist'} · ${status.playlist.index + 1}/${status.playlist.total}`
+    : status.isPaused ? 'Paused'
+    : status.state
+
+  return { status, base, displayFile, name: prettyName(displayFile), pausing, pct, hasProgress, elapsedMs, remainingMs, subtitle }
+}
+
+type Act = ReturnType<typeof useBoardAction>['act']
+const togglePause = (np: NowPlaying, act: Act) =>
+  np.status.isPaused ? act(() => board.resume(np.base), 'Resumed', 'resume the pattern') : act(() => board.pause(np.base), 'Paused', 'pause the pattern')
+const skip = (np: NowPlaying, act: Act) => act(() => board.skip(np.base), 'Skipping', 'skip to the next pattern')
+const openPlayer = () => usePlayerSheet.getState().setExpanded(true)
+
+function PlayPause({ np, act, size }: { np: NowPlaying; act: Act; size: number }) {
+  const colors = useTheme((s) => s.colors)
+  return (
+    <Pressable
+      onPress={() => togglePause(np, act)}
+      accessibilityRole="button"
+      accessibilityLabel={np.status.isPaused ? 'Resume' : 'Pause'}
+      style={[styles.playBtn, { backgroundColor: colors.primary, width: size, height: size }]}
+    >
+      <MaterialIcons name={np.status.isPaused ? 'play-arrow' : 'pause'} size={Math.round(size * 0.58)} color={colors.primaryForeground} />
+    </Pressable>
+  )
+}
+
+// Dynamic Type cap inside the system-sized accessory capsule (it can't grow).
+const CAPSULE_TEXT_MAX = 1.2
+
+/**
+ * The mini player: Pause/Resume + Skip, tap to open the full player. Stop lives
+ * only in the expanded player (a one-tap stop here was too easy to hit).
+ * Stateless and safe to mount several times (no Modals, no fetches):
+ *  - 'regular' / 'inline': iOS 26 tab-bar `bottomAccessory` (the system draws the glass capsule).
+ *  - 'floating': in-flow card at the bottom of each Screen everywhere else.
+ */
+export function MiniPlayer({ placement }: { placement: 'regular' | 'inline' | 'floating' }) {
+  const colors = useTheme((s) => s.colors)
+  const np = useNowPlaying()
+  const { act } = useBoardAction(350)
+  const swipeUp = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 10 && Math.abs(g.dy) > Math.abs(g.dx) * 1.5,
+      onPanResponderRelease: (_, g) => {
+        if (g.dy <= -30) openPlayer()
+      },
+    })
+  ).current
+  if (!np) return null
+
+  const skipBtn = np.status.playlist ? (
+    <IconButton icon="skip-next" size={26} color={colors.foreground} label="Skip to next pattern" onPress={() => skip(np, act)} />
+  ) : null
+
+  if (placement !== 'floating') {
+    const inline = placement === 'inline'
+    return (
+      <Pressable onPress={openPlayer} style={[styles.capsule, { gap: inline ? spacing.sm : spacing.md }]}>
+        <PatternThumb name={patternKey(np.displayFile)} size={inline ? 24 : 32} />
+        <View style={{ flex: 1 }}>
+          <Text numberOfLines={1} maxFontSizeMultiplier={CAPSULE_TEXT_MAX} style={[styles.capsuleTitle, { color: colors.foreground }]}>
+            {np.name || 'Idle'}
+          </Text>
+          {inline ? null : (
+            <Text numberOfLines={1} maxFontSizeMultiplier={CAPSULE_TEXT_MAX} style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>
+              {np.subtitle}
+            </Text>
+          )}
+        </View>
+        <IconButton
+          icon={np.status.isPaused ? 'play-arrow' : 'pause'}
+          size={inline ? 24 : 28}
+          color={colors.foreground}
+          label={np.status.isPaused ? 'Resume' : 'Pause'}
+          onPress={() => togglePause(np, act)}
+        />
+        {inline ? null : skipBtn}
+      </Pressable>
+    )
+  }
+
+  return (
+    <View {...swipeUp.panHandlers} style={styles.barWrap}>
+      <Pressable onPress={openPlayer} style={[styles.bar, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <PatternThumb name={patternKey(np.displayFile)} size={46} />
+        <View style={{ flex: 1 }}>
+          <Text numberOfLines={1} style={[styles.title, { color: colors.foreground }]}>{np.name || 'Idle'}</Text>
+          <Text numberOfLines={1} style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{np.subtitle}</Text>
+          <View style={[styles.miniTrack, { backgroundColor: colors.border }]}>
+            <View style={[styles.miniFill, { width: `${np.pct}%`, backgroundColor: colors.live }]} />
+          </View>
+          {np.hasProgress ? (
+            <Text numberOfLines={1} style={{ color: colors.mutedForeground, fontFamily: font.family.mono, fontSize: font.size.xs, marginTop: 3 }}>
+              {fmt(np.elapsedMs)} · {np.pct}%{np.remainingMs != null ? ` · -${fmt(np.remainingMs)}` : ''}
+            </Text>
+          ) : null}
+        </View>
+        <View style={styles.controls}>
+          <PlayPause np={np} act={act} size={48} />
+          {skipBtn}
+        </View>
+      </Pressable>
+    </View>
+  )
+}
+
+/** The expanded player (+ its queue as a sub-page). Rendered ONCE, from App.tsx. */
+export function NowPlayingSheet() {
   const colors = useTheme((s) => s.colors)
   const scrollLocked = useScrollLock((s) => s.locked)
   const status = useStatus((s) => s.status)
   const refresh = useStatus((s) => s.refresh)
   const base = useBoards((s) => s.getActiveBase())
-  const insets = useSafeAreaInsets()
   const { width: winWidth } = useWindowDimensions()
-  const [expanded, setExpanded] = useState(false)
-  const [queueOpen, setQueueOpen] = useState(false)
+  const expanded = usePlayerSheet((s) => s.expanded)
+  const setExpanded = usePlayerSheet((s) => s.setExpanded)
+  const anySheetOpen = useAnySheetOpen()
+  const [page, setPage] = useState<'player' | 'queue'>('player')
   const [playlistItems, setPlaylistItems] = useState<{ name: string; items: string[] } | null>(null)
   const { act } = useBoardAction(350)
-
-  // Track when the current pattern started so we can show elapsed time and an
-  // estimated remaining (the firmware reports only a 0..100 progress, no clock).
-  const startRef = useRef<{ file: string | null; at: number }>({ file: null, at: Date.now() })
-  // Last pattern we had a file for, so we can keep showing it while idle/paused.
-  const lastFileRef = useRef<string | null>(null)
-  const currentFile = status?.currentFile ?? null
-  useEffect(() => {
-    startRef.current = { file: currentFile, at: Date.now() }
-  }, [currentFile])
+  const np = useNowPlaying()
+  // Keep the last frame on screen while the sheet slides away after playback ends.
+  const lastNp = useRef<NowPlaying | null>(null)
+  if (np) lastNp.current = np
+  const shown = np ?? lastNp.current
 
   // Pull the active playlist's pattern list so we can show "up next" + a queue.
   const plName = status?.playlist?.name ?? null
@@ -72,274 +288,155 @@ export function NowPlayingBar() {
     }
   }, [base, plName])
 
-  // Maximize the player into the full drawer when a playlist starts. Tracked on
-  // the rising edge of "a playlist is active"; prevPl starts null so opening the
-  // app onto an already-running playlist doesn't pop the drawer unprompted.
-  const playlistActive = !!status?.playlist
+  // Maximize the player when a playlist starts. Tracked on the rising edge of
+  // "a playlist is active"; prev starts null so opening the app onto an
+  // already-running playlist doesn't pop the sheet unprompted. The edge often
+  // lands while the editor's sheet is still animating out — iOS silently drops
+  // a second present, so wait (pending) until no sheet is up.
+  // ponytail: waits on EVERY sheet; exclude self if the player ever registers before opening.
+  // null = no status yet (launch / table switch reset it): it seeds `prev`, never an edge.
+  const playlistActive = status ? !!status.playlist : null
   const prevPlaylistActive = useRef<boolean | null>(null)
+  const [pendingExpand, setPendingExpand] = useState(false)
   useEffect(() => {
-    if (prevPlaylistActive.current === false && playlistActive) setExpanded(true)
+    if (playlistActive === null) { prevPlaylistActive.current = null; return }
+    if (prevPlaylistActive.current === false && playlistActive) setPendingExpand(true)
     prevPlaylistActive.current = playlistActive
   }, [playlistActive])
-
-  const swipe = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 10 && Math.abs(g.dy) > Math.abs(g.dx) * 1.5,
-      onPanResponderRelease: (_, g) => {
-        if (g.dy <= -30) setExpanded(true)
-        else if (g.dy >= 30) setExpanded(false)
-      },
-    })
-  ).current
-
-  // Between-patterns pause progress is anchored to a local start timestamp and
-  // driven by the device clock (below), not recomputed from the coarse,
-  // once-per-poll `pause_remaining`. This ticker advances it smoothly between
-  // status polls (a long pause would otherwise sit frozen for seconds).
-  const isPausing = status?.pauseRemaining != null && status?.pauseTotal != null
-  const [, forcePauseTick] = useState(0)
   useEffect(() => {
-    if (!isPausing) return
-    const id = setInterval(() => forcePauseTick((n) => n + 1), 250)
-    return () => clearInterval(id)
-  }, [isPausing])
-  // Anchored pause window: { startAt (epoch ms), totalMs }. Seeded from the
-  // reported remaining, re-synced only on drift > 1.5s (see below).
-  const pauseAnchorRef = useRef<{ startAt: number; totalMs: number } | null>(null)
+    if (!pendingExpand) return
+    if (expanded) setPendingExpand(false)
+    else if (!anySheetOpen) {
+      setPendingExpand(false)
+      setExpanded(true)
+    }
+  }, [pendingExpand, anySheetOpen, expanded, setExpanded])
 
-  if (!isActive(status) || !status || !base) {
-    if (expanded) setExpanded(false)
-    if (queueOpen) setQueueOpen(false)
-    return null
-  }
+  // Playback ended → close (and drop a pending auto-open).
+  const active = !!np
+  useEffect(() => {
+    if (active) return
+    setExpanded(false)
+    setPendingExpand(false)
+  }, [active, setExpanded])
+  // Every open starts on the player, not wherever the queue was left.
+  useEffect(() => {
+    if (expanded) setPage('player')
+  }, [expanded])
 
-  // During the between-patterns pause (state=Idle) the firmware reports no
-  // current file, so show the pattern that just finished — it's what's on the
-  // sand right now. Firmware ≥ v0.1.13 names it (playlist.last), which also
-  // survives opening the app mid-pause — but ONLY the pause means "waiting for
-  // the next pattern"; in other file-less moments (homing, clearing lead-in)
-  // stick to the in-memory ref, which also covers older firmware.
-  if (currentFile) lastFileRef.current = currentFile
-  const waitingNext = status.pauseRemaining != null
-  const displayFile = currentFile ?? (waitingNext ? status.playlist?.last : null) ?? lastFileRef.current
-  const name = prettyName(displayFile)
-
-  // The between-patterns pause drives the same progress bar. Rather than
-  // recompute the fill from (pause_total − pause_remaining) every poll — which
-  // ticks in whole seconds and freezes the bar between polls — anchor the
-  // pause's START once and measure elapsed from the device clock. That gives a
-  // smooth, accurate fill (and countdown) that keeps advancing between polls.
-  // The anchor is seeded from the reported remaining and only re-synced when it
-  // drifts > 1.5s from the firmware (a new pause, or clock skew over a long one).
-  const pausing = status.pauseRemaining != null && status.pauseTotal != null
-  let pauseElapsedMs = 0
-  let pauseRemainMs = 0
-  if (pausing) {
-    const totalMs = status.pauseTotal! * 1000
-    const reportedRemainMs = status.pauseRemaining! * 1000
-    const a = pauseAnchorRef.current
-    const predictedRemainMs = a ? a.totalMs - (Date.now() - a.startAt) : Infinity
-    const anchor =
-      !a || a.totalMs !== totalMs || Math.abs(predictedRemainMs - reportedRemainMs) > 1500
-        ? // (Re)anchor: start = now − already-elapsed. From here elapsed comes
-          // from the clock, so it advances smoothly instead of derived from remaining.
-          { startAt: Date.now() - (totalMs - reportedRemainMs), totalMs }
-        : a
-    pauseAnchorRef.current = anchor
-    pauseElapsedMs = Math.min(totalMs, Math.max(0, Date.now() - anchor.startAt))
-    pauseRemainMs = Math.max(0, totalMs - pauseElapsedMs)
-  } else {
-    pauseAnchorRef.current = null
-  }
-
-  const pct = pausing
-    ? (status.pauseTotal! > 0 ? Math.round((pauseElapsedMs / (status.pauseTotal! * 1000)) * 100) : 0)
-    : status.percentage ?? 0
-
-  // Elapsed / estimated remaining. Only meaningful while a pattern is actually
-  // progressing; remaining is a linear extrapolation, hence "~".
-  const hasProgress = pausing || (status.percentage != null && !status.isHoming && !status.isClearing)
-  const elapsedMs = pausing ? pauseElapsedMs : startRef.current.file === currentFile ? Date.now() - startRef.current.at : 0
-  const remainingMs = pausing ? pauseRemainMs : hasProgress && pct > 1 && pct < 100 ? (elapsedMs * (100 - pct)) / pct : null
+  if (!shown) return null
 
   // Up-next comes straight from the firmware (playlist.next) — it resolves the
   // real next pattern even under shuffle, where the order is internal to the
   // board. (The old code used playlistItems[index+1], which always showed file
   // line 2 while shuffling.) "" / null = unknown (last of a pass / single run)
   // -> no "up next".
-  const upNextFile = status.playlist?.next ? patternKey(status.playlist.next) : undefined
+  const st = shown.status
+  const upNextFile = st.playlist?.next ? patternKey(st.playlist.next) : undefined
 
   // The full upcoming queue is only knowable in file order, which is truthful
   // ONLY when not shuffling. When the firmware's next disagrees with the
   // file-order next, the playlist is shuffled and the rest of the order isn't
   // exposed — show just the one known next item rather than a wrong list.
   const fileUpcoming =
-    status.playlist && playlistItems?.name === plName ? playlistItems.items.slice(status.playlist.index + 1) : []
+    st.playlist && playlistItems?.name === plName ? playlistItems.items.slice(st.playlist.index + 1) : []
   const shuffled = !!upNextFile && fileUpcoming.length > 0 && upNextFile !== fileUpcoming[0]
   const upcoming = shuffled ? [upNextFile] : fileUpcoming
 
-  const togglePause = () =>
-    status.isPaused ? act(() => board.resume(base), 'Resumed', 'resume the pattern') : act(() => board.pause(base), 'Paused', 'pause the pattern')
-
-  const Controls = ({ big }: { big?: boolean }) => (
-    <View style={styles.controls}>
-      <IconButton icon="stop" size={big ? 30 : 26} color={colors.foreground} label="Stop" onPress={() => act(() => board.stop(base), 'Stopped', 'stop the table')} />
-      <Pressable
-        onPress={togglePause}
-        accessibilityRole="button"
-        accessibilityLabel={status.isPaused ? 'Resume' : 'Pause'}
-        style={[styles.playBtn, { backgroundColor: colors.primary, width: big ? 60 : 48, height: big ? 60 : 48 }]}
-      >
-        <MaterialIcons name={status.isPaused ? 'play-arrow' : 'pause'} size={big ? 34 : 28} color={colors.primaryForeground} />
-      </Pressable>
-      {status.playlist ? (
-        <IconButton icon="skip-next" size={big ? 30 : 26} color={colors.foreground} label="Skip to next pattern" onPress={() => act(() => board.skip(base), 'Skipping', 'skip to the next pattern')} />
-      ) : (
-        <View style={{ width: big ? 30 : 26 }} />
-      )}
-    </View>
-  )
-
-  const subtitle =
-    status.isHoming ? 'Homing…'
-    : status.isClearing ? 'Clearing…'
-    : status.isQuiet ? 'Quiet hours'
-    // Between-patterns wait: the firmware reports Idle, but a playlist is mid-run.
-    // Say so plainly instead of showing the playlist line (which reads as "playing").
-    : pausing ? `Between patterns${status.playlist ? ` · ${status.playlist.index + 1}/${status.playlist.total}` : ''}`
-    : status.playlist ? `${status.playlist.name ?? 'Playlist'} · ${status.playlist.index + 1}/${status.playlist.total}`
-    : status.isPaused ? 'Paused'
-    : status.state
-
-  // Sized so disc + title + up-next + progress + controls + speed all fit the
-  // 88% sheet WITHOUT scrolling — the speed slider was falling off the bottom
-  // (and under Android's system nav).
+  // Sized so disc + title + up-next + progress + controls + speed fit the sheet
+  // without scrolling on a phone (capped, so an iPad sheet doesn't balloon it).
   const vizSize = Math.min(winWidth - spacing.xl * 2, 290)
+  const close = () => setExpanded(false)
 
-  const queueModal = (
-    <Modal visible={queueOpen} transparent animationType="slide" onRequestClose={() => setQueueOpen(false)}>
-      <View style={styles.modalBackdrop}>
-        {/* Native SafeAreaView: measures the Modal's own window, so the sheet
-            clears the Android nav bar (main-window insets don't apply here). */}
-        <SafeAreaView edges={['bottom']} style={[styles.queueSheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
-          <View style={styles.queueHeader}>
-            <IconButton icon="close" size={26} color={colors.foreground} label="Close queue" onPress={() => setQueueOpen(false)} />
-            <Text style={{ color: colors.foreground, fontSize: font.size.lg, fontWeight: font.weight.semibold }}>
-              {status.playlist?.name ?? 'Queue'}
-            </Text>
-            <View style={{ width: 32 }} />
-          </View>
-          <FlatList
-            data={upcoming}
-            keyExtractor={(it, i) => `${it}-${i}`}
-            contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.lg }}
-            ListEmptyComponent={
-              <Text style={{ color: colors.mutedForeground, textAlign: 'center', marginTop: 40 }}>No upcoming patterns.</Text>
-            }
-            renderItem={({ item, index }) => (
-              <View style={[styles.queueRow, { borderColor: colors.border, backgroundColor: colors.card }]}>
-                <Text style={{ color: colors.mutedForeground, width: 24, textAlign: 'center', fontSize: font.size.sm }}>{index + 1}</Text>
-                <View style={styles.queueThumb}>
-                  <PatternThumb name={item} size={36} />
-                </View>
-                <Text numberOfLines={1} style={{ flex: 1, color: colors.foreground }}>{prettyName(item)}</Text>
-              </View>
-            )}
-          />
-        </SafeAreaView>
-      </View>
-    </Modal>
-  )
-
-  const expandedDrawer = (
-    <Modal visible={expanded} transparent animationType="slide" onRequestClose={() => setExpanded(false)}>
-      <View style={styles.modalBackdrop}>
-        <Pressable style={{ flex: 1 }} onPress={() => setExpanded(false)} />
-        <SafeAreaView edges={['bottom']} style={[styles.expandedSheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
-          <View {...swipe.panHandlers}>
-            <View style={[styles.grabber, { backgroundColor: colors.border }]} />
-            <View style={styles.expandedHeader}>
-              <IconButton icon="expand-more" size={28} color={colors.foreground} label="Collapse player" onPress={() => setExpanded(false)} />
-              <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>{subtitle}</Text>
-              {status.playlist ? (
-                <IconButton icon="queue-music" size={26} color={colors.foreground} label="Show queue" onPress={() => setQueueOpen(true)} />
-              ) : (
-                <View style={{ width: 28 }} />
-              )}
-            </View>
-          </View>
-
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            scrollEnabled={!scrollLocked}
-            // Generous bottom padding: Android's Modal can draw behind the
-            // system nav, and the speed slider must never sit under it.
-            contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xxl + spacing.lg }}
-          >
-            <View style={{ alignItems: 'center', marginVertical: spacing.md }}>
-              {/* The signature view: full pattern on the sand disc, progress as the glowing rim arc. */}
-              <LiveDrawing name={displayFile} size={vizSize} pct={pct} />
-            </View>
-
-            <Text numberOfLines={1} style={[styles.bigTitle, { color: colors.foreground }]}>{name || 'Idle'}</Text>
-            {/* Between-patterns wait: the name/preview above is what's on the sand
-                now; make it unmistakable that we're waiting, not still drawing it. */}
-            {pausing ? (
-              <View style={[styles.pausePill, { borderColor: colors.live }]}>
-                <MaterialIcons name="hourglass-top" size={14} color={colors.live} />
-                <Text style={{ color: colors.live, fontSize: font.size.sm, fontWeight: font.weight.medium }}>
-                  Waiting for the next pattern
-                </Text>
-              </View>
-            ) : null}
-            {upNextFile ? (
-              <Pressable onPress={() => setQueueOpen(true)} style={styles.upNextRow}>
-                <View style={[styles.upNextThumb, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <PatternThumb name={upNextFile} size={64} />
-                </View>
-                <Text numberOfLines={1} style={[styles.upNext, { color: colors.mutedForeground }]}>
-                  Up next: {prettyName(upNextFile)}
-                </Text>
-              </Pressable>
-            ) : null}
-
-            <ProgressBar pct={pct} elapsedMs={hasProgress ? elapsedMs : null} remainingMs={remainingMs} />
-            <Controls big />
-
-            <View style={[styles.speedWrap, { borderTopColor: colors.border }]}>
-              <SpeedControl
-                value={status.speed}
-                feedOverride={status.feedOverride}
-                onCommit={(v) => board.setFeedLive(base, v).then(() => setTimeout(refresh, 350)).catch(() => {})}
-              />
-            </View>
-          </ScrollView>
-          {queueModal}
-        </SafeAreaView>
-      </View>
-    </Modal>
-  )
-
+  const queue = page === 'queue'
   return (
-    <View {...swipe.panHandlers} style={[styles.barWrap, { bottom: insets.bottom + TAB_BAR }]}>
-      {expandedDrawer}
-      <Pressable onPress={() => setExpanded(true)} style={[styles.bar, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <PatternThumb name={patternKey(displayFile)} size={46} />
-        <View style={{ flex: 1 }}>
-          <Text numberOfLines={1} style={[styles.title, { color: colors.foreground }]}>{name || 'Idle'}</Text>
-          <Text numberOfLines={1} style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{subtitle}</Text>
-          <View style={[styles.miniTrack, { backgroundColor: colors.border }]}>
-            <View style={[styles.miniFill, { width: `${pct}%`, backgroundColor: colors.live }]} />
+    <Sheet
+      visible={expanded && active}
+      onClose={close}
+      variant="page"
+      title={queue ? st.playlist?.name ?? 'Queue' : shown.subtitle}
+      onBack={queue ? () => setPage('player') : undefined}
+      leading={<IconButton icon="expand-more" size={28} color={colors.foreground} label="Collapse player" onPress={close} />}
+      trailing={
+        queue ? undefined : st.playlist ? (
+          <IconButton icon="queue-music" size={26} color={colors.foreground} label="Show queue" onPress={() => setPage('queue')} />
+        ) : (
+          <View />
+        )
+      }
+    >
+      {queue ? (
+        <FlatList
+          data={upcoming}
+          keyExtractor={(it, i) => `${it}-${i}`}
+          contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.lg }}
+          ListEmptyComponent={
+            <Text style={{ color: colors.mutedForeground, textAlign: 'center', marginTop: 40 }}>No upcoming patterns.</Text>
+          }
+          renderItem={({ item, index }) => (
+            <View style={[styles.queueRow, { borderColor: colors.border, backgroundColor: colors.card }]}>
+              <Text style={{ color: colors.mutedForeground, minWidth: 24, textAlign: 'center', fontSize: font.size.sm }}>{index + 1}</Text>
+              <View style={styles.queueThumb}>
+                <PatternThumb name={item} size={36} />
+              </View>
+              <Text numberOfLines={2} style={{ flex: 1, color: colors.foreground }}>{prettyName(item)}</Text>
+            </View>
+          )}
+        />
+      ) : (
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          scrollEnabled={!scrollLocked}
+          contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl }}
+        >
+          <View style={{ alignItems: 'center', marginVertical: spacing.md }}>
+            {/* The signature view: full pattern on the sand disc, progress as the glowing rim arc. */}
+            <LiveDrawing name={shown.displayFile} size={vizSize} pct={shown.pct} />
           </View>
-          {hasProgress ? (
-            <Text numberOfLines={1} style={{ color: colors.mutedForeground, fontFamily: font.family.mono, fontSize: font.size.xs, marginTop: 3 }}>
-              {fmt(elapsedMs)} · {pct}%{remainingMs != null ? ` · -${fmt(remainingMs)}` : ''}
-            </Text>
+
+          <Text numberOfLines={2} style={[styles.bigTitle, { color: colors.foreground }]}>{shown.name || 'Idle'}</Text>
+          {/* Between-patterns wait: the name/preview above is what's on the sand
+              now; make it unmistakable that we're waiting, not still drawing it. */}
+          {shown.pausing ? (
+            <View style={[styles.pausePill, { borderColor: colors.live }]}>
+              <MaterialIcons name="hourglass-top" size={14} color={colors.live} />
+              <Text style={{ color: colors.live, fontSize: font.size.sm, fontWeight: font.weight.medium }}>
+                Waiting for the next pattern
+              </Text>
+            </View>
           ) : null}
-        </View>
-        <Controls />
-      </Pressable>
-    </View>
+          {upNextFile ? (
+            <Pressable onPress={() => setPage('queue')} style={styles.upNextRow}>
+              <View style={[styles.upNextThumb, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <PatternThumb name={upNextFile} size={64} />
+              </View>
+              <Text numberOfLines={2} style={[styles.upNext, { color: colors.mutedForeground }]}>
+                Up next: {prettyName(upNextFile)}
+              </Text>
+            </Pressable>
+          ) : null}
+
+          <ProgressBar pct={shown.pct} elapsedMs={shown.hasProgress ? shown.elapsedMs : null} remainingMs={shown.remainingMs} />
+          <View style={styles.controls}>
+            <IconButton icon="stop" size={30} color={colors.foreground} label="Stop" onPress={() => act(() => board.stop(shown.base), 'Stopped', 'stop the table')} />
+            <PlayPause np={shown} act={act} size={60} />
+            {st.playlist ? (
+              <IconButton icon="skip-next" size={30} color={colors.foreground} label="Skip to next pattern" onPress={() => skip(shown, act)} />
+            ) : (
+              <View style={{ width: 38 }} />
+            )}
+          </View>
+
+          <View style={[styles.speedWrap, { borderTopColor: colors.border }]}>
+            <SpeedControl
+              value={st.speed}
+              feedOverride={st.feedOverride}
+              onCommit={(v) => board.setFeedLive(shown.base, v).then(() => setTimeout(refresh, 350)).catch(() => {})}
+            />
+          </View>
+        </ScrollView>
+      )}
+    </Sheet>
   )
 }
 
@@ -360,16 +457,15 @@ function ProgressBar({ pct, elapsedMs, remainingMs }: { pct: number; elapsedMs: 
 }
 
 const styles = StyleSheet.create({
-  barWrap: { position: 'absolute', left: spacing.sm, right: spacing.sm },
+  barWrap: { marginHorizontal: spacing.sm, marginBottom: spacing.sm },
   bar: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.sm, paddingRight: spacing.md, borderRadius: radius.lg, borderWidth: 1 },
+  capsule: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md },
+  capsuleTitle: { fontSize: font.size.sm, fontWeight: font.weight.semibold },
   title: { fontSize: font.size.md, fontWeight: font.weight.semibold },
   miniTrack: { height: 3, borderRadius: 2, marginTop: 5, overflow: 'hidden' },
   miniFill: { height: 3, borderRadius: 2 },
   controls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.md },
   playBtn: { borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center' },
-  expandedSheet: { height: '88%', borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1 },
-  grabber: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginTop: spacing.sm, marginBottom: spacing.xs },
-  expandedHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg },
   bigTitle: { fontSize: font.size.xl + 2, fontFamily: font.family.display, letterSpacing: -0.3, textAlign: 'center' },
   pausePill: { flexDirection: 'row', alignItems: 'center', alignSelf: 'center', gap: spacing.xs, marginTop: spacing.sm, borderWidth: 1, borderRadius: radius.pill, paddingVertical: 4, paddingHorizontal: spacing.md },
   upNextRow: { alignItems: 'center', justifyContent: 'center', gap: spacing.xs, marginTop: spacing.sm },
@@ -379,9 +475,6 @@ const styles = StyleSheet.create({
   fill: { height: 6, borderRadius: 3 },
   timeRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 5 },
   speedWrap: { marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: 1, gap: spacing.sm },
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  queueSheet: { height: '70%', borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1 },
-  queueHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.md },
   queueRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, marginBottom: spacing.sm },
   queueThumb: { width: 36, height: 36, borderRadius: 18, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
 })

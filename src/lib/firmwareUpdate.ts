@@ -5,7 +5,7 @@
 // rejected by the board's chip-ID check at the very end of the flash (both
 // chips share the 0xE9 magic byte), so the image is picked by the `mcu` the
 // /updatefw probe reports. Older firmware doesn't report it; the CALLER then
-// asks the user which board it is before starting (UpdatesCard) and passes
+// asks the user which board it is before starting (FirmwareCard) and passes
 // the answer as `forceMcu` — a wrong pick is always rejected safely, the old
 // firmware keeps running, and the user just retries with the other choice.
 //
@@ -38,7 +38,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
  * after rebooting; throws with a user-readable message on any failure. The
  * table itself is safe throughout — a failed/interrupted upload just leaves
  * the old image running. `forceMcu` overrides the probed MCU (the user's
- * answer to UpdatesCard's which-board dialog when the firmware is too old to
+ * answer to FirmwareCard's which-board dialog when the firmware is too old to
  * report it).
  */
 export async function runFirmwareUpdate(

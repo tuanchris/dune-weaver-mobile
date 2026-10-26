@@ -21,7 +21,7 @@ export interface UpdateFwResponse {
   status: 'ready' | 'busy' | 'ok' | 'failed'
   fw?: string
   /** Build target ("esp32" | "esp32s3") — which MCU-prefixed release image to
-   * flash. Absent on firmware predating it (UpdatesCard then asks the user
+   * flash. Absent on firmware predating it (FirmwareCard then asks the user
    * which board it is before flashing). */
   mcu?: string
 }
@@ -63,14 +63,25 @@ export interface WifiWriteResult {
 
 /** Clear-before-run modes accepted by the firmware's $Sand/Run command. */
 export type ClearMode = 'none' | 'adaptive' | 'in' | 'out' | 'sideway' | 'random'
+// The app's ONE clear vocabulary — every picker/label reads these (default first).
+// Standing alone (sheet title, toast) prefix them: "Clear from center/edge", "Clear sideways".
 export const CLEAR_MODES: { mode: ClearMode; label: string }[] = [
-  { mode: 'none', label: 'No clear' },
   { mode: 'adaptive', label: 'Adaptive' },
   { mode: 'in', label: 'From center' },
   { mode: 'out', label: 'From edge' },
   { mode: 'sideway', label: 'Sideways' },
   { mode: 'random', label: 'Random' },
+  { mode: 'none', label: 'None' },
 ]
+/** One line on what each clear does — under the choice wherever it's picked (mirrors dw's preExecutionOptions copy). */
+export const CLEAR_DESC: Record<ClearMode, string> = {
+  none: 'Start drawing immediately without clearing the sand first',
+  adaptive: 'Automatically picks the best clear direction based on where the ball is',
+  in: 'Spirals outward from the center to erase the current pattern',
+  out: 'Spirals inward from the edge to erase the current pattern',
+  sideway: 'Sweeps side-to-side across the sand to erase the current pattern',
+  random: 'Picks a random clear direction each run',
+}
 
 // ---- LED catalog (mirrors the firmware's Leds.cpp enum tables) ----
 // `uses` drives the LED UI: show the Color / Color2 / Palette controls only for
@@ -85,9 +96,12 @@ export interface LedInputs {
   /** ball effect: rotation direction (cw/ccw) and start alignment (0..359°). */
   direction?: boolean
   align?: boolean
-  /** $LED/Intensity: the slider's label for this effect (what it controls);
-   *  absent = the effect ignores intensity. */
+  /** $LED/Intensity: WLED's label for this effect's second slider (what it
+   *  controls); absent = WLED shows no intensity slider and the firmware ignores it. */
   intensity?: string
+  /** $LED/Speed: WLED's label when it renames speed (e.g. 'Cooling'); false =
+   *  WLED hides the speed slider for this effect; absent = 'Speed'. */
+  speed?: string | false
 }
 
 export interface LedEffectDef {
@@ -98,46 +112,55 @@ export interface LedEffectDef {
 
 /** All LED effects, in the firmware's order. */
 export const LED_EFFECTS: LedEffectDef[] = [
-  { name: 'off', label: 'Off', uses: {} },
-  { name: 'static', label: 'Static', uses: { color: true } },
-  { name: 'rainbow', label: 'Rainbow', uses: { palette: true } },
+  { name: 'off', label: 'Off', uses: { speed: false } },
+  { name: 'static', label: 'Static', uses: { color: true, speed: false } },
+  { name: 'rainbow', label: 'Rainbow', uses: { palette: true, intensity: 'Size' } },
   { name: 'breathe', label: 'Breathe', uses: { color: true } },
-  { name: 'colorloop', label: 'Color loop', uses: { palette: true } },
-  { name: 'theater', label: 'Theater', uses: { color: true } },
-  { name: 'scan', label: 'Scan', uses: { color: true, intensity: 'Trail' } },
-  { name: 'running', label: 'Running', uses: { color: true } },
-  { name: 'sine', label: 'Sine', uses: { color: true } },
-  { name: 'gradient', label: 'Gradient', uses: { color: true, color2: true } },
+  { name: 'colorloop', label: 'Color loop', uses: { palette: true, intensity: 'Saturation' } },
+  { name: 'theater', label: 'Theater', uses: { color: true, intensity: 'Gap size' } },
+  { name: 'scan', label: 'Scan', uses: { color: true, intensity: '# of dots' } },
+  { name: 'running', label: 'Running', uses: { color: true, intensity: 'Wave width' } },
+  { name: 'sine', label: 'Sine', uses: { color: true, intensity: 'Scale' } },
+  { name: 'gradient', label: 'Gradient', uses: { color: true, color2: true, intensity: 'Spread' } },
   { name: 'sinelon', label: 'Sinelon', uses: { palette: true, intensity: 'Trail' } },
-  { name: 'twinkle', label: 'Twinkle', uses: { palette: true, intensity: 'Density' } },
-  { name: 'sparkle', label: 'Sparkle', uses: { color: true, intensity: 'Density' } },
-  { name: 'fire', label: 'Fire', uses: { palette: true, intensity: 'Flame' } },
-  { name: 'candle', label: 'Candle', uses: { color: true, intensity: 'Flicker' } },
+  { name: 'twinkle', label: 'Twinkle', uses: { palette: true, intensity: 'Intensity' } },
+  { name: 'sparkle', label: 'Sparkle', uses: { color: true } },
+  { name: 'fire', label: 'Fire', uses: { palette: true, speed: 'Cooling', intensity: 'Spark rate' } },
+  { name: 'candle', label: 'Candle', uses: { color: true, intensity: 'Intensity' } },
   { name: 'meteor', label: 'Meteor', uses: { color: true, intensity: 'Trail' } },
-  { name: 'bouncing', label: 'Bouncing', uses: { color: true, intensity: 'Trail' } },
-  { name: 'wipe', label: 'Wipe', uses: { color: true, color2: true } },
-  { name: 'dualscan', label: 'Dual scan', uses: { color: true, color2: true, intensity: 'Trail' } },
+  { name: 'bouncing', label: 'Bouncing', uses: { color: true, speed: 'Gravity', intensity: '# of balls' } },
+  { name: 'wipe', label: 'Wipe', uses: { color: true, color2: true, intensity: 'Intensity' } },
+  { name: 'dualscan', label: 'Dual scan', uses: { color: true, color2: true, intensity: '# of dots' } },
   { name: 'juggle', label: 'Juggle', uses: { palette: true, intensity: 'Trail' } },
-  { name: 'multicomet', label: 'Multi-comet', uses: { palette: true, intensity: 'Trail' } },
-  { name: 'glitter', label: 'Glitter', uses: { palette: true, intensity: 'Density' } },
-  { name: 'dissolve', label: 'Dissolve', uses: { color: true, color2: true } },
-  { name: 'ripple', label: 'Ripple', uses: { palette: true, intensity: 'Trail' } },
-  { name: 'drip', label: 'Drip', uses: { color: true, intensity: 'Trail' } },
-  { name: 'lightning', label: 'Lightning', uses: { intensity: 'Density' } },
-  { name: 'fireworks', label: 'Fireworks', uses: { palette: true, intensity: 'Density' } },
-  { name: 'plasma', label: 'Plasma', uses: { palette: true } },
-  { name: 'heartbeat', label: 'Heartbeat', uses: { color: true } },
+  { name: 'multicomet', label: 'Multi-comet', uses: { palette: true, intensity: 'Fade' } },
+  { name: 'glitter', label: 'Glitter', uses: { palette: true, intensity: 'Intensity' } },
+  { name: 'dissolve', label: 'Dissolve', uses: { color: true, color2: true, speed: 'Repeat speed', intensity: 'Dissolve speed' } },
+  { name: 'ripple', label: 'Ripple', uses: { palette: true, intensity: 'Wave #' } },
+  { name: 'drip', label: 'Drip', uses: { color: true, speed: 'Gravity', intensity: '# of drips' } },
+  { name: 'lightning', label: 'Lightning', uses: { intensity: 'Intensity' } },
+  { name: 'fireworks', label: 'Fireworks', uses: { palette: true, speed: false, intensity: 'Frequency' } },
+  { name: 'plasma', label: 'Plasma', uses: { palette: true, intensity: 'Intensity' } },
+  { name: 'heartbeat', label: 'Heartbeat', uses: { color: true, intensity: 'Intensity' } },
   { name: 'strobe', label: 'Strobe', uses: { color: true } },
   { name: 'police', label: 'Police', uses: {} },
-  { name: 'chase', label: 'Chase', uses: { color: true, color2: true } },
-  { name: 'railway', label: 'Railway', uses: { color: true, color2: true } },
-  { name: 'pacifica', label: 'Pacifica', uses: {} },
-  { name: 'aurora', label: 'Aurora', uses: {} },
+  { name: 'chase', label: 'Chase', uses: { color: true, color2: true, intensity: 'Width' } },
+  { name: 'railway', label: 'Railway', uses: { color: true, color2: true, intensity: 'Smoothness' } },
+  { name: 'pacifica', label: 'Pacifica', uses: { intensity: 'Angle' } },
+  { name: 'aurora', label: 'Aurora', uses: { intensity: 'Intensity' } },
   { name: 'pride', label: 'Pride', uses: {} },
-  { name: 'colorwaves', label: 'Color waves', uses: { palette: true } },
+  { name: 'colorwaves', label: 'Color waves', uses: { palette: true, intensity: 'Hue' } },
   { name: 'bpm', label: 'BPM', uses: { palette: true } },
   { name: 'ball', label: 'Ball', uses: { color: true, direction: true, align: true } },
 ]
+
+/** The firmware's $LED/Speed and $LED/Intensity defaults: each effect's designed
+ *  look. Picking an effect resets the two sliders to these, like WLED. */
+export const LED_DEFAULT_SPEED = 50
+export const LED_DEFAULT_INTENSITY = 128
+export interface LedSliderReset {
+  speed: number
+  intensity?: number
+}
 
 /** Palettes that recolor the auto-hue effects ($LED/Palette=). */
 export const LED_PALETTES = ['rainbow', 'ocean', 'lava', 'forest', 'party', 'cloud', 'heat', 'sunset'] as const
@@ -714,7 +737,10 @@ const realBoard = {
   // applies as an in-memory override that beats the Run/Idle state hook (which
   // would otherwise mask $LED/Effect) and is committed to NVS on return to idle.
   // This is what lets the user actually turn the ring on/off / recolor mid-pattern.
-  setLedEffect: (base: string, effect: string) => command(base, `$Sand/Led=effect=${effect}`),
+  // `reset` restores the slider defaults in the SAME command, as WLED does when
+  // an effect is picked. Leave `intensity` out for firmware without the key.
+  setLedEffect: (base: string, effect: string, reset?: LedSliderReset) =>
+    command(base, `$Sand/Led=effect=${effect}${reset ? ` speed=${reset.speed}` : ''}${reset?.intensity != null ? ` intensity=${reset.intensity}` : ''}`),
   setLedPalette: (base: string, palette: string) => command(base, `$Sand/Led=palette=${palette}`),
   setLedColor: (base: string, hex: string) => command(base, `$Sand/Led=color=${hexRRGGBB(hex)}`),
   setLedColor2: (base: string, hex: string) => command(base, `$Sand/Led=color2=${hexRRGGBB(hex)}`),
@@ -722,6 +748,11 @@ const realBoard = {
   setLedSpeed: (base: string, value: number) => command(base, `$Sand/Led=speed=${clampInt(value, 1, 255)}`),
   /** fw ≥ the release that adds `LED/Intensity` to /sand_settings (older rejects the key). */
   setLedIntensity: (base: string, value: number) => command(base, `$Sand/Led=intensity=${clampInt(value, 0, 255)}`),
+  /** Strip length. A setting, not a live key: idle/paused only (IdleError while drawing). */
+  setLedCount: (base: string, n: number) => command(base, `$LED/Count=${clampInt(n, 1, 300)}`),
+  /** Wire color order (GRB, RGB, …, GRBW for RGBW strips) — firmware with $LED/Order
+   * only (present in /sand_settings). A setting: idle/paused only, applies next frame. */
+  setLedOrder: (base: string, order: string) => command(base, `$LED/Order=${order}`),
   /** Ball effect: rotation direction. */
   setLedDirection: (base: string, dir: 'cw' | 'ccw') => command(base, `$Sand/Led=direction=${dir}`),
   /** Ball effect: start alignment in degrees (0..359). */

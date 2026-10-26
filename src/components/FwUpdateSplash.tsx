@@ -1,4 +1,4 @@
-// Full-screen splash shown while a firmware update runs (UpdatesCard drives
+// Full-screen splash shown while a firmware update runs (FirmwareCard in UpdatesCard.tsx drives
 // it via the update's stage). Download/flash show a spinner; the reboot stage
 // shows a 60-second countdown. The splash closes on reconnect or when the
 // countdown runs out — whichever comes first. Running out doesn't fail the
@@ -89,8 +89,8 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: font.size.xl, fontWeight: font.weight.semibold, marginBottom: spacing.xs },
   stage: { fontSize: font.size.md },
-  center: { height: 120, alignItems: 'center', justifyContent: 'center', gap: spacing.xs },
+  center: { minHeight: 120, alignItems: 'center', justifyContent: 'center', gap: spacing.xs },
   countdown: { fontSize: 64, fontWeight: font.weight.bold, fontVariant: ['tabular-nums'] },
   hint: { fontSize: font.size.sm, textAlign: 'center' },
-  footer: { fontSize: font.size.xs, textAlign: 'center', marginTop: spacing.lg, opacity: 0.8 },
+  footer: { fontSize: font.size.xs, textAlign: 'center', marginTop: spacing.lg },
 })

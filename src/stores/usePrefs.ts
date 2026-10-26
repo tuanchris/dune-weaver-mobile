@@ -34,7 +34,7 @@ interface Persisted {
 }
 
 interface PrefsStore {
-  /** Remembered Pre-Execution Action for running a pattern (Browse detail sheet). */
+  /** Remembered before-drawing clear for running a pattern (Browse detail sheet). */
   clearMode: ClearMode
   setClearMode: (m: ClearMode) => void
   /** Saved playback preferences, keyed per table + playlist filename

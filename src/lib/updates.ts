@@ -11,6 +11,10 @@ const FIRMWARE_REPO = 'tuanchris/dune-weaver-firmware'
 
 const APP_BUNDLE_ID = 'com.duneweaver'
 const APP_STORE_ID = '6785920802'
+/** The desktop app (../dune-weaver-desktop: this source in Electron, so
+ * Platform.OS is 'web') ships as GitHub Releases tagged with the mobile version
+ * it bundles, e.g. "v1.2.0". */
+const DESKTOP_REPO = 'tuanchris/dune-weaver-desktop'
 
 /** Board MCUs a release can ship an image for. Matches both the release asset
  * prefixes (`esp32-firmware.bin` / `esp32s3-firmware.bin`) and the `mcu` the
@@ -36,7 +40,7 @@ export interface FirmwareRelease {
 
 /** The image to flash on a table whose firmware reports `mcu` (from
  * /sand_status or the /updatefw probe). An unreported mcu (older firmware)
- * falls back to the ESP32 image — but UpdatesCard asks the user which board
+ * falls back to the ESP32 image — but FirmwareCard asks the user which board
  * it is BEFORE flashing whenever the release ships more than one image, so
  * this fallback is only reached when there is nothing to choose (an
  * esp32-only release; a mis-fit there is rejected harmlessly by the board).
@@ -81,10 +85,11 @@ function toFirmwareRelease(r: GhRelease): FirmwareRelease | null {
 
 export interface AppRelease {
   version: string
-  /** Store page to send the user to. */
+  /** Store page (or desktop release page) to send the user to. */
   url: string
-  /** The store's "What's new" for that version. iOS only — Play doesn't put it
-   * in the page HTML, so Android falls back to the bundled changelog. */
+  /** The store's "What's new" for that version. iOS and desktop only — Play
+   * doesn't put it in the page HTML, so Android falls back to the bundled
+   * changelog. */
   notes?: string
 }
 
@@ -124,7 +129,8 @@ export async function fetchFirmwareReleases(): Promise<FirmwareRelease[]> {
 
 /** Latest store version of THIS app, or null if the store can't tell us.
  * iOS: the official iTunes lookup API. Android: scraped from the Play page
- * (no public API) — a parse failure just means "unknown". */
+ * (no public API) — a parse failure just means "unknown". Desktop: the latest
+ * GitHub release of DESKTOP_REPO. */
 export async function fetchLatestApp(): Promise<AppRelease | null> {
   if (Platform.OS === 'ios') {
     // bundleId lookups are occasionally flaky; retry by the numeric app id.
@@ -152,6 +158,19 @@ export async function fetchLatestApp(): Promise<AppRelease | null> {
     const m = /\[\[\["(\d+(?:\.\d+)+)"\]\]/.exec(html)
     if (!m) return null
     return { version: m[1], url }
+  }
+  if (Platform.OS === 'web') {
+    const res = await fetch(`https://api.github.com/repos/${DESKTOP_REPO}/releases/latest`, {
+      headers: { Accept: 'application/vnd.github+json' },
+    })
+    if (!res.ok) return null
+    const r = (await res.json()) as GhRelease
+    if (!r.tag_name) return null
+    return {
+      version: r.tag_name.replace(/^v/, ''),
+      url: r.html_url ?? `https://github.com/${DESKTOP_REPO}/releases/latest`,
+      notes: r.body?.trim() || undefined,
+    }
   }
   return null
 }

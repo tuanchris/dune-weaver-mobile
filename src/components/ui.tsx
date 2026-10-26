@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, FlatList, Modal, PanResponder, Pressable, StyleSheet, Switch, Text, View, type ViewStyle } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { ActivityIndicator, FlatList, PanResponder, Pressable, StyleSheet, Switch, Text, View, type ViewStyle } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
+import { Sheet } from './Sheet'
 import { useTheme } from '../stores/useTheme'
 import { useScrollLock } from '../stores/useScrollLock'
 import { radius, spacing, font } from '../theme'
@@ -119,10 +119,6 @@ export function Toggle({
       ios_backgroundColor={colors.cardElevated}
       // White thumb on both platforms/tracks — the switch-knob convention.
       thumbColor="#FFFFFF"
-      // The native switch is huge (51×31 on iOS) next to our 13–15 px rows;
-      // scale it down. Transform doesn't shrink the layout box, so pull the
-      // overhang back in with negative margins.
-      style={styles.toggle}
     />
   )
 }
@@ -137,6 +133,45 @@ export function Card({ children, style }: { children: React.ReactNode; style?: V
 export function CardTitle({ children }: { children: React.ReactNode }) {
   const colors = useTheme((s) => s.colors)
   return <Text style={[styles.cardTitleText, { color: colors.mutedForeground }]}>{children}</Text>
+}
+
+/** Inline segmented choice (a pill of 2–4 options). Safe inside a sheet, unlike
+ * `Select`. `fill` stretches it across the row, segments sharing the width. */
+export function Segmented<T extends string>({
+  value,
+  options,
+  onChange,
+  fill,
+}: {
+  value: T
+  options: { value: T; label: string }[]
+  onChange: (v: T) => void
+  fill?: boolean
+}) {
+  const colors = useTheme((s) => s.colors)
+  return (
+    <View style={[styles.segments, { borderColor: colors.border }]}>
+      {options.map((o) => {
+        const on = o.value === value
+        return (
+          <Pressable
+            key={o.value}
+            onPress={() => onChange(o.value)}
+            accessibilityRole="button"
+            accessibilityState={{ selected: on }}
+            style={[styles.segment, fill && styles.segmentFill, on && { backgroundColor: colors.primary }]}
+          >
+            <Text
+              numberOfLines={1}
+              style={{ color: on ? colors.primaryForeground : colors.foreground, fontSize: font.size.sm, fontWeight: on ? font.weight.semibold : font.weight.regular }}
+            >
+              {o.label}
+            </Text>
+          </Pressable>
+        )
+      })}
+    </View>
+  )
 }
 
 /** A dropdown select styled like an input; opens a sheet of options. */
@@ -160,43 +195,36 @@ export function Select<T extends string>({
         onPress={() => setOpen(true)}
         style={[styles.select, { backgroundColor: colors.inputBackground, borderColor: colors.border }]}
       >
-        <Text style={{ color: current ? colors.foreground : colors.mutedForeground, fontSize: font.size.md, flex: 1 }} numberOfLines={1}>
+        <Text style={{ color: current ? colors.foreground : colors.mutedForeground, fontSize: font.size.md, flex: 1 }} numberOfLines={2}>
           {current?.label ?? placeholder ?? 'Select'}
         </Text>
         <MaterialIcons name="expand-more" size={22} color={colors.mutedForeground} />
       </Pressable>
-      <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
-        <Pressable style={styles.selectBackdrop} onPress={() => setOpen(false)}>
-          <Pressable style={[styles.selectSheet, { backgroundColor: colors.background, borderColor: colors.border }]} onPress={() => {}}>
-            <View style={[styles.selectHandle, { backgroundColor: colors.border }]} />
-            <FlatList
-              data={options}
-              keyExtractor={(o) => o.value}
-              style={{ flexShrink: 1 }}
-              contentContainerStyle={{ paddingBottom: 24 }}
-              renderItem={({ item }) => {
-                const active = item.value === value
-                return (
-                  <Pressable
-                    onPress={() => {
-                      onChange(item.value)
-                      setOpen(false)
-                    }}
-                    style={[styles.selectOption, { borderBottomColor: colors.border }]}
-                  >
-                    <Text style={{ color: active ? colors.primary : colors.foreground, fontSize: font.size.md, fontWeight: active ? font.weight.semibold : font.weight.regular }}>
-                      {item.label}
-                    </Text>
-                    {active ? <MaterialIcons name="check" size={20} color={colors.primary} /> : null}
-                  </Pressable>
-                )
-              }}
-            />
-            {/* Spacer sized to the modal window's bottom inset (Android nav bar / iOS home indicator) */}
-            <SafeAreaView edges={['bottom']} />
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <Sheet visible={open} onClose={() => setOpen(false)}>
+        <FlatList
+          data={options}
+          keyExtractor={(o) => o.value}
+          style={{ flexShrink: 1 }}
+          contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl }}
+          renderItem={({ item }) => {
+            const active = item.value === value
+            return (
+              <Pressable
+                onPress={() => {
+                  onChange(item.value)
+                  setOpen(false)
+                }}
+                style={[styles.selectOption, { borderBottomColor: colors.border }]}
+              >
+                <Text style={{ flexShrink: 1, color: active ? colors.primary : colors.foreground, fontSize: font.size.md, fontWeight: active ? font.weight.semibold : font.weight.regular }}>
+                  {item.label}
+                </Text>
+                {active ? <MaterialIcons name="check" size={20} color={colors.primary} /> : null}
+              </Pressable>
+            )
+          }}
+        />
+      </Sheet>
     </>
   )
 }
@@ -331,7 +359,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     padding: spacing.lg,
   },
-  toggle: { transform: [{ scaleX: 0.78 }, { scaleY: 0.78 }], marginVertical: -3, marginHorizontal: -5 },
   cardTitleText: {
     fontSize: 11,
     fontWeight: font.weight.bold,
@@ -339,10 +366,10 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginBottom: spacing.md,
   },
-  select: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 48 },
-  selectBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  selectSheet: { maxHeight: '70%', borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1, paddingTop: spacing.sm, paddingHorizontal: spacing.lg },
-  selectHandle: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: spacing.sm },
+  segments: { flexDirection: 'row', borderWidth: 1, borderRadius: radius.pill, overflow: 'hidden' },
+  segment: { minWidth: 48, minHeight: 36, paddingHorizontal: spacing.md, alignItems: 'center', justifyContent: 'center' },
+  segmentFill: { flex: 1, minWidth: 0, paddingHorizontal: spacing.xs },
+  select: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, minHeight: 48 },
   selectOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing.md, borderBottomWidth: 1 },
   sliderHit: { height: 36, justifyContent: 'center' },
   sliderTrack: { height: 6, borderRadius: radius.pill, overflow: 'hidden' },

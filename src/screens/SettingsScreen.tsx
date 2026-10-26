@@ -1,68 +1,81 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, Alert, Image, type LayoutChangeEvent, ScrollView, StyleSheet, Text, TextInput, View, Pressable } from 'react-native'
+// Settings, the list: saved tables first, then one row per settings page,
+// grouped by WHERE the setting lives — on the active table (its name heads the
+// group; these lock while it draws, see IdleGate.tsx) or on this phone. Each row
+// shows the current value so the whole setup reads at a glance; the pages
+// themselves are in screens/settings/ (SettingsStack.tsx).
+import React, { useCallback, useRef, useState } from 'react'
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
-import { useNavigation, useRoute } from '@react-navigation/native'
-import { board, normalizeBase, testBoard, CLEAR_MODES, type ClearMode } from '../api/board'
+import { useFocusEffect, useNavigation, useTheme as useNavTheme } from '@react-navigation/native'
+import { board, normalizeBase, testBoard } from '../api/board'
 import { isDemoBase } from '../api/demoBoard'
-import { isJobLocked, isSettingsLocked } from '../api/status'
-import { useBoards } from '../stores/useBoards'
+import { isSettingsLocked } from '../api/status'
+import { useBoards, type Board } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
-import { useBranding, DEFAULT_BRAND } from '../stores/useBranding'
+import { useBranding, brandName } from '../stores/useBranding'
 import { usePreviews } from '../stores/usePreviews'
+import { useUpdates, appUpdateAvailable, fwUpdateAvailable, APP_VERSION } from '../stores/useUpdates'
 import { toast } from '../stores/useToast'
-import { importPreviews } from '../lib/importPreviews'
-import { syncPreviewBundle } from '../lib/previewSync'
-import { Button, Card, CardTitle, IconButton, Select, Toggle } from '../components/ui'
+import { Button, Card, IconButton } from '../components/ui'
 import { Screen } from '../components/Screen'
-import { AlignOrientation } from '../components/AlignOrientation'
-import { CatalogCard } from '../components/CatalogCard'
-import { ClearPatternsCard } from '../components/ClearPatternsCard'
-import { SecurityCard } from '../components/SecurityCard'
-import { StillSands } from '../components/StillSands'
-import { UpdatesCard } from '../components/UpdatesCard'
-import { WifiCard } from '../components/WifiCard'
-import { DiagnosticsCard } from '../components/DiagnosticsCard'
-import { IdleGate, IdleGateBanner } from '../components/IdleGate'
-import { userMessage } from '../lib/errors'
 import { useDiscovery, type DiscoveredTable } from '../lib/discovery'
 import { syncHostname, renameMessage } from '../lib/renameTable'
-import { playlistName } from '../lib/playlists'
-import { pickLogo, clearLogo } from '../lib/branding'
-import { pauseToSeconds, secondsToPause } from '../lib/pauseUnits'
-import type { SettingsRoute, TabNav } from '../navigation'
+import { parseSlots } from '../lib/quietSlots'
+import { SCROLL_BOTTOM_PAD } from '../lib/layout'
+import type { SettingsNav, SettingsStackParamList } from '../navigation'
 import { radius, spacing, font } from '../theme'
 
-// Homing modes the firmware exposes via $Sand/HomingMode (mirrors dw).
-const HOMING_MODES: { mode: 'crash' | 'sensor'; label: string; desc: string }[] = [
-  { mode: 'crash', label: 'Crash homing', desc: 'Y axis moves until a physical stop, then theta and rho are set to 0.' },
-  { mode: 'sensor', label: 'Sensor homing', desc: 'Homes both X and Y axes using sensors.' },
-]
+type Icon = keyof typeof MaterialIcons.glyphMap
 
-// dw-style clear-pattern labels for the auto-play selector.
-const CLEAR_LABELS: Record<ClearMode, string> = {
-  none: 'None',
-  adaptive: 'Adaptive',
-  in: 'Clear from center',
-  out: 'Clear from perimeter',
-  sideway: 'Clear sideways',
-  random: 'Random',
+/** Row values read from the table's settings, tagged with the base they came from. */
+interface TableValues {
+  base: string
+  playback: string
+  stillSands: string
+  homing: string
+  /** "60 LEDs · GRB"; undefined when the table has no LED strip configured. */
+  ledStrip?: string
 }
 
-export function SettingsScreen() {
+function summarize(base: string, s: Record<string, string>): TableValues {
+  const on = (v?: string) => (v ?? '').toUpperCase() === 'ON' || v === '1'
+  const autostart = s['Playlist/Autostart'] ?? ''
+  const slots = parseSlots(s['Sands/Slots'] ?? '')
+  return {
+    base,
+    playback: autostart ? `Auto-play · ${autostart}` : 'Auto-play off',
+    stillSands: !on(s['Sands/Enabled'])
+      ? 'Off'
+      : slots.length === 1 ? `${slots[0].start}–${slots[0].end}`
+      : slots.length > 1 ? `${slots.length} periods`
+      : 'On',
+    homing: (s['Sand/HomingMode'] ?? 'sensor').toLowerCase() === 'crash' ? 'Crash' : 'Sensor',
+    ledStrip: s['LED/Count'] == null
+      ? undefined
+      : [`${s['LED/Count']} LEDs`, s['LED/Order']?.toUpperCase()].filter(Boolean).join(' · '),
+  }
+}
+
+export function SettingsScreen(): React.JSX.Element {
   const colors = useTheme((s) => s.colors)
+  const navigation = useNavigation<SettingsNav>()
   const { boards, activeId, addBoard, removeBoard, renameBoard, updateBase, setActive, getActiveBase } = useBoards()
   const base = getActiveBase()
+  const active = boards.find((b) => b.id === activeId) ?? null
 
   const [name, setName] = useState('')
   const [host, setHost] = useState('')
   const [testing, setTesting] = useState(false)
+  // The add-by-address form is a once-per-table job — keep it folded behind a
+  // button so the saved tables lead the card.
+  const [showAdd, setShowAdd] = useState(false)
   // Inline rename of an existing table row. Renaming here also renames the
   // table ON the network ($Hostname) when its firmware supports it — see
   // lib/renameTable.ts; the local rename lands first and always sticks.
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
-  // The row's TextInput fires onSubmitEditing AND onEndEditing, which can both
+  // The row's TextInput fires onSubmitEditing AND onBlur, which can both
   // land before a re-render — a ref (not the state) is what makes commit
   // idempotent, so the hostname push never runs twice.
   const editingIdRef = useRef<string | null>(null)
@@ -89,178 +102,42 @@ export function SettingsScreen() {
       })
       .finally(() => setRenamingId((cur) => (cur === id ? null : cur)))
   }
-  // Auto-play on boot: which playlist runs after the table powers on + homes,
-  // plus the boot-run options (separate from the manual-run $Playlist/* settings).
-  const [autostart, setAutostart] = useState('')
-  const [playlistNames, setPlaylistNames] = useState<string[]>([])
-  const [bootLoop, setBootLoop] = useState(true)
-  const [bootShuffle, setBootShuffle] = useState(false)
-  const [bootPauseVal, setBootPauseVal] = useState('0')
-  const [bootPauseUnit, setBootPauseUnit] = useState<'sec' | 'min' | 'hr'>('sec')
-  const [bootPauseFromStart, setBootPauseFromStart] = useState(false)
-  const [bootClear, setBootClear] = useState<ClearMode>('none')
-  // Homing mode ($Sand/HomingMode) + sensor offset ($Sand/ThetaOffset, degrees).
-  // Both are holdOk firmware-side, so they follow the settings lock (writable
-  // while paused), not a strict Idle — see homingWritable below.
-  const [homingMode, setHomingMode] = useState<'crash' | 'sensor'>('sensor')
-  const [thetaOffset, setThetaOffset] = useState('0')
-  // Auto-home during playlists ($Playlist/AutoHome=<n>, 0 = off): re-home every N
-  // patterns to correct mechanical drift over long runs.
-  const [autoHomeEnabled, setAutoHomeEnabled] = useState(false)
-  const [autoHomeEvery, setAutoHomeEvery] = useState('5')
-  // Homing MODE + sensor offset are consulted at home time only, and resuming a
-  // paused job never re-homes — so firmware >= SETTINGS_IN_HOLD_MIN_FW takes
-  // these writes during a pause like the other settings (holdOk in the
-  // firmware's SettingsDefinitions.cpp).
-  const homingWritable = useStatus((s) => !isSettingsLocked(s.status))
-  // Preview sync is the one thing here a pause doesn't free — it streams shards
-  // off the SD card the running job is playing from. Everything else on this
-  // screen below the gate is local to the phone.
-  const syncBlocked = useStatus((s) => isJobLocked(s.status))
-  // ALIGNING the orientation is different: it jogs via /sand_goto, and
-  // SandApi::goTo requires a true Idle (it 409s in Hold, which the sheet would
-  // retry against forever). So that one stays strictly idle-gated.
-  const tableIdle = useStatus((s) => (s.status?.state ?? 'Idle') === 'Idle')
-  // Remember the last playlist so the Enable toggle can restore it.
-  const lastPlaylistRef = useRef('')
 
   const { available: discoveryAvailable, scanning, tables: found, start, stop } = useDiscovery()
   const knownBases = new Set(boards.map((b) => b.base))
 
-  // App branding (custom name + logo), stored locally on this device.
-  const brand = useBranding((s) => s.name)
-  const setBrandName = useBranding((s) => s.setName)
-  const brandLogo = useBranding((s) => s.logoUri)
-  const setBrandLogo = useBranding((s) => s.setLogo)
-  const chooseLogo = async () => {
-    try {
-      const uri = await pickLogo()
-      if (uri) {
-        setBrandLogo(uri)
-        toast.success('Logo updated')
-      }
-    } catch (e) {
-      toast.error((e as Error).message || 'Could not load that image')
-    }
-  }
-  const removeLogo = () => {
-    clearLogo()
-    setBrandLogo(null)
-  }
+  // One /sand_settings read per visit to the list (re-read on focus, so a value
+  // changed on a page is current when you come back). Pages read their own.
+  const [values, setValues] = useState<TableValues | null>(null)
+  useFocusEffect(
+    useCallback(() => {
+      if (!base) return
+      let live = true
+      board
+        .settings(base)
+        .then((s) => { if (live) setValues(summarize(base, s)) })
+        .catch(() => {}) // offline: rows just show no value
+      return () => { live = false }
+    }, [base])
+  )
+  const tv = values && values.base === base ? values : null
 
-  // User-ingested pattern previews (matched to patterns by file name).
+  // Background update check whenever Settings is shown (the tab stays mounted,
+  // so a mount effect would run once per session). 10 min max-age: cheap, and
+  // it picks up releases published mid-session.
+  const check = useUpdates((s) => s.check)
+  useFocusEffect(
+    useCallback(() => {
+      void check(10 * 60_000)
+    }, [check])
+  )
+  const tableFw = useStatus((s) => s.status?.fw ?? null)
+  const fwNew = fwUpdateAvailable(useUpdates((s) => s.fwLatest), tableFw)
+  const appNew = appUpdateAvailable(useUpdates((s) => s.appLatest))
+  const locked = useStatus((s) => isSettingsLocked(s.status))
   const previewCount = usePreviews((s) => Object.keys(s.map).length)
-  const addPreviews = usePreviews((s) => s.addMany)
-  const clearPreviews = usePreviews((s) => s.clear)
-  const [importingPreviews, setImportingPreviews] = useState(false)
-  const [syncingPreviews, setSyncingPreviews] = useState(false)
-  const [syncMsg, setSyncMsg] = useState<string | null>(null)
-
-  // Deep link from Browse's "N patterns without a thumbnail" banner
-  // (navigate('Settings', {focus: 'previews'})): scroll the Pattern previews
-  // card into view and outline it briefly — it sits well below the fold.
-  const route = useRoute<SettingsRoute>()
-  const navigation = useNavigation<TabNav>()
-  const scrollRef = useRef<ScrollView>(null)
-  const previewsY = useRef(0)
-  const pendingFocus = useRef(false)
-  const [flashPreviews, setFlashPreviews] = useState(false)
-
-  const scrollToPreviews = useCallback((): boolean => {
-    if (!previewsY.current) return false // not laid out yet — onLayout will do it
-    scrollRef.current?.scrollTo({ y: Math.max(0, previewsY.current - spacing.lg), animated: true })
-    return true
-  }, [])
-
-  const onPreviewsLayout = (e: LayoutChangeEvent) => {
-    previewsY.current = e.nativeEvent.layout.y
-    if (pendingFocus.current && scrollToPreviews()) pendingFocus.current = false
-  }
-
-  useEffect(() => {
-    if (route.params?.focus !== 'previews') return
-    pendingFocus.current = true
-    setFlashPreviews(true)
-    // First mount of this tab: give the ScrollView a beat to lay out (onLayout
-    // covers the case where it's still not measured by then).
-    const scroll = setTimeout(() => {
-      if (scrollToPreviews()) pendingFocus.current = false
-    }, 300)
-    // Clearing the param last means tapping the banner again re-runs this.
-    const done = setTimeout(() => {
-      pendingFocus.current = false
-      setFlashPreviews(false)
-      navigation.setParams({ focus: undefined })
-    }, 2800)
-    return () => {
-      clearTimeout(scroll)
-      clearTimeout(done)
-    }
-  }, [route.params?.focus, navigation, scrollToPreviews])
-
-  // Pull the preview bundle the SD Card Pattern Manager writes to the card.
-  // Manual only (see lib/previewSync.ts) — this button is the single trigger,
-  // for "I just updated the card" moments, with the outcome made visible.
-  const doSyncPreviews = async () => {
-    if (!base) return
-    setSyncingPreviews(true)
-    setSyncMsg(null)
-    try {
-      const res = await syncPreviewBundle(base, (p) => {
-        if (p.stage === 'checking') {
-          setSyncMsg('Checking the card for a preview bundle…')
-        } else if (p.stage === 'downloading') {
-          setSyncMsg(
-            `Downloading bundle ${p.shard} of ${p.totalShards} (${Math.max(1, Math.round(p.bytes / 1024))} KB)…`
-          )
-        } else {
-          setSyncMsg(
-            `Saved ${p.images} preview${p.images === 1 ? '' : 's'} (bundle ${p.shard} of ${p.totalShards})…`
-          )
-        }
-      })
-      if (res.status === 'busy') {
-        toast.error('The table is running — try again when it’s idle')
-      } else if (res.status === 'no-bundle') {
-        toast.error('No preview bundle on the card — build one with the SD Card Pattern Manager (duneweaver.com/install)')
-      } else if (res.imagesIngested === 0) {
-        toast.success('Previews already up to date')
-      } else {
-        toast.success(`Synced ${res.imagesIngested} preview${res.imagesIngested > 1 ? 's' : ''} from the table`)
-      }
-    } finally {
-      setSyncingPreviews(false)
-      setSyncMsg(null)
-    }
-  }
-
-  const doImportPreviews = async () => {
-    setImportingPreviews(true)
-    try {
-      const res = await importPreviews()
-      if (!res) return // cancelled
-      const { entries, failed } = res
-      addPreviews(entries)
-      if (entries.length === 0) {
-        toast.error(failed.length ? `No usable images (skipped ${failed.length})` : 'No images selected')
-        return
-      }
-      const added = `Imported ${entries.length} preview${entries.length > 1 ? 's' : ''}`
-      toast.success(failed.length ? `${added}, skipped ${failed.length}` : added)
-    } catch (e) {
-      toast.error(userMessage(e, 'import the previews'))
-    } finally {
-      setImportingPreviews(false)
-    }
-  }
-
-  const confirmClearPreviews = () => {
-    if (previewCount === 0) return
-    Alert.alert('Clear previews', `Remove all ${previewCount} imported preview image${previewCount > 1 ? 's' : ''}?`, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Clear', style: 'destructive', onPress: () => { clearPreviews(); toast.success('Previews cleared') } },
-    ])
-  }
+  const brand = useBranding((s) => s.name)
+  const go = (page: keyof SettingsStackParamList) => navigation.navigate(page)
 
   const addDiscovered = (t: DiscoveredTable) => {
     if (knownBases.has(t.base)) {
@@ -286,108 +163,17 @@ export function SettingsScreen() {
     toast.success(`Added ${t.name}`)
   }
 
-  const loadSettings = useCallback(async () => {
-    if (!base) {
-      setAutostart('')
-      setPlaylistNames([])
-      return
-    }
-    try {
-      const s = await board.settings(base)
-      setAutostart(s['Playlist/Autostart'] ?? '')
-      setBootLoop((s['Playlist/AutostartMode'] ?? 'loop').toLowerCase() !== 'single')
-      setBootShuffle((s['Playlist/AutostartShuffle'] ?? '').toUpperCase() === 'ON' || s['Playlist/AutostartShuffle'] === '1')
-      setBootPauseFromStart((s['Playlist/AutostartPauseFromStart'] ?? '').toUpperCase() === 'ON' || s['Playlist/AutostartPauseFromStart'] === '1')
-      setBootClear(CLEAR_MODES.find((c) => c.mode === s['Playlist/AutostartClear'])?.mode ?? 'none')
-      const ah = parseInt(s['Playlist/AutoHome'] ?? '0', 10) || 0
-      setAutoHomeEnabled(ah > 0)
-      if (ah > 0) setAutoHomeEvery(String(ah))
-      setHomingMode((s['Sand/HomingMode'] ?? 'sensor').toLowerCase() === 'crash' ? 'crash' : 'sensor')
-      setThetaOffset(String(parseInt(s['Sand/ThetaOffset'] ?? '0', 10) || 0))
-      // Derive a friendly unit from the stored seconds.
-      const { unit, value } = secondsToPause(parseInt(s['Playlist/AutostartPause'] ?? '0', 10) || 0)
-      setBootPauseUnit(unit)
-      setBootPauseVal(String(value))
-    } catch {
-      // keep whatever we had
-    }
-    try {
-      setPlaylistNames((await board.playlists(base)).map(playlistName))
-    } catch {
-      // keep whatever we had
-    }
-  }, [base])
-
-  // Apply a boot-setting change optimistically; roll back (reload) on failure.
-  const saveBoot = (apply: () => Promise<void>) => {
-    apply().catch(() => {
-      toast.error('Could not save auto-play setting')
-      loadSettings()
-    })
-  }
-
-  const setBootPlaylist = (next: string) => {
-    if (!base) return
-    setAutostart(next)
-    saveBoot(() => board.setPlaylistAutostart(base, next))
-  }
-
-  const toggleAutoplay = (on: boolean) => {
-    if (on) {
-      const pl = autostart || lastPlaylistRef.current || playlistNames[0] || ''
-      if (!pl) {
-        toast.error('Create a playlist first')
-        return
-      }
-      setBootPlaylist(pl)
-    } else {
-      if (autostart) lastPlaylistRef.current = autostart
-      setBootPlaylist('')
-    }
-  }
-
-  // Homing-mode change (idle-gated). Optimistic; revert + reload on rejection.
-  const changeHomingMode = (mode: 'crash' | 'sensor') => {
-    if (!base || mode === homingMode) return
-    const prev = homingMode
-    setHomingMode(mode)
-    board.setHomingMode(base, mode).catch(() => {
-      toast.error(homingWritable ? 'Could not save homing mode' : 'Pause or stop the table to change the homing mode')
-      setHomingMode(prev)
-      loadSettings()
-    })
-  }
-  const commitThetaOffset = () => {
-    if (!base) return
-    const deg = (((Math.round(Number(thetaOffset) || 0)) % 360) + 360) % 360 // 0..359
-    setThetaOffset(String(deg))
-    board.setThetaOffset(base, deg).catch(() => {
-      toast.error(homingWritable ? 'Could not save sensor offset' : 'Pause or stop the table to change the sensor offset')
-      loadSettings()
-    })
-  }
-
-  // Push an AutoHome change; roll back (reload) on failure.
-  const commitAutoHome = (every: number) => {
-    if (!base) return
-    board.setPlaylistAutoHome(base, every).catch(() => {
-      toast.error('Could not save homing setting')
-      loadSettings()
-    })
-  }
-  const toggleAutoHome = (on: boolean) => {
-    setAutoHomeEnabled(on)
-    commitAutoHome(on ? Math.max(1, Number(autoHomeEvery) || 5) : 0)
-  }
-  const commitAutoHomeEvery = () => {
-    const n = Math.max(1, Number(autoHomeEvery) || 1)
-    setAutoHomeEvery(String(n))
-    if (autoHomeEnabled) commitAutoHome(n)
-  }
-
-  useEffect(() => {
-    loadSettings()
-  }, [loadSettings])
+  // removeBoard drops the entry (and its password); the collected table log is
+  // keyed by board id, so a re-add starts a fresh one.
+  const confirmRemove = (b: Board) =>
+    Alert.alert(
+      `Remove “${b.name}”?`,
+      `This phone forgets the table${b.key ? ' and its saved API password' : ''}, along with the table logs it collected. Nothing on the table changes, and you can add it again any time.${boards.length === 1 ? ' This is your only table, so the app returns to the welcome screen.' : ''}`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Remove', style: 'destructive', onPress: () => removeBoard(b.id) },
+      ]
+    )
 
   const add = async () => {
     if (!host.trim()) {
@@ -405,6 +191,7 @@ export function SettingsScreen() {
       toast.success('Table added')
       setName('')
       setHost('')
+      setShowAdd(false)
     } finally {
       setTesting(false)
     }
@@ -412,412 +199,250 @@ export function SettingsScreen() {
 
   return (
     <Screen title="Settings">
-      <ScrollView ref={scrollRef} contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160, gap: spacing.lg }}>
-        <Card>
-          <CardTitle>Tables</CardTitle>
-          {boards.length === 0 ? (
-            <Text style={{ color: colors.mutedForeground, marginBottom: spacing.md }}>No tables yet. Add one below.</Text>
-          ) : (
-            boards.map((b) => {
-              const active = b.id === activeId
-              const editing = editingId === b.id
-              return (
-                <Pressable
-                  key={b.id}
-                  onPress={() => { if (!editing) setActive(b.id) }}
-                  style={[styles.boardRow, { borderColor: active ? colors.primary : colors.border }]}
-                >
-                  <MaterialIcons name={active ? 'radio-button-checked' : 'radio-button-unchecked'} size={20} color={active ? colors.primary : colors.mutedForeground} />
-                  <View style={{ flex: 1 }}>
-                    {editing ? (
-                      <TextInput
-                        value={editName}
-                        onChangeText={setEditName}
-                        onSubmitEditing={commitEdit}
-                        onEndEditing={commitEdit}
-                        autoFocus
-                        returnKeyType="done"
-                        placeholder={b.base}
-                        placeholderTextColor={colors.mutedForeground}
-                        style={[styles.renameInput, { color: colors.foreground, backgroundColor: colors.inputBackground, borderColor: colors.border }]}
-                      />
-                    ) : (
-                      <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>{b.name}</Text>
-                    )}
-                    <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>
-                      {b.base}
-                      {/* The name the network knows it by — only worth showing
-                          when it differs from the display name above. */}
-                      {b.hostname && b.hostname.toLowerCase() !== b.name.trim().toLowerCase() ? ` · ${b.hostname}.local` : ''}
-                    </Text>
-                  </View>
-                  {renamingId === b.id ? (
-                    <ActivityIndicator color={colors.primary} style={{ width: 34 }} />
-                  ) : editing ? (
-                    <IconButton icon="check" size={20} color={colors.primary} onPress={commitEdit} />
-                  ) : (
-                    <IconButton icon="edit" size={18} color={colors.mutedForeground} onPress={() => startEdit(b.id, b.name)} />
-                  )}
-                  <IconButton icon="delete-outline" size={20} color={colors.mutedForeground} onPress={() => removeBoard(b.id)} />
-                </Pressable>
-              )
-            })
-          )}
-
-          {discoveryAvailable ? (
-            <View style={styles.discover}>
-              <Button
-                title={scanning ? 'Scanning…' : 'Find tables on Wi-Fi'}
-                icon={scanning ? undefined : 'wifi-find'}
-                variant="secondary"
-                loading={scanning && found.length === 0}
-                onPress={scanning ? stop : start}
-              />
-              {found.map((t) => (
-                <Pressable
-                  key={t.key}
-                  onPress={() => addDiscovered(t)}
-                  style={[styles.foundRow, { borderColor: colors.border, backgroundColor: colors.cardElevated }]}
-                >
-                  <MaterialIcons name="cast-connected" size={20} color={colors.primary} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>{t.name}</Text>
-                    <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{t.base}</Text>
-                  </View>
-                  <MaterialIcons name={knownBases.has(t.base) ? 'check' : 'add'} size={22} color={knownBases.has(t.base) ? colors.success : colors.primary} />
-                </Pressable>
-              ))}
-              {scanning && found.length > 0 ? (
-                <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, textAlign: 'center' }}>Still scanning…</Text>
-              ) : null}
-              {!scanning && found.length === 0 ? (
-                <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, textAlign: 'center' }}>
-                  Tip: the phone and table must be on the same Wi-Fi.
-                </Text>
-              ) : null}
-            </View>
-          ) : null}
-
-          <View style={styles.addForm}>
-            <TextInput
-              value={name}
-              onChangeText={setName}
-              placeholder="Name (optional)"
-              placeholderTextColor={colors.mutedForeground}
-              style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground }]}
-            />
-            <TextInput
-              value={host}
-              onChangeText={setHost}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="IP or host (e.g. 192.168.68.160)"
-              placeholderTextColor={colors.mutedForeground}
-              style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground }]}
-            />
-            <Button title="Test & add table" icon="add" loading={testing} onPress={add} />
-          </View>
-        </Card>
-
-        {/* The BOARD-CONFIG cards lock while a pattern/playlist runs (IdleGate):
-            the firmware rejects most of these writes mid-job anyway — surface
-            that up front instead of failing after the tap. One banner with the
-            explanation + Pause/Stop; the single gate just dims and blocks.
-            PAUSING the table opens the gate (firmware ≥ v0.1.18-rc2 takes the
-            writes in Hold).
-
-            The gate ENDS after Still Sands. Everything past it is local to the
-            phone or read-only — the pattern catalog (imported from a file), the
-            preview library, app branding, logs, and About's release notes and
-            update check — so none of it locks; see IdleGate.tsx. Wi-Fi and
-            firmware updates stay inside the gate but are not dead ends while
-            paused: they reboot the table, so they stop it themselves after
-            saying so in their confirm dialog (lib/stopFirst.ts). */}
-        <IdleGateBanner base={base} />
-        <IdleGate>
-        <WifiCard base={base} />
-
-        {/* Demo table: no real lock to manage. */}
-        {base && !isDemoBase(base) ? <SecurityCard base={base} /> : null}
-
-        {base ? (
+      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: SCROLL_BOTTOM_PAD, gap: spacing.xl }}>
+        <View style={styles.group}>
+          <SectionHeader title="Tables" />
           <Card>
-            <CardTitle>Auto-play on boot</CardTitle>
-            <View style={styles.bootRow}>
-              <View style={{ flex: 1, paddingRight: spacing.md }}>
-                <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>Enable auto-play</Text>
-                <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>Automatically start a playlist after the table powers on and homes.</Text>
-              </View>
-              <Toggle value={!!autostart} onValueChange={toggleAutoplay} />
-            </View>
-
-            {autostart ? (
-              <View style={{ marginTop: spacing.md, gap: spacing.md }}>
-                <View>
-                  <Text style={[styles.bootLabel, { color: colors.foreground }]}>Startup playlist</Text>
-                  <Select
-                    value={autostart}
-                    options={[
-                      ...playlistNames.map((n) => ({ value: n, label: n })),
-                      ...(autostart && !playlistNames.includes(autostart) ? [{ value: autostart, label: autostart }] : []),
-                    ]}
-                    onChange={setBootPlaylist}
-                  />
-                </View>
-
-                <View>
-                  <Text style={[styles.bootLabel, { color: colors.foreground }]}>Run mode</Text>
-                  <Select
-                    value={bootLoop ? 'loop' : 'single'}
-                    options={[
-                      { value: 'single', label: 'Single (play once)' },
-                      { value: 'loop', label: 'Loop (repeat forever)' },
-                    ]}
-                    onChange={(v) => { const loop = v === 'loop'; setBootLoop(loop); saveBoot(() => board.setPlaylistAutostartMode(base, loop ? 'loop' : 'single')) }}
-                  />
-                </View>
-
-                <View>
-                  <Text style={[styles.bootLabel, { color: colors.foreground }]}>Pause between patterns</Text>
-                  <View style={{ flexDirection: 'row', gap: spacing.sm, alignItems: 'center' }}>
-                    <TextInput
-                      value={bootPauseVal}
-                      onChangeText={(t) => setBootPauseVal(t.replace(/[^0-9]/g, ''))}
-                      onEndEditing={() => saveBoot(() => board.setPlaylistAutostartPause(base, pauseToSeconds(Number(bootPauseVal) || 0, bootPauseUnit)))}
-                      keyboardType="number-pad"
-                      style={[styles.numInput, { color: colors.foreground, backgroundColor: colors.inputBackground, borderColor: colors.border }]}
-                    />
+            {boards.length === 0 ? (
+              <Text style={{ color: colors.mutedForeground, marginBottom: spacing.md }}>No tables yet. Add one below.</Text>
+            ) : (
+              boards.map((b) => {
+                const active = b.id === activeId
+                const editing = editingId === b.id
+                return (
+                  <Pressable
+                    key={b.id}
+                    onPress={() => { if (!editing) setActive(b.id) }}
+                    style={[styles.boardRow, { borderColor: active ? colors.primary : colors.border }]}
+                  >
+                    <MaterialIcons name={active ? 'radio-button-checked' : 'radio-button-unchecked'} size={20} color={active ? colors.primary : colors.mutedForeground} />
                     <View style={{ flex: 1 }}>
-                      <Select
-                        value={bootPauseUnit}
-                        options={[{ value: 'sec', label: 'seconds' }, { value: 'min', label: 'minutes' }, { value: 'hr', label: 'hours' }]}
-                        onChange={(u) => { setBootPauseUnit(u); saveBoot(() => board.setPlaylistAutostartPause(base, pauseToSeconds(Number(bootPauseVal) || 0, u))) }}
-                      />
+                      {editing ? (
+                        <TextInput
+                          value={editName}
+                          onChangeText={setEditName}
+                          onSubmitEditing={commitEdit}
+                          // onBlur, not onEndEditing: react-native-web (desktop) never fires onEndEditing.
+                          onBlur={commitEdit}
+                          autoFocus
+                          returnKeyType="done"
+                          placeholder={b.base}
+                          placeholderTextColor={colors.mutedForeground}
+                          style={[styles.renameInput, { color: colors.foreground, backgroundColor: colors.inputBackground, borderColor: colors.border }]}
+                        />
+                      ) : (
+                        <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>{b.name}</Text>
+                      )}
+                      <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>
+                        {b.base}
+                        {/* The name the network knows it by — only worth showing
+                            when it differs from the display name above. */}
+                        {b.hostname && b.hostname.toLowerCase() !== b.name.trim().toLowerCase() ? ` · ${b.hostname}.local` : ''}
+                      </Text>
                     </View>
-                  </View>
-                </View>
+                    {renamingId === b.id ? (
+                      <ActivityIndicator color={colors.primary} style={{ width: 34 }} />
+                    ) : editing ? (
+                      <IconButton icon="check" size={20} color={colors.primary} onPress={commitEdit} />
+                    ) : (
+                      <IconButton icon="edit" size={18} color={colors.mutedForeground} onPress={() => startEdit(b.id, b.name)} />
+                    )}
+                    <IconButton icon="delete-outline" size={20} color={colors.mutedForeground} onPress={() => confirmRemove(b)} />
+                  </Pressable>
+                )
+              })
+            )}
 
-                <View>
-                  <Text style={[styles.bootLabel, { color: colors.foreground }]}>Clear before each pattern</Text>
-                  <Select
-                    value={bootClear}
-                    options={CLEAR_MODES.map((c) => ({ value: c.mode, label: CLEAR_LABELS[c.mode] }))}
-                    onChange={(m) => { setBootClear(m); saveBoot(() => board.setPlaylistAutostartClear(base, m)) }}
-                  />
-                </View>
-
-                <View style={styles.bootRow}>
-                  <View style={{ flex: 1, paddingRight: spacing.md }}>
-                    <Text style={{ color: colors.foreground }}>Pause from start</Text>
-                    <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>Measure the gap from each pattern’s start, not its end.</Text>
-                  </View>
-                  <Toggle value={bootPauseFromStart} onValueChange={(v) => { setBootPauseFromStart(v); saveBoot(() => board.setPlaylistAutostartPauseFromStart(base, v)) }} />
-                </View>
-
-                <View style={styles.bootRow}>
-                  <View style={{ flex: 1, paddingRight: spacing.md }}>
-                    <Text style={{ color: colors.foreground }}>Shuffle</Text>
-                    <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>Randomize the pattern order.</Text>
-                  </View>
-                  <Toggle value={bootShuffle} onValueChange={(v) => { setBootShuffle(v); saveBoot(() => board.setPlaylistAutostartShuffle(base, v)) }} />
-                </View>
-              </View>
-            ) : null}
-          </Card>
-        ) : null}
-
-        {base ? (
-          <Card>
-            <CardTitle>Homing</CardTitle>
-
-            <Text style={[styles.bootLabel, { color: colors.foreground }]}>Homing mode</Text>
-            {HOMING_MODES.map(({ mode, label, desc }) => {
-              const on = homingMode === mode
-              return (
-                <Pressable
-                  key={mode}
-                  onPress={() => changeHomingMode(mode)}
-                  disabled={!homingWritable}
-                  style={[styles.homingOpt, { borderColor: on ? colors.primary : colors.border, backgroundColor: on ? colors.cardElevated : 'transparent', opacity: homingWritable ? 1 : 0.5 }]}
-                >
-                  <MaterialIcons name={on ? 'radio-button-checked' : 'radio-button-unchecked'} size={20} color={on ? colors.primary : colors.mutedForeground} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>{label}</Text>
-                    <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{desc}</Text>
-                  </View>
-                </Pressable>
-              )
-            })}
-
-            {homingMode === 'crash' ? (
-              <View style={{ marginTop: spacing.sm, opacity: tableIdle ? 1 : 0.5 }} pointerEvents={tableIdle ? 'auto' : 'none'}>
-                <AlignOrientation base={base} />
-                {!tableIdle ? (
-                  <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.xs }}>
-                    Aligning moves the ball, so it needs the table stopped — not just paused.
+            {discoveryAvailable ? (
+              <View style={styles.discover}>
+                <Button
+                  title={scanning ? 'Scanning…' : 'Find tables on Wi-Fi'}
+                  icon={scanning ? undefined : 'wifi-find'}
+                  variant="secondary"
+                  loading={scanning && found.length === 0}
+                  onPress={scanning ? stop : start}
+                />
+                {found.map((t) => (
+                  <Pressable
+                    key={t.key}
+                    onPress={() => addDiscovered(t)}
+                    style={[styles.foundRow, { borderColor: colors.border, backgroundColor: colors.cardElevated }]}
+                  >
+                    <MaterialIcons name="cast-connected" size={20} color={colors.primary} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>{t.name}</Text>
+                      <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>{t.base}</Text>
+                    </View>
+                    <MaterialIcons name={knownBases.has(t.base) ? 'check' : 'add'} size={22} color={knownBases.has(t.base) ? colors.success : colors.primary} />
+                  </Pressable>
+                ))}
+                {scanning && found.length > 0 ? (
+                  <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, textAlign: 'center' }}>Still scanning…</Text>
+                ) : null}
+                {!scanning && found.length === 0 ? (
+                  <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, textAlign: 'center' }}>
+                    Tip: the phone and table must be on the same Wi-Fi.
                   </Text>
                 ) : null}
               </View>
             ) : null}
 
-            {homingMode === 'sensor' ? (
-              <View style={{ marginTop: spacing.sm }}>
-                <Text style={[styles.bootLabel, { color: colors.foreground }]}>Sensor offset (degrees)</Text>
+            {showAdd || boards.length === 0 ? (
+              <View style={styles.addForm}>
+                {/* The required field first, focused on open; the name is optional. */}
                 <TextInput
-                  value={thetaOffset}
-                  onChangeText={(t) => setThetaOffset(t.replace(/[^0-9]/g, ''))}
-                  onEndEditing={commitThetaOffset}
-                  editable={homingWritable}
-                  keyboardType="number-pad"
-                  style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground, opacity: homingWritable ? 1 : 0.5 }]}
+                  value={host}
+                  onChangeText={setHost}
+                  autoFocus={boards.length > 0}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                  placeholder="IP or host (e.g. 192.168.68.160)"
+                  placeholderTextColor={colors.mutedForeground}
+                  style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground }]}
                 />
-                <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.sm }}>
-                  Angle the radial arm is offset by — pick a value so it points East.
-                </Text>
+                <TextInput
+                  value={name}
+                  onChangeText={setName}
+                  placeholder="Name (optional)"
+                  placeholderTextColor={colors.mutedForeground}
+                  style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground }]}
+                />
+                <Button title="Test & add table" icon="add" loading={testing} onPress={add} />
               </View>
-            ) : null}
-
-            {!homingWritable ? (
-              <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.sm }}>
-                Pause or stop the table to change the homing mode or offset.
-              </Text>
-            ) : null}
-
-            <View style={{ height: 1, backgroundColor: colors.border, marginVertical: spacing.md }} />
-
-            <View style={styles.bootRow}>
-              <View style={{ flex: 1, paddingRight: spacing.md }}>
-                <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>Auto-home during playlists</Text>
-                <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>Re-home the table every so often while a playlist runs to correct mechanical drift.</Text>
-              </View>
-              <Toggle value={autoHomeEnabled} onValueChange={toggleAutoHome} />
-            </View>
-            {autoHomeEnabled ? (
-              <View style={{ marginTop: spacing.md }}>
-                <Text style={[styles.bootLabel, { color: colors.foreground }]}>Home after every</Text>
-                <View style={{ flexDirection: 'row', gap: spacing.sm, alignItems: 'center' }}>
-                  <TextInput
-                    value={autoHomeEvery}
-                    onChangeText={(t) => setAutoHomeEvery(t.replace(/[^0-9]/g, ''))}
-                    onEndEditing={commitAutoHomeEvery}
-                    keyboardType="number-pad"
-                    style={[styles.numInput, { color: colors.foreground, backgroundColor: colors.inputBackground, borderColor: colors.border }]}
-                  />
-                  <Text style={{ color: colors.mutedForeground }}>patterns</Text>
-                </View>
-              </View>
-            ) : null}
-            <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.md }}>
-              Tip: home the table manually any time from the Control tab.
-            </Text>
+            ) : (
+              <Button title="Add by IP address" icon="add" variant="ghost" onPress={() => setShowAdd(true)} style={{ marginTop: spacing.sm }} />
+            )}
           </Card>
-        ) : null}
-
-        {base ? <ClearPatternsCard base={base} /> : null}
-
-        {base ? <StillSands base={base} /> : null}
-        </IdleGate>
-
-        {base && !isDemoBase(base) ? <CatalogCard base={base} /> : null}
-
-        <View onLayout={onPreviewsLayout}>
-        <Card style={flashPreviews ? { borderColor: colors.primary } : undefined}>
-          <CardTitle>Pattern previews</CardTitle>
-          <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginBottom: spacing.md }}>
-            Thumbnails for patterns loaded straight onto the SD card. “Sync previews from table” pulls the preview bundle the SD Card Pattern Manager writes to the card — only when you ask, and what it finds is shared across every table. Or import manually — pick individual images or the bundle’s .zip shards directly. Everything’s matched to patterns by file name (e.g. “star.thr.webp” → the “star.thr” pattern); use black-on-transparent exports like the built-in library.
-          </Text>
-          {base ? (
-            <View style={{ marginBottom: spacing.sm }}>
-              {/* The one control on this screen a PAUSE doesn't free: syncing
-                  streams shards off the same single-threaded SD the paused job
-                  still holds its .thr open on. Disabling the button (rather
-                  than dimming the card) keeps the local import beside it live. */}
-              <Button
-                title="Sync previews from table"
-                icon="sync"
-                variant="secondary"
-                loading={syncingPreviews}
-                disabled={syncBlocked}
-                onPress={doSyncPreviews}
-              />
-              {syncBlocked && !syncingPreviews ? (
-                <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.xs, textAlign: 'center' }}>
-                  Syncing reads the SD card the pattern is playing from — stop the table first.
-                </Text>
-              ) : null}
-              {syncingPreviews ? (
-                <Text
-                  style={{
-                    color: colors.mutedForeground,
-                    fontSize: font.size.xs,
-                    marginTop: spacing.xs,
-                    textAlign: 'center',
-                  }}
-                >
-                  {syncMsg ?? 'Checking the card for a preview bundle…'}
-                  {'\n'}This can take a while — keep the app open.
-                </Text>
-              ) : null}
-            </View>
-          ) : null}
-          <Button
-            title="Import previews or shards"
-            icon="add-photo-alternate"
-            variant="secondary"
-            loading={importingPreviews}
-            onPress={doImportPreviews}
-          />
-          {previewCount > 0 ? (
-            <View style={styles.previewMeta}>
-              <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>{previewCount} imported</Text>
-              <IconButton icon="delete-outline" size={22} color={colors.mutedForeground} onPress={confirmClearPreviews} />
-            </View>
-          ) : null}
-        </Card>
         </View>
 
-        <Card>
-          <CardTitle>App branding</CardTitle>
-          <View style={styles.brandRow}>
-            <Image source={brandLogo ? { uri: brandLogo } : require('../../assets/dw-logo.png')} style={[styles.brandPreview, { borderColor: colors.border }]} />
-            <View style={{ flex: 1, gap: spacing.sm }}>
-              <Button title={brandLogo ? 'Change logo' : 'Choose logo'} icon="image" variant="secondary" onPress={chooseLogo} />
-              {brandLogo ? <Button title="Remove logo" icon="close" variant="secondary" onPress={removeLogo} /> : null}
-            </View>
+        {base && active ? (
+          <View style={styles.group}>
+            <SectionHeader title={active.name} note={locked ? 'Locked while drawing' : undefined} />
+            <Section>
+              <NavRow icon="play-circle-outline" label="Playback" value={tv?.playback} onPress={() => go('Playback')} />
+              <NavRow icon="bedtime" label="Still Sands" value={tv?.stillSands} onPress={() => go('StillSands')} />
+              <NavRow icon="my-location" label="Homing" value={tv?.homing} onPress={() => go('Homing')} />
+              {/* Only tables with an LED strip (firmware with $LED/Count) report one. */}
+              {tv?.ledStrip ? (
+                <NavRow icon="lightbulb-outline" label="LED strip" value={tv.ledStrip} onPress={() => go('LedStrip')} />
+              ) : null}
+              <NavRow icon="wifi" label="Wi-Fi" onPress={() => go('Wifi')} />
+              {/* The demo table has no lock to manage. */}
+              {isDemoBase(base) ? null : (
+                <NavRow icon="lock-outline" label="Password" value={active.key ? 'On' : undefined} onPress={() => go('Password')} />
+              )}
+              <NavRow icon="memory" label="Firmware" value={fwNew ? 'Update available' : tableFw ?? undefined} badge={fwNew} onPress={() => go('Firmware')} />
+            </Section>
           </View>
-          <TextInput
-            value={brand}
-            onChangeText={setBrandName}
-            placeholder={DEFAULT_BRAND}
-            placeholderTextColor={colors.mutedForeground}
-            style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground, marginTop: spacing.md }]}
-          />
-          <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.sm }}>
-            Shown in the app header and welcome screen. Stored on this device only.
-          </Text>
-        </Card>
+        ) : null}
 
-        <DiagnosticsCard base={base} />
-
-        {/* About stays the last card. */}
-        <UpdatesCard base={base} />
+        <View style={styles.group}>
+          <SectionHeader title="On this phone" />
+          <Section>
+            <NavRow icon="grid-view" label="Patterns" value={previewCount > 0 ? `${previewCount} previews` : undefined} onPress={() => go('Patterns')} />
+            <NavRow icon="palette" label="Branding" value={brandName(brand)} onPress={() => go('Branding')} />
+            <NavRow icon="receipt-long" label="Diagnostics" onPress={() => go('Diagnostics')} />
+            <NavRow icon="info-outline" label="About" value={appNew ? 'Update available' : `v${APP_VERSION}`} badge={appNew} onPress={() => go('About')} />
+          </Section>
+        </View>
       </ScrollView>
     </Screen>
   )
 }
 
+/** Group label above a card: whose settings these are. */
+function SectionHeader({ title, note }: { title: string; note?: string }): React.JSX.Element {
+  const colors = useTheme((s) => s.colors)
+  return (
+    <View style={styles.sectionHeader}>
+      <Text numberOfLines={1} style={[styles.sectionTitle, { color: colors.mutedForeground }]}>{title}</Text>
+      {note ? (
+        <View style={styles.sectionNote}>
+          <MaterialIcons name="lock-outline" size={14} color={colors.mutedForeground} />
+          <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>{note}</Text>
+        </View>
+      ) : null}
+    </View>
+  )
+}
+
+/** A card of navigation rows, hairline-separated. */
+function Section({ children }: { children: React.ReactNode }): React.JSX.Element {
+  const colors = useTheme((s) => s.colors)
+  const rows = React.Children.toArray(children).filter(Boolean)
+  return (
+    <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      {rows.map((row, i) => (
+        <View key={i}>
+          {row}
+          {/* Inset to the label, like iOS lists: the icons read as one column. */}
+          {i > 0 ? <View style={[styles.separator, { backgroundColor: colors.border }]} /> : null}
+        </View>
+      ))}
+    </View>
+  )
+}
+
+/** One settings page: icon, name, current value, chevron. */
+function NavRow({
+  icon,
+  label,
+  value,
+  badge,
+  onPress,
+}: {
+  icon: Icon
+  label: string
+  value?: string
+  /** An update is waiting — the same red as the tab's badge. */
+  badge?: boolean
+  onPress: () => void
+}): React.JSX.Element {
+  const colors = useTheme((s) => s.colors)
+  const notification = useNavTheme().colors.notification
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={value ? `${label}, ${value}` : label}
+      style={({ pressed }) => [styles.navRow, pressed && { backgroundColor: colors.cardElevated }]}
+    >
+      <View style={[styles.navIcon, { backgroundColor: colors.cardElevated }]}>
+        <MaterialIcons name={icon} size={18} color={colors.primary} />
+      </View>
+      <Text numberOfLines={1} style={{ color: colors.foreground, fontSize: font.size.md, fontWeight: font.weight.medium, flexShrink: 0 }}>
+        {label}
+      </Text>
+      <View style={styles.navValue}>
+        {badge ? <View style={[styles.badgeDot, { backgroundColor: notification }]} /> : null}
+        {value ? (
+          <Text numberOfLines={1} style={{ color: badge ? colors.foreground : colors.mutedForeground, fontSize: font.size.md, flexShrink: 1 }}>
+            {value}
+          </Text>
+        ) : null}
+      </View>
+      <MaterialIcons name="chevron-right" size={22} color={colors.mutedForeground} />
+    </Pressable>
+  )
+}
+
 const styles = StyleSheet.create({
+  group: { gap: spacing.sm },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md, paddingHorizontal: spacing.md },
+  sectionTitle: { flexShrink: 1, fontSize: font.size.sm, fontWeight: font.weight.semibold, letterSpacing: 0.6, textTransform: 'uppercase' },
+  sectionNote: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  section: { borderRadius: radius.lg, borderWidth: 1, overflow: 'hidden' },
+  navRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 52, paddingVertical: spacing.sm, paddingHorizontal: spacing.md },
+  navIcon: { width: 30, height: 30, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
+  navValue: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: spacing.xs },
+  badgeDot: { width: 8, height: 8, borderRadius: 4 },
+  // Row padding (12) + icon (30) + gap (12): starts under the label.
+  separator: { position: 'absolute', top: 0, left: 54, right: 0, height: StyleSheet.hairlineWidth },
   boardRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, borderRadius: radius.md, borderWidth: 1, marginBottom: spacing.sm },
   discover: { gap: spacing.sm, marginTop: spacing.sm },
   foundRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, borderRadius: radius.md, borderWidth: 1 },
   addForm: { gap: spacing.sm, marginTop: spacing.md },
-  input: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 46, fontSize: font.size.md },
-  renameInput: { borderRadius: radius.sm, borderWidth: 1, paddingHorizontal: spacing.sm, height: 38, fontSize: font.size.md, fontWeight: font.weight.medium },
-  brandRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-  previewMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.sm },
-  homingOpt: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, borderRadius: radius.md, borderWidth: 1, marginBottom: spacing.sm },
-  brandPreview: { width: 64, height: 64, borderRadius: 14, borderWidth: 1 },
-  bootLabel: { fontSize: font.size.sm, fontWeight: font.weight.medium, marginBottom: spacing.sm, marginTop: spacing.sm },
-  bootRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 36 },
-  numInput: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 40, width: 90, textAlign: 'center', fontSize: font.size.md },
+  input: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, minHeight: 46, fontSize: font.size.md },
+  renameInput: { borderRadius: radius.sm, borderWidth: 1, paddingHorizontal: spacing.sm, minHeight: 38, fontSize: font.size.md, fontWeight: font.weight.medium },
 })

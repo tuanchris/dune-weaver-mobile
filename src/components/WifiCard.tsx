@@ -6,10 +6,10 @@
 // table answers on 192.168.0.1.
 
 import React, { useCallback, useRef, useState } from 'react'
-import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
-import { useFocusEffect } from '@react-navigation/native'
+import { useFocusEffect, useNavigation } from '@react-navigation/native'
+import type { SettingsNav } from '../navigation'
 import { board, type WifiNetwork, type WifiStatus } from '../api/board'
 import { isDemoBase } from '../api/demoBoard'
 import { useBoards } from '../stores/useBoards'
@@ -18,7 +18,8 @@ import { useTheme } from '../stores/useTheme'
 import { toast } from '../stores/useToast'
 import { connectTableToWifi, switchTableToStandalone, WIFI_AP_BASE, type WifiSetupStage } from '../lib/wifiSetup'
 import { stopAndSettle, stopFirstWarning } from '../lib/stopFirst'
-import { Button, Card, CardTitle, IconButton } from './ui'
+import { Button, Card, IconButton } from './ui'
+import { Sheet } from './Sheet'
 import { radius, spacing, font } from '../theme'
 
 type CardState = 'loading' | 'ok' | 'unsupported' | 'offline'
@@ -37,6 +38,7 @@ function signalIcon(rssi: number): keyof typeof MaterialIcons.glyphMap {
 
 export function WifiCard({ base }: { base: string | null }) {
   const colors = useTheme((s) => s.colors)
+  const navigation = useNavigation<SettingsNav>()
   const activeId = useBoards((s) => s.activeId)
   const updateBase = useBoards((s) => s.updateBase)
 
@@ -222,17 +224,18 @@ export function WifiCard({ base }: { base: string | null }) {
 
   return (
     <Card>
-      <CardTitle>Wi-Fi</CardTitle>
-
       {state === 'loading' ? (
         <View style={styles.row}>
           <ActivityIndicator size="small" color={colors.mutedForeground} />
           <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>Checking the table’s Wi-Fi…</Text>
         </View>
       ) : state === 'unsupported' ? (
-        <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>
-          Wi-Fi controls need firmware v0.1.8 or newer — update the table in the About section below.
-        </Text>
+        <View style={{ gap: spacing.sm }}>
+          <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>
+            Wi-Fi controls need firmware v0.1.8 or newer.
+          </Text>
+          <Button title="Update firmware" icon="system-update-alt" variant="secondary" onPress={() => navigation.navigate('Firmware')} />
+        </View>
       ) : state === 'offline' ? (
         <View style={{ gap: spacing.sm }}>
           <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>
@@ -246,12 +249,12 @@ export function WifiCard({ base }: { base: string | null }) {
             <MaterialIcons name={modeIcon} size={22} color={info.mode === 'fallback' ? colors.destructive : colors.primary} />
             <View style={{ flex: 1 }}>
               <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>{modeTitle}</Text>
-              <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{modeDetail}</Text>
+              <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>{modeDetail}</Text>
             </View>
           </View>
 
           {info.fail ? (
-            <Text style={{ color: colors.destructive, fontSize: font.size.xs }}>
+            <Text style={{ color: colors.destructive, fontSize: font.size.sm }}>
               Couldn’t join “{info.sta_ssid}”: {info.fail}
             </Text>
           ) : null}
@@ -271,130 +274,122 @@ export function WifiCard({ base }: { base: string | null }) {
               onPress={goStandalone}
             />
           ) : null}
-          <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>
+          <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>
             Standalone mode lets the table run without a router — it makes its own Wi-Fi network you join directly.
           </Text>
         </View>
       ) : null}
 
-      {/* Network picker sheet */}
-      <Modal visible={pickerOpen} transparent animationType="slide" onRequestClose={closePicker}>
-        {/* Lift the sheet above the keyboard so the password field and Connect
-            button stay visible while typing (bottom-anchored sheet otherwise
-            sits behind the keyboard). Tap-outside-to-close is the flex spacer. */}
-        <KeyboardAvoidingView style={styles.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <Pressable style={{ flex: 1 }} onPress={closePicker} />
-          <Pressable style={[styles.sheet, { backgroundColor: colors.background, borderColor: colors.border }]} onPress={() => {}}>
-            <View style={styles.sheetHandle} />
-            <View style={styles.sheetHeader}>
-              <Text style={{ color: colors.foreground, fontSize: font.size.lg, fontWeight: font.weight.semibold, flex: 1 }}>
-                Connect to Wi-Fi
-              </Text>
-              <IconButton
-                icon="refresh"
-                size={22}
-                color={scanning ? colors.mutedForeground : colors.primary}
-                onPress={() => { if (!scanning && !stage) { setNetworks([]); startScan(true) } }}
-              />
+      {/* Network picker sheet. Every close path (grabber, backdrop, Android
+          back) lands in closePicker, which resumes the status poller; while a
+          save is in flight the sheet can't be dismissed. */}
+      <Sheet
+        visible={pickerOpen}
+        onClose={closePicker}
+        dismissible={!stage}
+        title="Connect to Wi-Fi"
+        trailing={
+          <IconButton
+            icon="refresh"
+            size={22}
+            color={scanning ? colors.mutedForeground : colors.primary}
+            onPress={() => { if (!scanning && !stage) { setNetworks([]); startScan(true) } }}
+          />
+        }
+      >
+        <View style={styles.body}>
+          {scanning ? (
+            <View style={[styles.row, { paddingVertical: spacing.md }]}>
+              <ActivityIndicator size="small" color={colors.mutedForeground} />
+              <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>Scanning for networks…</Text>
             </View>
+          ) : networks.length === 0 ? (
+            <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, paddingVertical: spacing.md }}>
+              No networks found — move the table closer to the router and rescan.
+            </Text>
+          ) : (
+            <FlatList
+              data={networks}
+              keyExtractor={(n) => n.ssid}
+              style={{ flexGrow: 0, maxHeight: 260 }}
+              renderItem={({ item }) => {
+                const selected = item.ssid === ssid
+                return (
+                  <Pressable
+                    onPress={() => { if (item.secure) setSsid(item.ssid) }}
+                    style={[styles.netRow, { borderBottomColor: colors.border, opacity: item.secure ? 1 : 0.45 }]}
+                  >
+                    <MaterialIcons name={signalIcon(item.rssi)} size={20} color={selected ? colors.primary : colors.mutedForeground} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: selected ? colors.primary : colors.foreground, fontWeight: selected ? font.weight.semibold : font.weight.regular }}>
+                        {item.ssid}
+                      </Text>
+                      {!item.secure ? (
+                        <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>Open network — not supported</Text>
+                      ) : null}
+                    </View>
+                    {item.secure ? <MaterialIcons name="lock" size={16} color={colors.mutedForeground} /> : null}
+                    {selected ? <MaterialIcons name="check" size={20} color={colors.primary} /> : null}
+                  </Pressable>
+                )
+              }}
+            />
+          )}
 
-            {scanning ? (
-              <View style={[styles.row, { paddingVertical: spacing.md }]}>
-                <ActivityIndicator size="small" color={colors.mutedForeground} />
-                <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>Scanning for networks…</Text>
-              </View>
-            ) : networks.length === 0 ? (
-              <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, paddingVertical: spacing.md }}>
-                No networks found — move the table closer to the router and rescan.
-              </Text>
-            ) : (
-              <FlatList
-                data={networks}
-                keyExtractor={(n) => n.ssid}
-                style={{ flexGrow: 0, maxHeight: 260 }}
-                renderItem={({ item }) => {
-                  const selected = item.ssid === ssid
-                  return (
-                    <Pressable
-                      onPress={() => { if (item.secure) setSsid(item.ssid) }}
-                      style={[styles.netRow, { borderBottomColor: colors.border, opacity: item.secure ? 1 : 0.45 }]}
-                    >
-                      <MaterialIcons name={signalIcon(item.rssi)} size={20} color={selected ? colors.primary : colors.mutedForeground} />
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ color: selected ? colors.primary : colors.foreground, fontWeight: selected ? font.weight.semibold : font.weight.regular }}>
-                          {item.ssid}
-                        </Text>
-                        {!item.secure ? (
-                          <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>Open network — not supported</Text>
-                        ) : null}
-                      </View>
-                      {item.secure ? <MaterialIcons name="lock" size={16} color={colors.mutedForeground} /> : null}
-                      {selected ? <MaterialIcons name="check" size={20} color={colors.primary} /> : null}
-                    </Pressable>
-                  )
-                }}
-              />
-            )}
-
+          <TextInput
+            value={ssid}
+            onChangeText={setSsid}
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder="Network name (or pick one above)"
+            placeholderTextColor={colors.mutedForeground}
+            editable={!stage}
+            style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground }]}
+          />
+          <View style={styles.pwRow}>
             <TextInput
-              value={ssid}
-              onChangeText={setSsid}
+              value={password}
+              onChangeText={setPassword}
               autoCapitalize="none"
               autoCorrect={false}
-              placeholder="Network name (or pick one above)"
+              secureTextEntry={!showPw}
+              textContentType="none"
+              autoComplete="off"
+              placeholder="Password (8–64 characters)"
               placeholderTextColor={colors.mutedForeground}
               editable={!stage}
-              style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground }]}
+              style={[styles.input, { flex: 1, backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground }]}
             />
-            <View style={styles.pwRow}>
-              <TextInput
-                value={password}
-                onChangeText={setPassword}
-                autoCapitalize="none"
-                autoCorrect={false}
-                secureTextEntry={!showPw}
-                textContentType="none"
-                autoComplete="off"
-                placeholder="Password (8–64 characters)"
-                placeholderTextColor={colors.mutedForeground}
-                editable={!stage}
-                style={[styles.input, { flex: 1, backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground }]}
-              />
-              <IconButton
-                icon={showPw ? 'visibility-off' : 'visibility'}
-                size={22}
-                color={colors.mutedForeground}
-                onPress={() => setShowPw((v) => !v)}
-              />
-            </View>
+            <IconButton
+              icon={showPw ? 'visibility-off' : 'visibility'}
+              size={22}
+              color={colors.mutedForeground}
+              onPress={() => setShowPw((v) => !v)}
+            />
+          </View>
 
-            <Button
-              title={stage === 'saving' ? 'Sending…' : stage === 'rebooting' ? 'Restarting table…' : 'Connect table'}
-              icon={stage ? undefined : 'wifi'}
-              loading={stage != null}
-              disabled={!ssidOk || !passwordOk}
-              onPress={connect}
-            />
-            {stage === 'rebooting' ? (
-              <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, textAlign: 'center' }}>
-                Keep the app open — waiting for the table to come back (~1 minute).
-              </Text>
-            ) : null}
-            <SafeAreaView edges={['bottom']} />
-          </Pressable>
-        </KeyboardAvoidingView>
-      </Modal>
+          <Button
+            title={stage === 'saving' ? 'Sending…' : stage === 'rebooting' ? 'Restarting table…' : 'Connect table'}
+            icon={stage ? undefined : 'wifi'}
+            loading={stage != null}
+            disabled={!ssidOk || !passwordOk}
+            onPress={connect}
+          />
+          {stage === 'rebooting' ? (
+            <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, textAlign: 'center' }}>
+              Keep the app open — waiting for the table to come back (~1 minute).
+            </Text>
+          ) : null}
+        </View>
+      </Sheet>
     </Card>
   )
 }
 
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 28 },
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  sheet: { maxHeight: '85%', borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1, paddingTop: spacing.sm, paddingHorizontal: spacing.lg, paddingBottom: spacing.md, gap: spacing.sm },
-  sheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#888', alignSelf: 'center', marginBottom: spacing.sm },
-  sheetHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  body: { flexShrink: 1, paddingHorizontal: spacing.lg, paddingBottom: spacing.md, gap: spacing.sm },
   netRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.md, borderBottomWidth: 1 },
-  input: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 46, fontSize: font.size.md },
+  input: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, minHeight: 46, fontSize: font.size.md },
   pwRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
 })

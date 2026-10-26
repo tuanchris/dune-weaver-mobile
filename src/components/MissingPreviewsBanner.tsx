@@ -11,7 +11,7 @@ import { radius, spacing, font } from '../theme'
 /**
  * Browse header nudge: some patterns on the table render as a blank placeholder
  * because the app has neither a local .thr nor a preview image for them (the
- * bulk-loaded card case). Points at Settings → "Pattern previews", which is the
+ * bulk-loaded card case). Opens Settings › Patterns ("Pattern previews"), which is the
  * only place a sync can be started — preview sync is deliberately MANUAL (see
  * lib/previewSync.ts), so the banner ASKS rather than syncing on its own.
  *
@@ -28,7 +28,7 @@ export function MissingPreviewsBanner({ missing }: { missing: number }) {
 
   return (
     <Pressable
-      onPress={() => navigation.navigate('Settings', { focus: 'previews' })}
+      onPress={() => navigation.navigate('Settings', { screen: 'Patterns', initial: false })}
       accessibilityRole="button"
       accessibilityLabel={`${missing} patterns have no thumbnail. Open pattern previews in Settings`}
       style={({ pressed }) => [

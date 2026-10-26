@@ -51,7 +51,7 @@ export function CatalogCard({ base }: { base: string }) {
   return (
     <Card>
       <CardTitle>Pattern catalog</CardTitle>
-      <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginBottom: spacing.md }}>
+      <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, marginBottom: spacing.md }}>
         The On-Table pattern list normally comes from the table. Over weak Wi-Fi you can import it
         from a file — the card’s <Text style={{ fontFamily: font.family.mono }}>index.json</Text> — and
         freeze it, so the app stops re-reading the catalog from the board.
@@ -60,7 +60,7 @@ export function CatalogCard({ base }: { base: string }) {
       <View style={styles.row}>
         <View style={{ flex: 1, paddingRight: spacing.md }}>
           <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>Use imported catalog</Text>
-          <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>
+          <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>
             {imported
               ? `Showing ${importedCount} imported patterns — not fetching from the table.`
               : 'Off: the On-Table list is fetched from the table as usual.'}

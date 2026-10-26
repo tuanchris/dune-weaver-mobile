@@ -2,19 +2,13 @@ import React, { useEffect } from 'react'
 import { StatusBar } from 'expo-status-bar'
 import { AppState, View } from 'react-native'
 import { NavigationContainer, DefaultTheme, DarkTheme, type Theme } from '@react-navigation/native'
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
-import { MaterialIcons } from '@expo/vector-icons'
 import { useFonts } from 'expo-font'
 import { BricolageGrotesque_600SemiBold, BricolageGrotesque_700Bold } from '@expo-google-fonts/bricolage-grotesque'
 import { IBMPlexMono_400Regular, IBMPlexMono_500Medium } from '@expo-google-fonts/ibm-plex-mono'
 
-import { BrowseScreen } from './src/screens/BrowseScreen'
-import { PlaylistsScreen } from './src/screens/PlaylistsScreen'
-import { ControlScreen } from './src/screens/ControlScreen'
-import { LedScreen } from './src/screens/LedScreen'
-import { SettingsScreen } from './src/screens/SettingsScreen'
-import { NowPlayingBar } from './src/components/NowPlayingBar'
+import { AppTabs } from './src/components/AppTabs'
+import { NowPlayingSheet } from './src/components/NowPlayingBar'
 import { Toaster } from './src/components/Toaster'
 import { Onboarding } from './src/components/Onboarding'
 import { PreviewGenerator } from './src/components/PreviewGenerator'
@@ -32,17 +26,6 @@ import { useTableLogSync } from './src/lib/tableLogSync'
 import { useFavoritesPlaylistSync } from './src/lib/favoritesPlaylist'
 import { useCatalogRefreshOnIdle } from './src/lib/catalogRefresh'
 import { initAppLog } from './src/stores/useAppLog'
-import type { TabParamList } from './src/navigation'
-
-const Tab = createBottomTabNavigator<TabParamList>()
-
-const ICONS: Record<string, keyof typeof MaterialIcons.glyphMap> = {
-  Browse: 'grid-view',
-  Playlists: 'playlist-play',
-  Control: 'tune',
-  LEDs: 'lightbulb',
-  Settings: 'settings',
-}
 
 export default function App() {
   // Display + telemetry faces (body text stays the system font). Gate render on
@@ -54,7 +37,6 @@ export default function App() {
     IBMPlexMono_500Medium,
   })
   const hydrateBoards = useBoards((s) => s.hydrate)
-  const hydrateTheme = useTheme((s) => s.hydrate)
   const hydrateLibrary = useLibrary((s) => s.hydrate)
   const hydratePrefs = usePrefs((s) => s.hydrate)
   const hydrateBranding = useBranding((s) => s.hydrate)
@@ -79,24 +61,23 @@ export default function App() {
   useFavoritesPlaylistSync()
   useCatalogRefreshOnIdle()
 
-  // Update-available dot on the Settings tab: a newer app in the store, or a
-  // newer firmware release than what the active table reports.
+  // Count badge on the Settings tab: a newer app in the store, and/or a newer
+  // firmware release than what the active table reports (0–2).
   const appLatest = useUpdates((s) => s.appLatest)
   const fwLatest = useUpdates((s) => s.fwLatest)
   const tableFw = useStatus((s) => s.status?.fw ?? null)
-  const updateDot = appUpdateAvailable(appLatest) || fwUpdateAvailable(fwLatest, tableFw)
+  const updateCount = Number(appUpdateAvailable(appLatest)) + Number(fwUpdateAvailable(fwLatest, tableFw))
 
   // Hydrate persisted state on launch.
   useEffect(() => {
     void initAppLog() // diagnostics ring buffer + uncaught-error hook
-    hydrateTheme()
     hydrateBoards()
     hydrateLibrary()
     hydratePrefs()
     hydrateBranding()
     hydratePreviews()
     useUpdates.getState().check() // best-effort; silently stays unknown offline
-  }, [hydrateTheme, hydrateBoards, hydrateLibrary, hydratePrefs, hydrateBranding, hydratePreviews])
+  }, [hydrateBoards, hydrateLibrary, hydratePrefs, hydrateBranding, hydratePreviews])
 
   // Point the status poller at the active board whenever it changes, and select
   // that board's on-table view (patterns + playlists) from the persisted cache.
@@ -123,6 +104,8 @@ export default function App() {
     return () => sub.remove()
   }, [])
 
+  // `notification` deliberately stays the base theme's red: it colours the
+  // Settings update badge, and ember means destructive/error only.
   const navTheme: Theme = {
     ...(mode === 'dark' ? DarkTheme : DefaultTheme),
     colors: {
@@ -146,29 +129,9 @@ export default function App() {
         <Onboarding />
       ) : (
         <NavigationContainer theme={navTheme}>
-          <Tab.Navigator
-            screenOptions={({ route }) => ({
-              headerShown: false,
-              tabBarActiveTintColor: colors.primary,
-              tabBarInactiveTintColor: colors.mutedForeground,
-              tabBarStyle: { backgroundColor: colors.card, borderTopColor: colors.border },
-              tabBarIcon: ({ color, size }) => (
-                <View>
-                  <MaterialIcons name={ICONS[route.name]} size={size} color={color} />
-                  {route.name === 'Settings' && updateDot ? (
-                    <View style={{ position: 'absolute', top: -1, right: -3, width: 8, height: 8, borderRadius: 4, backgroundColor: colors.destructive }} />
-                  ) : null}
-                </View>
-              ),
-            })}
-          >
-            <Tab.Screen name="Browse" component={BrowseScreen} />
-            <Tab.Screen name="Playlists" component={PlaylistsScreen} />
-            <Tab.Screen name="Control" component={ControlScreen} />
-            <Tab.Screen name="LEDs" component={LedScreen} />
-            <Tab.Screen name="Settings" component={SettingsScreen} />
-          </Tab.Navigator>
-          <NowPlayingBar />
+          <AppTabs updateCount={updateCount} />
+          {/* The expanded player sheet, mounted once (the mini player lives in the tabs). */}
+          <NowPlayingSheet />
         </NavigationContainer>
       )}
       <Toaster />

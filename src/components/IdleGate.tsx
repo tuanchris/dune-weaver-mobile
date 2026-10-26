@@ -1,34 +1,35 @@
-// Locks the board-CONFIG part of Settings while the table is mid-job. The
+// Locks the board-CONFIG pages of Settings while the table is mid-job. The
 // firmware idle-gates most of those writes anyway (they'd fail or busy-retry);
-// this surfaces the rule before the tap. Two pieces:
-//  - IdleGateBanner: ONE notice strip with inline Pause/Stop — repeating a
-//    banner per card read as nagging, and "stop it first" without a way out
-//    made the user go find one.
-//  - IdleGate: ONE wrapper around the config cards, softly dimming them and
+// this surfaces the rule before the tap. Two pieces, both placed by
+// SettingsPage's `gated` flag (screens/settings/SettingsPage.tsx):
+//  - IdleGateBanner: ONE notice strip at the top of the page, with an inline
+//    Pause/Stop — "stop it first" without a way out made the user go find one.
+//  - IdleGate: ONE wrapper around the page's cards, softly dimming them and
 //    blocking touches. Values stay readable (0.55, not 0.4) — viewing settings
 //    while a pattern runs is harmless, only changing them isn't. Its dimmed
-//    view re-applies the Settings ScrollView's card gap, since wrapping the
-//    cards in a View takes them out of the container's `gap`.
+//    view re-applies the page ScrollView's card gap, since wrapping the cards
+//    in a View takes them out of the container's `gap`.
 //
 // A PAUSE is not a stop, and the gate reflects that: a paused table is unlocked
 // (nothing is stepping, and firmware ≥ v0.1.18-rc2 accepts these NVS writes in
 // Hold), so pausing is the quick way to get at Settings mid-playlist.
 //
-// WHAT IS *NOT* GATED, and why — the gate covers writes to the BOARD, nothing
-// else. Reading is always allowed, and so is anything that lives on the phone:
-//   - Tables (above the banner) — switching tables is safe.
-//   - Diagnostics / "View logs", the app's own branding, and About's release
-//     notes + update check: local or off-board (GitHub / the app store). There
-//     is nothing to protect, and a locked-out log viewer is worst exactly when
-//     something is going wrong mid-pattern.
-//   - Pattern catalog: imports from a picked file; its only board read
-//     (switching back to the live catalog) already defers itself to idle.
-//   - Wi-Fi and firmware updates: these REBOOT the table, which no pause
-//     survives — so rather than lock them out they stop the table themselves
-//     after saying so in the confirm dialog (lib/stopFirst.ts).
-// The one leftover is the preview-bundle SYNC, which streams shards off the
-// same single-threaded SD the paused job still holds its .thr open on. That
-// single button is disabled on `isJobLocked` where it lives, rather than
+// GATED pages: Playback, Still Sands, Homing, LED strip, Wi-Fi, Password. WHAT IS *NOT*
+// GATED, and why — the gate covers writes to the BOARD, nothing else. Reading
+// is always allowed, and so is anything that lives on the phone:
+//   - The Settings list itself (its table section header just says "Locked
+//     while drawing") — switching tables is safe.
+//   - The "On this phone" pages: Patterns (preview library + the imported
+//     catalog, whose only board read already defers itself to idle), Branding,
+//     Diagnostics (a locked-out log viewer is worst exactly when something is
+//     going wrong mid-pattern) and About (store/GitHub reads, never the board).
+//   - Firmware: an update REBOOTS the table, which no pause survives — so rather
+//     than lock it out it stops the table itself after saying so in the
+//     confirm dialog (lib/stopFirst.ts). Wi-Fi does the same for its
+//     reboot-triggering actions, but its page is gated for the rest.
+// The one leftover is the preview-bundle SYNC (Patterns), which streams shards
+// off the same single-threaded SD the paused job still holds its .thr open on.
+// That single button is disabled on `isJobLocked` where it lives, rather than
 // dimming a whole card whose other half (importing from Files) is local.
 
 import React, { useState } from 'react'

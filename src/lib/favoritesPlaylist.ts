@@ -20,6 +20,7 @@ import { useEffect } from 'react'
 import { board } from '../api/board'
 import { isBusy } from '../api/status'
 import { log } from '../stores/useAppLog'
+import { useLibrary } from '../stores/useLibrary'
 import { useBoards } from '../stores/useBoards'
 import { usePrefs } from '../stores/usePrefs'
 import { usePreviews } from '../stores/usePreviews'
@@ -85,6 +86,7 @@ export async function reconcileFavoritesPlaylist(): Promise<ReconcileResult> {
       const content = next.length ? next.map((k) => `/patterns/${k}`).join('\n') + '\n' : '\n'
       await board.uploadTextFile(base, `/playlists/${FAVORITES_PLAYLIST}`, content)
     }
+    useLibrary.getState().setPlaylistCover(base, FAVORITES_PLAYLIST, next)
     prefs.setFavSynced(boardId, favs)
     return 'done'
   } catch (e) {

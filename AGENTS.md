@@ -28,7 +28,7 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
 - Actions (plain text "ok"): `/sand_home`, `/sand_stop`, `/sand_pause`, `/sand_resume`, `/sand_feed?d=`.
 - Commands: `GET /command?plain=$...` — `$SD/Run=`, `$Sand/Run=<file> clear=<mode>` (pre-exec clear),
   `$Playlist/Run|Stop|Skip`, `$Playlist/Mode|Shuffle|PauseTime|PauseFromStart|ClearPattern|AutoHome=`,
-  `$THR/Feed=`, `$LED/Effect|Palette|Color|Color2|Brightness|Speed|Intensity|RunEffect|IdleEffect=`,
+  `$THR/Feed=`, `$LED/Effect|Palette|Color|Color2|Brightness|Speed|Intensity|Count|Order|RunEffect|IdleEffect=`,
   `$Sands/Enabled|Slots=` (quiet hours), `$Hostname=` (rename, fw ≥ v0.1.18 — see the rename
   bullet), `$X` (unlock from Alarm), `$Bye` (reboot). Built with
   `encodeURIComponent` on the whole `plain` value (the firmware `arg("plain")` URL-decodes it).
@@ -45,7 +45,8 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
   keeps the last status on screen, unlike `setBase(null)` which the OTA flow uses); the board's
   single-threaded server would otherwise queue polls against the upload. Uploads go through
   XMLHttpRequest (not fetch) so `upload.onprogress` can drive the progress bar in Browse's
-  pattern detail sheet; "Add & send" opens that sheet before pushing so progress is visible.
+  pattern detail sheet; "Add & send" swaps the import preview for the detail body IN THE SAME
+  sheet before pushing, so progress is visible (two sheets would be a present/dismiss handoff).
 - **IP changes (DHCP)**: boards store an optional `hostname` (mDNS instance name, set when added
   via discovery). `useAutoRelocate` (App.tsx) watches for the active board going unreachable
   ~12 s, then re-scans mDNS (`scanOnce` in discovery.ts, retry every 60 s) and repoints the saved
@@ -80,32 +81,39 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
   S3 OTA. So `FirmwareRelease.images` maps mcu→URL (`firmwareUrlFor` picks), and
   `runFirmwareUpdate(base, release, onStage, forceMcu?)` reads `mcu` from the /updatefw probe
   (fw ≥ the field; also in `status.mcu`) and refuses releases with no image for a KNOWN mcu. When
-  the firmware is too old to report its mcu and the release ships BOTH images, `UpdatesCard`'s
+  the firmware is too old to report its mcu and the release ships BOTH images, `FirmwareCard`'s
   `startInstall` asks the user which board it is up front ("ESP32 (most tables)" / "ESP32-S3
   (DLC32 MAX)") and passes the answer as `forceMcu` — asking beats guess-flash-fail-retry (owner
   call), a wrong pick is rejected safely (old firmware keeps running; the failure toast says to
   try the other choice), and the question disappears once the table runs mcu-reporting firmware.
   Update checks
-  live in `src/lib/updates.ts` + `src/stores/useUpdates.ts` (app: iTunes lookup / Play page scrape;
-  both fail-safe to "unknown"); a red dot on the Settings tab (App.tsx) + an Updates card in
-  Settings (`UpdatesCard.tsx`) surface them. Checks re-run on Settings focus (10 min max-age) and
+  live in `src/lib/updates.ts` + `src/stores/useUpdates.ts` (app: iTunes lookup / Play page scrape /
+  desktop's latest GitHub release of `tuanchris/dune-weaver-desktop`, tagged with the bundled mobile
+  version; all fail-safe to "unknown"); a count badge on the Settings tab (`tabBarBadge` = the
+  number of pending updates, 1–2, in `AppTabs`; computed in App.tsx) + the Firmware / About rows
+  of the Settings list (red dot + "Update available") surface them; the pages hold `FirmwareCard` /
+  `AppVersionCard` (both in `UpdatesCard.tsx`). Checks re-run on the Settings list's focus (10 min max-age) and
   the 6 h throttle only arms after a FULLY successful check — a failed/partial one retries, so a
   stale "up to date" self-heals. The fetched "latest" is app-global; only `status.fw` is per-table.
-  **Installing a SPECIFIC version**: `UpdatesCard` has an "Install a specific version…" button
+  **Installing a SPECIFIC version**: `FirmwareCard` (Settings › Firmware) has an "Install a specific version…" button
   (real tables only) opening `FirmwareVersionPicker` — a sheet listing every GitHub release with a
   flashable image (`fetchFirmwareReleases`, lazy per-open, newest first), marking the installed one
-  and flagging Newer/Older/Pre-release. Any pick runs the same `runFirmwareUpdate` OTA flow (it
+  and flagging Newer/Older/Pre-release; each row's line is the release's section headings
+  (`notesSummary` — not the intro sentence every release repeats). Tapping a row opens that
+  release's NOTES as an in-sheet page (one sheet at a time) with the install button pinned at the
+  bottom ("Install vX" / "Downgrade to vX" / "Reinstall"). Installing runs the same `runFirmwareUpdate` OTA flow (it
   takes the whole release and picks the per-MCU image); the confirm dialog adapts wording
-  (Install / Reinstall / Downgrade) and the splash shows the target version. **EVERY row is
-  tappable, including the installed one** (that's the Reinstall path, and the escape hatch when the
+  (Install / Reinstall / Downgrade) and the splash shows the target version. **EVERY release is
+  installable, including the installed one** (that's the Reinstall path, and the escape hatch when the
   app misreads which build is on the table — an rc3 table that couldn't reach its own final release
   is exactly how this was found) — with ONE exception: when the table's mcu is KNOWN and a release
-  has no image for it (pre-S3 releases on an S3 table), the row is disabled and tagged "Not for
-  this board", because that flash can only ever be rejected. "Installed" identity uses `sameVersion`/`versionTag` (exact tag
+  has no image for it (pre-S3 releases on an S3 table), the row is tagged "Not for this board" and
+  its notes page says so in place of the install button, because that flash can only ever be
+  rejected. "Installed" identity uses `sameVersion`/`versionTag` (exact tag
   string, `v`-stripped, git_info tail dropped) and NOT `parseVersion`'s numeric key: the key
   deliberately ignores prerelease tails it doesn't model, so any unknown tail (`-beta1`) or, before
   v1.1.1, `-rcN` collapses several distinct builds onto one key and badges the wrong one as
-  installed. `relation()` in `UpdatesCard` returns `re` only on that exact match — an equal key with
+  installed. `relation()` in `UpdatesCard.tsx` returns `re` only on that exact match — an equal key with
   differing tags falls through to the neutral "Install" wording. **Beta toggle**: prereleases are
   HIDDEN by default behind "Show beta versions" (`usePrefs.showPrereleaseFirmware`, persisted;
   also filters the firmware "What's new" list) — except the build on the table, which is always
@@ -113,7 +121,10 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
   **Release notes ("What's new")**: both rows in the About card link to a shared
   `ReleaseNotesSheet` — a bottom sheet with a deliberately small markdown renderer (headings,
   bullets, inline `**bold**`/`` `code` ``/links; hard-wrapped lines are JOINED into the bullet
-  above, since the firmware's release bodies wrap at ~80 cols). Firmware notes are the GitHub
+  above, since the firmware's release bodies wrap at ~80 cols, and inline markdown is stripped
+  AFTER joining, since a bullet's `**bold**` often spans the wrap; a short plain line with no
+  closing punctuation straight above a list is that section's heading, which is how the firmware
+  notes title sections). The renderer (`Notes`) is shared with the version picker's notes page. Firmware notes are the GitHub
   release bodies via `fetchFirmwareReleases` (lazy on first open, installed one badged). App notes
   come from **`src/lib/appChangelog.ts`, a BUNDLED list** — there is no fetchable source that works
   on both stores (iOS has `releaseNotes` in the iTunes lookup, which `fetchLatestApp` now returns
@@ -183,9 +194,10 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   card patterns thumbnails; 404 sidecar (no bundle) is a quiet no-op. Since the sync never runs
   itself, Browse ASKS for it: `MissingPreviewsBanner` (the FlatList header) counts patterns that can
   only render the blank placeholder — no bundled webp, no ingested image, no local `.thr`
-  (`lib/previewCoverage.ts`, `useMissingPreviewCount`) — and taps through to Settings via
-  `navigate('Settings', {focus:'previews'})` (`src/navigation.ts` types the tab params; Settings
-  scrolls its Pattern previews card into view and outlines it for ~2.5 s). Dismissal is persisted
+  (`lib/previewCoverage.ts`, `useMissingPreviewCount`) — and taps through to Settings › Patterns via
+  `navigate('Settings', { screen: 'Patterns', initial: false })` (`initial: false` keeps the
+  Settings list underneath, so Back lands on it; `src/navigation.ts` types the params with
+  navigator-agnostic `NavigationProp`, so the native and web tab navigators share them). Dismissal is persisted
   (`usePrefs.previewNagDismissedCount` = the missing count when dismissed) and the banner returns only
   if MORE patterns end up without a thumbnail, so a partial sync doesn't re-nag. Manual import
   (`importPreviews.ts`, Settings) accepts individual images OR the bundle's `.zip` shards directly
@@ -198,7 +210,7 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   logo — `thrUri` breakage silently breaks PUSHING imported patterns after an update.
   **Sync ↔ motion are mutually exclusive** (shared single-threaded SD): sync only starts when the
   table is idle and, while shards stream, sets `usePreviews.syncing` — motion-START actions (run
-  pattern/playlist, home, clear, center/perimeter, skip) disable + refuse via `assertNotSyncing()`
+  pattern/playlist, home, clear, move to center/edge, skip) disable + refuse via `assertNotSyncing()`
   (`sd.ts`; Stop/pause/resume never gate). The streaming phase also holds an `expo-keep-awake` lock
   so a screen-off suspend can't abandon a half-fetched shard.
 - **Imported pattern catalog** (`src/lib/importCatalog.ts` + `components/CatalogCard.tsx`, Settings —
@@ -225,11 +237,13 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   `/sand_playlists` don't block motion firmware-side, a read still contends with the status poll on
   the single-threaded server, so a needed fetch is DEFERRED and re-run at the next idle by
   `lib/catalogRefresh.ts` (`useCatalogRefreshOnIdle` in App.tsx; a mid-pattern pull-to-refresh records
-  a forced retry and toasts "…will refresh when it's idle")), `useTheme`, `useToast`
+  a forced retry and toasts "…will refresh when it's idle")), `useTheme` (NOT persisted: it
+  follows the system appearance via RN `Appearance` — read at module load so the first frame is
+  right, updated by `addChangeListener`; dark is the fallback; there is no in-app toggle), `useToast`
   (errors linger 7 s vs 2.6 s for info/success), `useAppLog` (local diagnostics ring buffer —
   see below).
 - **Custom clear patterns** (`$Playlist/ClearIn`/`ClearOut`/`ClearSpeed`, firmware ≥ v0.1.11):
-  `ClearPatternsCard` (Settings) points the from-center / from-edge clears at any on-table pattern
+  `ClearPatternsCard` (Settings › Playback) points the from-center / from-edge clears at any on-table pattern
   (a searchable single-select picker over `useLibrary.tablePatterns`; "Use built-in clear" sends `''`
   → firmware falls back to its config default) and sets a dedicated clear feed (mm/min; 0 = pattern
   feed). The firmware runs the chosen file NON-destructively (unlike the old web app, which
@@ -240,7 +254,7 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   board (`useBoards` `Board.key`) and attaches `X-Sand-Key` to EVERY request — `board.ts` gets the
   key via `registerKeyLookup` (injected from useBoards; board.ts can't import the store, the store
   imports `normalizeBase`). All request paths carry it: the shared helpers, the XHR upload, both
-  `/updatefw` calls, and the Wi-Fi POSTs. `SecurityCard` (Settings, hidden for the demo table)
+  `/updatefw` calls, and the Wi-Fi POSTs. `SecurityCard` (Settings › Password, hidden for the demo table)
   sets/changes/removes the password on the table (`board.setSandPassword` — carries the old key
   automatically) or just saves an existing password locally (`board.testKey` probes with `$G`;
   401 = wrong). Lost password: `$Sand/Password=` over USB serial (never gated).
@@ -294,15 +308,38 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   other means, and won't re-add a favorite deleted table-side. Writes wait for
   connected + !isBusy + !preview-sync (the SD rule), debounce 1.5 s, and retry on the next
   toggle/reconnect/idle after a failure (logged to diagnostics, no toasts). UI lives in Browse: a
-  tappable heart badge on EVERY grid tile (ember fill when on; a nested Pressable, so it wins the
+  tappable heart badge on EVERY grid tile (sand `primary` fill when on — favourites are not
+  destructive, so never ember; a nested Pressable, so it wins the
   touch over the tile), the same toggle in the pattern detail sheet header, and a single-select
   "Show" filter DROPDOWN in the search row (bottom-sheet listing All patterns / Favorites /
   Default / each subfolder — replaced BOTH the old folder-chip row and the heart toggle; owner
   explicitly did not want a second filter line). The trigger reflects the selection (filter-list
-  icon; sand fill for a folder, ember heart for Favorites); selecting Favorites with zero
+  icon; sand fill whenever a filter is active, Favorites included, with a heart icon for
+  Favorites); the same sheet holds the A–Z / Z–A sort (a `Segmented` above the list — it was a
+  fourth button in the search row), and the search placeholder names the scope ("Search 112
+  patterns" / "Search in Favorites") so the filter shows without a second line. Selecting Favorites with zero
   favorites shows a guidance empty state.
-- `src/screens/` — `Browse` (Library|On-Table tabs, circular thumbs, import, push, clear-before-run),
-  `Playlists` (create/edit/delete, pattern picker grid, loop/shuffle/pause + pause-from-start/clear/
+- `src/screens/` — `Browse` (one grid: bundled + imported + on-table patterns deduped by name,
+  circular thumbs with 13 pt names; once the table's list is known, a small phone glyph marks the
+  tiles the table DOESN'T have. Search row = search · Show (filter + sort) · import "+" — plain,
+  not sand: sand there means a filter is on. The detail sheet: the pattern on its disc, a line
+  saying where it lives ("On the table · <folder>" / "On this phone — Play sends it to the table
+  first"), then a "Before drawing" ROW (the remembered clear, `CLEAR_MODES` minus Random, picked on
+  an in-sheet sub-page with `CLEAR_DESC` under each — the same list as a playlist's clear) above
+  **Play**, the ONE prominent button. Play on a library pattern the table lacks sends it and then
+  draws it (`doPush(name, true)`), instead of Send → close → reopen → Play. Send / Re-send is
+  secondary; Delete is the outlined-ember destructive style behind its Alert),
+  `Playlists` (the list: one row per playlist with a COVER — its first three patterns as
+  overlapping sand discs — and its pattern count. The table's `/sand_playlists` gives names only,
+  so covers come from `tableCache[base].playlistCovers` (count + first three, persisted), which
+  `lib/playlists.ts` writes on EVERY read/write of a playlist file (load, save, copy-to-target,
+  delete) and the Favorites sync updates too. The ones it hasn't seen are filled in the
+  background by `fillPlaylistCovers` — each file read ONCE, strictly one at a time (module guard),
+  standing aside only for a preview sync; mid-pattern is fine, as for loadPlaylist. Pull-to-refresh
+  re-reads every cover (edits made in the web app). A cover still loading is a plain disc.
+  The running playlist's row is marked in `live` (patina border, dot, "Playing · 3 of 12");
+  there is no separate now-playing bar — Skip/Stop are the player's. Editing:
+  create/edit/delete, pattern picker grid, loop/shuffle/pause + pause-from-start/clear/
   auto-home. The firmware holds only ONE global playlist config, so these run options are remembered
   app-side in `usePrefs.playlistPrefs` and re-applied on each run — keyed PER TABLE + filename
   (`playlistPrefKey(base, name)`, `\u001F`-joined), so the same-named playlist can differ per table;
@@ -311,29 +348,121 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   a 3 h pause between patterns + adaptive clear** (a living sculpture, not a slideshow). That
   default is authoritative: `loadPref` no longer seeds the controls from the board's global
   `$Playlist/*`, which held whatever the last-run playlist pushed and so made a NEW playlist
-  inherit an unrelated one's options. Editor edits are local until the editor closes, and closing dirty ASKS
-  save/discard — never silently writes; a copy-icon in the editor header copies the playlist to another
-  saved table via `copyPlaylistTo`, resolving every item against the TARGET's /sand_patterns catalog:
+  inherit an unrelated one's options. Create + editor are ONE `page` Sheet with sub-pages
+  (`create` → `edit` → `add` / `clear` / `copy`; the create page flips to the editor in place).
+  Pattern-list edits are local (`dirty`) until saved: a clean editor shows ✕; a dirty one shows
+  leading **Cancel** (= `closeDetail`'s Keep editing / Discard / Save alert, which also catches a
+  blocked swipe and Android back — the sheet is `dismissible={page !== 'add' && !dirty && !busy}`:
+  the `add` page's picks live in `picked`, not `items`, so it's never dismissible and
+  `closeDetail` ignores it — leave via Back or Add) and a trailing
+  prominent **Save** that commits and KEEPS the sheet open (Play lives there; toast "Playlist
+  saved") — never a silent write. Shuffle / repeat / pause / clear are NOT part of `dirty`: they
+  persist instantly to `usePrefs`, so Cancel/Discard reverts only the pattern list. Options live
+  in the grid's scrolling header block: Shuffle and Repeat (`Toggle` rows), "Pause between
+  patterns" (−/value/+ stepper and an inline sec|min|hr segmented control — not a `Select`, which
+  would stack a sheet) and a "Clear before each pattern" row (current mode label + chevron → the
+  `clear` sub-page). **Play** is a full-width primary `Button` in a bar pinned IN FLOW at the
+  sheet's bottom (thumb reach) — nothing floats over the grid, so tiles and their remove badges
+  are never covered. Playlist-item remove badges are neutral (foreground), not ember — a
+  removal is undone by discarding. Copy and Delete are rows at the FOOT of the editor's list
+  (Delete in ember, last), away from Add patterns and the remove badges; copy
+  sends the playlist to another saved table via `copyPlaylistTo`, resolving every item against the TARGET's /sand_patterns catalog:
   same key keeps its path, a file the target keeps in a different folder is re-pointed by file
   name (case-insensitive, target's casing wins), and files the target lacks are DROPPED with a
   "skipped N" toast — no pattern push; an all-missing copy refuses instead of writing an empty list),
-  `Control` (home/stop/unlock/speed + quiet-hours + live status), `Led` (effect/palette/
-  color pickers, brightness/speed sliders, an intensity slider — WLED's 2nd slider, labelled per
-  effect from `LED_EFFECTS[].uses.intensity` (Density/Trail/Flame/Flicker), hidden for effects that
-  ignore it and on firmware whose `/sand_settings` lacks `LED/Intensity` — and a Motion-reactive card that mirrors the dw web app:
+  `Control` — a hero of the table FROM ABOVE (`TableDisc`: the sand disc with the ball at the live
+  θ/ρ, mapped like the pattern previews: θ = 0 points right; patina while moving, ember in Alarm) with
+  the state word, a plain-words subline (pattern + %, "Ball at center", "Between patterns"…), θ in
+  wrapped degrees + ρ in mono, and Home / Stop (+ Unlock in Alarm; Home drops to secondary while the
+  table moves, Stop is never the primary). Then ONE card: Clear sand (the stock clear files, each
+  tile a little `TableDisc` drawing its sweep and where the ball starts — the real webp previews are
+  too dense to read small, and the two spirals look identical) and Move ball (Center / Edge pills;
+  Edge keeps the arm's angle, so its mini disc shows the ball on the rim where it points now). Both
+  need an idle, homed, online table and no preview sync; the card's title says WHY when they're off
+  (`lockReason`: offline / syncing / alarm / playlist / pattern / not idle). Speed, then **Restart
+  table** as a row with the uptime — `$Bye` behind an Alert that, via `lib/stopFirst.ts`
+  `stopFirstWarning`/`stopAndSettle`, says it will stop a running job and does so first. Firmware
+  version is NOT here (Settings › Firmware shows it). Clear labels come from `CLEAR_MODES`),
+  `Led` — built around the RING: a `LedRing` hero (`components/LedRing.tsx`, SVG dots around the
+  sand disc, one per LED up to `$LED/Count` clamped 12–72) showing what the strip shows
+  (`status.led.active`, not the chosen effect), ANIMATED like WLED's live view by
+  `lib/ledSim.ts` — a LINE-FOR-LINE port of the firmware's `Leds::renderEffect` (same integer
+  math, frame clock, speed/intensity meanings; the ball tracker follows the live `status.theta`).
+  **Any change to an effect in the firmware's `Leds.cpp` is a change to `ledSim.ts`**, and the
+  palette tables in `lib/ledPreview.ts` mirror the firmware's. It's simulated on the phone because
+  the table's single-threaded web server can't stream frames. Every `AnimatedLedRing` runs off
+  ONE shared requestAnimationFrame clock at the firmware's 33 ms frame (`LedRing.tsx`), so all
+  rings on screen update in one batched render; each re-renders only itself. They run only while
+  visible (hero: tab focused, gallery closed, LEDs on; gallery tiles: their ROW on screen, via
+  SectionList viewability, drawn every other frame ≈15 fps — the simulation keeps full speed) and
+  never under Reduce Motion, where rings show `ringDots` — a STILL sketch of each effect in the
+  user's colors. The gallery groups the 37 effects (Calm · Color · Motion · Sparkle · Flash —
+  `GROUPS` in `LedScreen.tsx`; an effect left out of every group falls into "More"). Gallery
+  tiles preview each effect at the DEFAULT speed/intensity (50/128) — what a tap applies, since
+  picking resets them — except the playing one, which shows the user's tuning. Every ring
+  simulates the strip's REAL length (`$LED/Count`) and pools it into the dots it draws (brightest
+  LED per dot, `LedSim.dots(out)`), so a comet laps a 24-dot tile as slowly as the real ring. The
+  palette swatches flow at the effect's speed (the firmware's phase rate, on the same clock).
+  Rainbow's Size slider SNAPS to the firmware's 9 sizes (`16 << ix/29`: 1/16 … 16 rainbows around
+  the ring) and names them — smooth, it sat dead for 29 steps then jumped. Power is the button in the ring's center (sand fill when on; disabled during Still
+  Sands quiet hours, which outrank it), effect name + brightness % beneath, then the master
+  Brightness slider (always shown — it's `$LED/Brightness`, master over every effect, ball too).
+  A `Segmented` Effects | Ball tracker switch replaced the old Ball toggle card (ball is just the
+  `ball` effect; switching back restores the last non-ball effect WITHOUT resetting sliders).
+  Effects mode: an Effect row (mini ring + name + Browse) opening a `page` Sheet GALLERY of every
+  effect as a ring in the user's colors — tapping one plays it on the table immediately and the
+  sheet stays open (Done closes) — then only the inputs that effect reads: palette as gradient
+  swatches (`PaletteGrid`), color(s) via the wheel sheet, and speed / intensity sliders that
+  MIRROR WLED's two effect sliders (WLED v16.0.1 `FX.cpp` metadata; the firmware implements the
+  same meanings, table in the firmware's COMMANDS.md): `LED_EFFECTS[].uses.intensity` is WLED's
+  label (Gap size, # of balls, Spark rate, …; WLED's default "!" shows as "Intensity") and is
+  absent exactly where WLED hides the slider; `uses.speed` is WLED's speed label where it renames
+  it (Cooling, Gravity, Repeat speed — plasma keeps plain 'Speed', since its speed isn't WLED's Phase) or `false` where WLED hides it (fireworks; also
+  off/static, which don't animate). Keep the app table and the firmware in step. Picking an effect in the gallery resets Speed/Intensity to the firmware defaults (`LED_DEFAULT_SPEED` 50 / `LED_DEFAULT_INTENSITY` 128, each effect's designed look) in the same `$Sand/Led` command, like WLED's "use effect defaults"; the power button and the mode switch restore an effect WITHOUT resetting. The intensity
+  slider is also hidden on firmware whose `/sand_settings` lacks `LED/Intensity` (settings are re-read on every focus of the tab and whenever `status.fw` changes: the tab stays mounted across an OTA, and the count may change in Settings). A table whose `/sand_settings` has no `LED/Effect` gets an empty state, not a page of dead controls. Then a
+  link row to Settings › LED strip (shown when `/sand_settings` has `LED/Count`; the strip's count
+  and color order live there: they're what the strip IS, set once, not what it shows) — and a "While playing or idle" card that mirrors the dw web app:
   you **"Save current"** the selected effect as the `$LED/RunEffect`/`$LED/IdleEffect` override —
   the board stores only an effect per hook, palette/colours/speed/brightness are global — plus a
-  Clear per hook, instead of picking a different effect from a dropdown), `Settings` (tables + Wi-Fi
-  + homing mode/orientation + reboot + app/firmware updates).
+  Clear per hook, instead of picking a different effect from a dropdown), `Settings` — a STACK in
+  its tab (`screens/settings/SettingsStack.tsx`, `@react-navigation/native-stack`, `headerShown:
+  false`), laid out like iOS Settings: `SettingsScreen` is the list — saved Tables (switch / rename
+  / remove, which asks first — Cancel / destructive Remove; add-by-IP folded behind a button), then
+  rows grouped by WHERE the setting lives, each showing its current value: the active table's
+  name heads Playback (auto-play on boot, clear patterns, auto-home), Still Sands (+ the table
+  clock), Homing, LED strip (only when the table reports `LED/Count`: `$LED/Count` + the
+  `$LED/Order` color-order picker, shown only on firmware that lists `LED/Order` — 6 RGB + 6
+  W-last RGBW orders, plus whatever the table has if it's another of the firmware's 30; both
+  idle/paused settings, numeric fields save on `onBlur` because react-native-web never fires
+  `onEndEditing`), Wi-Fi, Password, Firmware; "On this phone" heads Patterns (previews + imported
+  catalog), Branding, Diagnostics, About. Row values come from status, local stores and ONE
+  `/sand_settings` read per focus of the list; each page reads its own. Pages wrap their cards in
+  `SettingsPage` (`table` = the table's name above the title; `gated` = the IdleGate below), on
+  `Screen`'s `back` row — our own header, not the native nav bar, so safe areas and the iOS 26
+  accessory behave as on every tab.
 - `src/components/` — `PolarPattern` (static SVG path preview), `LiveDrawing` (the expanded player's
   signature view: the full pattern on a disc whose rim is a glowing progress ARC in the `live`
   color — sweep driven by the same `pct` as the linear bar, so the between-patterns pause fills it
   too; NO live-ball dot (owner removed it); falls back to `PatternThumb` inside the disc when no
-  local geometry exists), `PatternThumb`, `NowPlayingBar`
-  (swipe up/down to expand/collapse), `Screen`, `ui.tsx` (`Button`/`Card`/`IconButton`/`Slider` —
+  local geometry exists), `PatternThumb`, `NowPlayingBar` (three parts in one file:
+  `MiniPlayer` = Pause/Resume + Skip only, tap to open (the floating one also swipes up) — **no Stop in the mini bar**
+  (a one-tap stop was too easy to hit; the expanded player and Control have one). On iOS 26+
+  (`NATIVE_ACCESSORY` in `lib/layout.ts`, mirroring react-native-screens' gate — set it `false` as
+  a kill switch) it rides in the native tab bar's `bottomAccessory` (`regular`/`inline` placements,
+  set only while something plays — `undefined` removes the glass capsule). The accessory content is
+  **rendered twice**, so `MiniPlayer` must stay stateless: no Modals, no fetches, no per-instance
+  clock. Everywhere else `Screen` renders it in flow (`placement="floating"`) as its last child —
+  no absolute positioning, no tab-bar-height constant. `useNowPlaying()` derives the display from
+  status + ONE module-level `session` clock (pattern start, last file, pause anchor), updated
+  idempotently at render, so every copy agrees on elapsed time. `NowPlayingSheet` is the expanded
+  player (`page` Sheet, queue as a sub-page, keeps Stop), mounted ONCE in App.tsx; its open state
+  is the `usePlayerSheet` store, and the auto-open on a playlist start waits for
+  `!useAnySheetOpen()`), `Screen` (header = branding logo + table chip/switcher only — no theme or
+  restart buttons; screen title below), `AppTabs` (see the native-tabs gotcha), `Sheet` (see the
+  sheets gotcha), `ui.tsx` (`Button`/`Card`/`IconButton`/`Slider`/`Select`/`Segmented`/`Toggle` —
   the `Slider` is PanResponder-based, no native dep), `IdleGate` + `IdleGateBanner`
-  (**the gate covers writes to the BOARD, and nothing else** — its scope is a contiguous block of
-  Settings, from `WifiCard` down to `StillSands`. **A PAUSE is not a stop**:
+  (**the gate covers writes to the BOARD, and nothing else** — it wraps the GATED Settings pages
+  (`SettingsPage gated`: Playback, Still Sands, Homing, LED strip, Wi-Fi, Password). **A PAUSE is not a stop**:
   `IdleGate`/`isSettingsLocked(status)` gates board-CONFIG writes and OPENS while the table is
   paused — a feed hold isn't stepping and firmware ≥ `SETTINGS_IN_HOLD_MIN_FW` (v0.1.18-rc2) accepts
   those NVS writes in `Hold` via its `holdOk()` opt-in, so pausing is the quick way into Settings
@@ -344,13 +473,14 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   the next pattern's start.
   **What is deliberately OUTSIDE the gate, and why** — a running table is no reason to lock a
   screen that isn't writing to it, and a locked-out log viewer is worst exactly when something is
-  going wrong mid-pattern: the Tables card (above the banner; switching tables is safe),
-  `CatalogCard` (imports from a picked file — its only board read, flipping back to the live
-  catalog, is `loadTable`, which already defers itself to the next idle), the preview library,
-  App branding, `DiagnosticsCard`, and `UpdatesCard` (release notes + the update check are
-  GitHub/App-Store reads, never the board). Wi-Fi and OTA stay INSIDE the gate but are not dead
-  ends in the window a pause opens: they reboot the table, which no pause survives, so instead of
-  refusing they stop it themselves after saying so in the confirm dialog (`lib/stopFirst.ts`).
+  going wrong mid-pattern: the Settings list (its table header just says "Locked while drawing";
+  switching tables is safe), and every "On this phone" page — Patterns (`CatalogCard` imports from
+  a picked file; its only board read, flipping back to the live catalog, is `loadTable`, which
+  already defers itself to the next idle), Branding, Diagnostics, About (release notes + the
+  update check are GitHub/App-Store reads, never the board). Firmware is a table page but NOT
+  gated, and Wi-Fi's reboot actions aren't dead ends in the window a pause opens: both reboot the
+  table, which no pause survives, so instead of refusing they stop it themselves after saying so
+  in the confirm dialog (`lib/stopFirst.ts`).
   The ONE control a pause doesn't free is **preview sync** — it streams shards off the same
   single-threaded SD the paused job still holds its `.thr` open on — so that single Button is
   disabled on `isJobLocked(status)` (isBusy OR a live playlist, gap included) with its own inline
@@ -360,7 +490,7 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   that card stays strictly idle-gated, since it JOGS via
   `/sand_goto` and `SandApi::goTo` requires a true `Idle` (it 409s in `Hold`, which the sheet's
   retry would spin on forever).
-  ONE banner sits under the Tables card, with exactly ONE inline button: **Pause** wherever a
+  ONE banner sits at the top of each gated page, with exactly ONE inline button: **Pause** wherever a
   pause would help (it opens Settings without ending the run — pairing it with Stop only invites
   the destructive one), **Stop** exactly where a pause can't (already held, or firmware too old to
   unlock on a hold). A feed hold works from Idle too (FluidNC goes straight to `Hold`, and the
@@ -369,37 +499,98 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   gap instead of relocking as it winds down — which is why the banner STAYS UP through that gap
   ("Between patterns — pause to keep settings open.") but not through a manual pause, where
   nothing is dimmed and nothing is about to relock. The gate dims to 0.55 (values stay readable), blocks touches, and
-  re-applies the ScrollView's card `gap` (a wrapper View otherwise collapses it).
+  re-applies the page ScrollView's card `gap` (a wrapper View otherwise collapses it).
   The banner is normal-flow, NOT an
   absolute overlay — an overlay covers a short card's whole content and iOS height-constrains
   overlay text to one truncated line. `ClearPatternsCard` follows the same `!isSettingsLocked`
   rule for its own row-level disabling),
   `Onboarding`, `Toaster`, `AlignOrientation`
-  (crash-homing pattern orientation, in Settings' Homing card: crash home never moves theta — the
-  arm's direction at home time BECOMES theta=0 — so the sheet nudges the ball around the perimeter
+  (crash-homing pattern orientation, in Settings › Homing: crash home never moves theta — the
+  arm's direction at home time BECOMES theta=0 — so the sheet nudges the ball around the edge
   via absolute `/sand_goto?theta=` jogs (`board.rotateTo`, seeded from live status.theta, 409-retry
   while the previous jog finishes) until it points "East" (viewer's right), then homes to lock it in.
   Mirrors dw's Pattern Orientation Alignment dialog).
-- `src/lib/` — `thrGeometry.mjs`, `patternGeometry.ts`, `patternSource`/`pushPattern`/`importPattern`/`playlists`.
+- `src/lib/` — `thrGeometry.mjs`, `patternGeometry.ts`, `patternSource`/`pushPattern`/`importPattern`/`playlists`,
+  `layout.ts` (`thumbGrid`, `SCROLL_BOTTOM_PAD`, `NATIVE_ACCESSORY`).
 - `metro.config.js` adds `thr` to `assetExts`. `app.json` has `assetBundlePatterns` for `assets/thr` + `assets/previews`.
 
 ## Conventions / gotchas
-- After geometry/UI changes, verify with: `npx tsc --noEmit` and `npx expo export --platform ios` (bundles
-  + confirms assets resolve). There are no unit tests.
-- **Stacked Modals**: a second `<Modal>` rendered as a sibling won't present over an open one (iOS) —
-  nest it inside the first Modal's tree (see the playlist pattern picker).
+- After geometry/UI changes, verify with: `npx tsc --noEmit`, `npx expo export --platform ios` (bundles
+  + confirms assets resolve) AND the web bundle the way the desktop app builds it:
+  `(cd ../dune-weaver-desktop && npx expo export -p web --output-dir <tmp>)` — web runs different
+  files (`AppTabs.web.tsx`), so an iOS bundle doesn't cover it. This repo can't export web itself
+  (no `react-dom`/`react-native-web`; the desktop metro config resolves this source against its own
+  node_modules), and desktop's `npm run web` writes to the desktop app's own `dist/`. There are no
+  unit tests.
+- **Native tab bar** (`src/components/AppTabs.tsx`, iOS + Android): `createNativeBottomTabNavigator`
+  from `@react-navigation/bottom-tabs/unstable` — an UNSTABLE API; re-check it after any
+  react-navigation / react-native-screens upgrade.
+  It THROWS on web, so `AppTabs.web.tsx` keeps the JS `createBottomTabNavigator` for web/desktop
+  (Metro picks it by extension; same props, same badge) — every tab change goes in both files.
+  `lazy: true` is REQUIRED (the native default is `false`, which mounts all five screens and fires
+  every screen's board load into the throttled launch burst). Icons: SF Symbols on iOS; Android
+  needs images, so the same MaterialIcons glyphs are rasterized via `getImageSource`.
+  `tabBarLabelVisibilityMode: 'labeled'` (Android hides unselected labels with 5 tabs otherwise).
+  The Settings `tabBarBadge` is a COUNT — `''` draws nothing on iOS — in the nav theme's default
+  `notification` red (don't override it with ember). Inside a tab, `Screen` uses `SafeAreaView`
+  from `react-native-screens/experimental` (NOT safe-area-context, whose insets exclude the tab bar
+  and iPadOS 18's top bar) — **exactly ONE per Screen** (Android keeps a single insets listener).
+  On iOS 26 its bottom edge is left unpadded so content scrolls under the glass bar + accessory;
+  scroll content pads its bottom with `SCROLL_BOTTOM_PAD` (`lib/layout.ts`). Never toggle
+  `headerShown` at runtime (throws). The Settings tab nests a native-stack (see `Settings` in the
+  screens list); re-tapping the tab pops it to the list (`tabBarRepeatedPressBehavior` default /
+  the JS tabs' tabPress), so any new nested navigator goes under BOTH tab files the same way.
+- **Sheets**: every bottom sheet goes through `src/components/Sheet.tsx`, the ONLY Modal wrapper
+  (`FwUpdateSplash`, a full-screen blocker, is the one other Modal). `variant="page"` = a native
+  iOS `pageSheet` (non-transparent, `backdropColor` = theme background, system swipe-to-dismiss, no
+  grabber), a tall JS sheet on Android/web — for editors, pickers, logs. `variant="fit"` = a
+  content-height JS sheet everywhere (max 560 wide, centered) with a REAL draggable grabber (the
+  grabber + header are the only drag zone, so scrolls, Sliders and the ColorWheel never fight it)
+  — for short choosers and content that would fight UIKit's sheet pan. Never draw a fake grabber.
+  **`dismissible` contract**: a parent that may refuse `onClose` MUST pass `dismissible={false}`
+  while it would refuse (dirty/busy) — a completed iOS swipe has already dismissed the sheet, so
+  refusing then leaves JS state "open" over nothing; a blocked swipe still fires `onClose`, which
+  is where to ask. **ONE sheet presented at a time**: iOS silently refuses a second Modal (even
+  while the first animates out), so nested flows are in-sheet sub-pages (`onBack` swaps the leading
+  slot for a back chevron; Android back calls it); to present after another sheet, wait for
+  `!useAnySheetOpen()`. Never put a `Select` inside a sheet (it is itself a `fit` sheet) — use
+  inline segmented choices or a sub-page. Grids inside a sheet size from `useSheetWidth()` (an iPad
+  pageSheet is narrower than the window), called from a component rendered INSIDE the sheet, since
+  it reads the sheet's context. Header buttons: `SheetButton` (`prominent` = sand pill).
+  The JS sheet's drag zone claims the touch on START (inside a native Modal a touch that begins on
+  the grabber/title otherwise bubbles to the Modal host and the move never reaches the header) and
+  takes no gesture while closing; its slide-out unmounts whenever it ENDS closed, finished or not.
+  **Toasts over sheets**: on iOS `Toaster` draws in a `FullWindowOverlay` (react-native-screens),
+  remounted per toast — a root-view toast sits UNDER a presented pageSheet.
 - **Design language ("the table from above, at night")**: warm basalt/sand palette (NOT the web
-  app's gray+blue — see `src/theme/index.ts`, the single token source), **circular pattern
+  app's gray+blue — see `src/theme/index.ts`, the single token source; light vs dark palette
+  follows the SYSTEM appearance, no in-app toggle), **circular pattern
   thumbnails**, **pill-shaped controls** (`radius.pill`). Type roles: Bricolage Grotesque display
   (`font.family.display`) for screen titles / pattern names / the Control state word; system font
   for body/controls; IBM Plex Mono (`font.family.mono`) for ALL telemetry (times, %, feed, θ/ρ,
   IPs, versions). Fonts load in App.tsx via `expo-font` (render-gated). Palette rules: `primary`
   (sand) = user actions; `live` (patina) = things happening on the table NOW (progress fills, live
-  ball, active-state dot) — never swap them; destructive buttons are OUTLINED ember, not filled;
+  ball, active-state dot) — never swap them; `destructive` (ember) means destructive / error /
+  offline ONLY — favourites, selection and badges are never ember (the update badge is the nav
+  theme's notification red); destructive buttons are OUTLINED ember, not filled;
   never hardcode `#fff` on a primary/destructive surface — use `primaryForeground`/
-  `destructiveForeground`; on/off settings use `ui.tsx`'s `Toggle` (sand track), NEVER a bare
-  `Switch` (the stock iOS green fights the palette). Thumb-grid sizes derive from
-  `useWindowDimensions` (NOT module-scope `Dimensions.get` — iPad split view resizes the window).
+  `destructiveForeground`. Light-mode ink tokens (muted, primary, destructive, success, live) are
+  tuned to WCAG AA 4.5:1 on background, card AND cardElevated (the tight one) — re-check all three
+  when tweaking one, and don't lower text opacity under them. Text over a tinted banner
+  (`<color>22` fill) is `foreground`; the tint colour stays on the icon/border only. On/off
+  settings use `ui.tsx`'s `Toggle` (sand track) at NATIVE size (don't scale it), NEVER a bare
+  `Switch` (the stock iOS green fights the palette). Thumb grids come from `thumbGrid(width)` in
+  `lib/layout.ts` (~140 pt per column, min 3): screens pass `useWindowDimensions` width (NOT
+  module-scope `Dimensions.get` — iPad split view resizes the window), grids in a sheet pass
+  `useSheetWidth()`. Tab-screen scroll content pads its bottom with `SCROLL_BOTTOM_PAD`.
+  **Dynamic Type**: any container that holds text uses `minHeight` (plus `paddingVertical` where
+  needed), never a fixed `height`; names/titles that can wrap get `numberOfLines={2}` (grid-tile
+  captions, base URLs, the header table chip, one-word screen titles and both mini-player forms
+  stay 1 line — the native accessory capsule also caps text with `maxFontSizeMultiplier`). **Vocabulary**: clear names come ONLY from `board.ts` `CLEAR_MODES`
+  (Adaptive · From center · From edge · Sideways · Random · None, default first); standing alone
+  (sheet title, toast) prefix them — "Clear from center" / "Clear from edge" / "Clear sideways".
+  The ball position is "Edge", never "Perimeter". Screen titles equal their tab names (Browse,
+  Playlists, Control, LEDs, Settings).
   Every `IconButton` takes a `label` (VoiceOver). The sibling touch-panel repo intentionally uses a DIFFERENT accent (Ember) — do not
   "reconcile" them.
 - No native discovery module installed — tables are added by IP/hostname manually. mDNS browsing

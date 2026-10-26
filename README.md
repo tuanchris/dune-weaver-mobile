@@ -11,25 +11,27 @@ on your Wi-Fi, so there's no CORS, no server to keep running, and nothing leaves
 
 ## Features
 
-- **Browse & run** – the full ~1000-pattern library is browsable; run any pattern with an optional
-  pre-execution clear (adaptive / from center / from perimeter / sideways).
+- **Browse & run** – the bundled library, your imports and everything on the table in one grid;
+  play any pattern with an optional clear first (adaptive / from center / from edge / sideways).
+  Patterns the table doesn't have yet are sent to it when you play them.
 - **Your own patterns** – import `.thr` files (single or multi-select) at **full resolution**; they're
   stored on the device and pushed to the table's SD card intact.
 - **Previews** – 100 default patterns ship with pre-rendered thumbnails; imported patterns get a
   WebP preview generated on-device, and you can bulk-import preview images for custom patterns in
-  Settings (matched by filename, e.g. `star.thr.webp` → `star.thr`).
-- **Playlists** – create / edit / delete, reorder, loop / shuffle, pause-between-patterns, clear and
-  auto-home options.
-- **Control** – home, stop, pause/resume, speed, jog the ball between patterns, live status with a
-  polar progress trace and live ball position.
-- **LEDs** – effect / palette / colour pickers, brightness & speed, run/idle overrides, ball tracker
-  (driven by the firmware's on-board LED ring).
+  Settings › Patterns (matched by filename, e.g. `star.thr.webp` → `star.thr`).
+- **Playlists** – create / edit / delete / copy to another table, loop / shuffle,
+  pause-between-patterns, clear and auto-home options; each playlist shows its first patterns.
+- **Control** – the table seen from above with the ball where it is, home / stop / unlock, clear
+  the sand (from center, from edge, sideways), move the ball to center or edge, speed, restart.
+- **LEDs** – a live preview of the ring with power at its center, an effect gallery shown in your
+  own colours, palette / colour pickers, brightness & speed, run/idle overrides, ball tracker
+  (driven by the firmware's on-board LED ring; strip length + colour order in Settings › LED strip).
 - **Homing** – choose crash vs sensor homing, set the sensor offset, and auto-home every _N_ patterns
   during playlists.
 - **Quiet hours ("Still Sands")**, **auto-play on boot**, **multi-table** with a header switcher,
-  custom **branding** (name + logo), and light/dark themes.
+  custom **branding** (name + logo), and a light/dark appearance that follows the system.
 - **Updates** – shows the table's firmware version, flashes new firmware releases over the air with
-  one tap, and flags new app versions (Settings tab dot + update card).
+  one tap, and flags new app versions (Settings tab badge; Settings › Firmware and › About).
 
 ## Requirements
 
@@ -78,7 +80,7 @@ into `assets/` (git-ignored, regenerate locally):
 
 Custom pattern data lives in app storage instead of the bundle: imported `.thr` files are saved
 full-resolution, their previews are generated on-device, and you can ingest preview images for
-on-table customs from **Settings → Pattern previews**.
+on-table customs from **Settings › Patterns**.
 
 ```bash
 npm run gen-geometry   # requires ../dune-weaver checked out as a sibling
@@ -90,7 +92,8 @@ npm run gen-geometry   # requires ../dune-weaver checked out as a sibling
 src/api/         board.ts (HTTP client), status.ts (raw status → app status)
 src/stores/      zustand (persisted via AsyncStorage): boards, status poll,
                  library (imported patterns), previews, prefs, theme, branding, toasts
-src/screens/     Browse, Playlists, Control, Led, Settings
+src/screens/     Browse, Playlists, Control, Led, Settings (the list)
+src/screens/settings/  the Settings stack + its pages (Playback, Homing, Patterns, …)
 src/components/   PolarPattern (SVG), PatternThumb, NowPlayingBar, Screen, ui kit,
                  PreviewGenerator, Onboarding, Toaster
 src/lib/         thr geometry, import/push patterns, import previews, playlists, discovery

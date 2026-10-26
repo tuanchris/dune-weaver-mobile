@@ -149,5 +149,5 @@ const styles = StyleSheet.create({
   foundRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, borderRadius: radius.md, borderWidth: 1, padding: spacing.md },
   divider: { flexDirection: 'row', alignItems: 'center', alignSelf: 'stretch', gap: spacing.md, marginVertical: spacing.lg },
   line: { flex: 1, height: 1 },
-  input: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 48, fontSize: font.size.md },
+  input: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, minHeight: 48, fontSize: font.size.md },
 })

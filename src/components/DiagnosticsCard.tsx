@@ -6,9 +6,8 @@
 // share of the visible log.
 
 import React, { useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native'
 import Constants from 'expo-constants'
-import { SafeAreaView } from 'react-native-safe-area-context'
 import { useAppLog, appLogText } from '../stores/useAppLog'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
@@ -17,7 +16,8 @@ import { collectTableLog, RESTART_MARKER } from '../lib/tableLogSync'
 import { useTheme } from '../stores/useTheme'
 import { toast } from '../stores/useToast'
 import { userMessage } from '../lib/errors'
-import { Button, Card, CardTitle, IconButton } from './ui'
+import { Button, Card, IconButton } from './ui'
+import { Sheet } from './Sheet'
 import { radius, spacing, font } from '../theme'
 
 type LogTab = 'table' | 'app'
@@ -120,119 +120,119 @@ export function DiagnosticsCard({ base }: { base: string | null }) {
 
   return (
     <Card>
-      <CardTitle>Diagnostics</CardTitle>
-      <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginBottom: spacing.md }}>
+      <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, marginBottom: spacing.md }}>
         The table’s runtime log (read from the table when you open it) and this app’s own event log. Nothing leaves this phone unless you share it.
       </Text>
       <Button title="View logs" icon="receipt-long" variant="secondary" onPress={openSheet} />
 
-      {/* Log viewer sheet. The sheet itself is a plain View (not a Pressable —
-          a Pressable wrapper competed with the ScrollView for the drag gesture
-          and scrolling never started); tap-outside-to-close is the flex spacer. */}
-      <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
-        <View style={styles.backdrop}>
-          <Pressable style={{ flex: 1 }} onPress={() => setOpen(false)} />
-          <View style={[styles.sheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
-            <View style={[styles.sheetHandle, { backgroundColor: colors.border }]} />
-            <View style={styles.sheetHeader}>
-              {base ? (
-                <View style={styles.tabs}>
-                  {(
-                    [
-                      { key: 'table', label: 'Table' },
-                      { key: 'app', label: `App (${entries.length})` },
-                    ] as const
-                  ).map(({ key, label }) => (
-                    <Pressable
-                      key={key}
-                      onPress={() => setTab(key)}
-                      style={[
-                        styles.tabBtn,
-                        { borderColor: tab === key ? colors.primary : colors.border, backgroundColor: tab === key ? colors.cardElevated : 'transparent' },
-                      ]}
-                    >
-                      <Text style={{ color: tab === key ? colors.foreground : colors.mutedForeground, fontSize: font.size.sm, fontWeight: font.weight.medium }}>
-                        {label}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-              ) : (
-                <Text style={{ color: colors.foreground, fontSize: font.size.lg, fontWeight: font.weight.semibold, flex: 1 }}>App log</Text>
-              )}
-              {tab === 'table' ? (
-                <>
-                  <IconButton icon="refresh" size={22} color={colors.mutedForeground} disabled={loading} onPress={() => void fetchTableLog()} />
-                  <IconButton
-                    icon="delete-outline"
-                    size={22}
-                    color={colors.mutedForeground}
-                    onPress={() => { if (boardId) { clearTableLog(boardId); toast.success('Collected log cleared') } }}
-                  />
-                </>
-              ) : (
-                <IconButton icon="delete-outline" size={22} color={colors.mutedForeground} onPress={() => { clear(); toast.success('Log cleared') }} />
-              )}
-              <IconButton icon="ios-share" size={22} color={colors.primary} onPress={() => void share()} />
-            </View>
-
-            {tab === 'table' ? (
-              loading && tableEntries.length === 0 ? (
-                <ActivityIndicator color={colors.primary} style={{ paddingVertical: spacing.xl }} />
-              ) : tableErr && tableEntries.length === 0 ? (
-                <View style={{ paddingVertical: spacing.lg, gap: spacing.md }}>
-                  <Text style={{ color: colors.mutedForeground }}>{tableErr}</Text>
-                  <Button title="Try again" icon="refresh" variant="secondary" onPress={() => void fetchTableLog()} />
-                </View>
-              ) : (
-                <ScrollView ref={scrollRef} style={{ flexShrink: 1 }} contentContainerStyle={{ paddingBottom: spacing.md }}>
-                  {tableEntries.length === 0 ? (
-                    <Text style={{ color: colors.mutedForeground, paddingVertical: spacing.lg }}>Nothing collected yet.</Text>
-                  ) : (
-                    tableEntries.map((e, i) =>
-                      e.text === RESTART_MARKER ? (
-                        <Text key={i} style={[styles.line, { color: colors.mutedForeground, textAlign: 'center', marginVertical: 4 }]}>
-                          {e.text}
-                        </Text>
-                      ) : (
-                        <Text key={i} selectable style={[styles.line, { color: tableLevelColor(e.text) }]}>
-                          {e.ts != null && <Text style={{ color: colors.mutedForeground }}>{fmtLogTime(e.ts)} </Text>}
-                          {e.text}
-                        </Text>
-                      )
-                    )
-                  )}
-                  <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.md }}>
-                    Collected from the table whenever the app can reach it, so the history survives table restarts.
-                    {stored ? ` Last collected ${new Date(stored.updatedAt).toLocaleTimeString()}.` : ''}
+      {/* Log viewer sheet. The body is a plain View (not a Pressable — a
+          Pressable wrapper competed with the ScrollView for the drag gesture
+          and scrolling never started). */}
+      <Sheet
+        variant="page"
+        visible={open}
+        onClose={() => setOpen(false)}
+        leading={
+          base ? (
+            <View style={styles.tabs}>
+              {(
+                [
+                  { key: 'table', label: 'Table' },
+                  { key: 'app', label: `App (${entries.length})` },
+                ] as const
+              ).map(({ key, label }) => (
+                <Pressable
+                  key={key}
+                  onPress={() => setTab(key)}
+                  style={[
+                    styles.tabBtn,
+                    { borderColor: tab === key ? colors.primary : colors.border, backgroundColor: tab === key ? colors.cardElevated : 'transparent' },
+                  ]}
+                >
+                  <Text style={{ color: tab === key ? colors.foreground : colors.mutedForeground, fontSize: font.size.sm, fontWeight: font.weight.medium }}>
+                    {label}
                   </Text>
-                </ScrollView>
-              )
-            ) : entries.length === 0 ? (
-              <Text style={{ color: colors.mutedForeground, paddingVertical: spacing.lg }}>Nothing logged yet.</Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : (
+            <Text style={{ color: colors.foreground, fontSize: font.size.lg, fontWeight: font.weight.semibold }}>App log</Text>
+          )
+        }
+        trailing={
+          <View style={styles.actions}>
+            {tab === 'table' ? (
+              <>
+                <IconButton icon="refresh" size={22} color={colors.mutedForeground} disabled={loading} onPress={() => void fetchTableLog()} />
+                <IconButton
+                  icon="delete-outline"
+                  size={22}
+                  color={colors.mutedForeground}
+                  onPress={() => { if (boardId) { clearTableLog(boardId); toast.success('Collected log cleared') } }}
+                />
+              </>
+            ) : (
+              <IconButton icon="delete-outline" size={22} color={colors.mutedForeground} onPress={() => { clear(); toast.success('Log cleared') }} />
+            )}
+            <IconButton icon="ios-share" size={22} color={colors.primary} onPress={() => void share()} />
+            <IconButton icon="close" size={22} label="Close" onPress={() => setOpen(false)} />
+          </View>
+        }
+      >
+        <View style={styles.body}>
+          {tab === 'table' ? (
+            loading && tableEntries.length === 0 ? (
+              <ActivityIndicator color={colors.primary} style={{ paddingVertical: spacing.xl }} />
+            ) : tableErr && tableEntries.length === 0 ? (
+              <View style={{ paddingVertical: spacing.lg, gap: spacing.md }}>
+                <Text style={{ color: colors.mutedForeground }}>{tableErr}</Text>
+                <Button title="Try again" icon="refresh" variant="secondary" onPress={() => void fetchTableLog()} />
+              </View>
             ) : (
               <ScrollView ref={scrollRef} style={{ flexShrink: 1 }} contentContainerStyle={{ paddingBottom: spacing.md }}>
-                {entries.map((e, i) => (
-                  <Text key={i} selectable style={[styles.line, { color: appLevelColor(e.level) }]}>
-                    {new Date(e.ts).toLocaleTimeString()} [{e.tag}] {e.msg}
-                  </Text>
-                ))}
+                {tableEntries.length === 0 ? (
+                  <Text style={{ color: colors.mutedForeground, paddingVertical: spacing.lg }}>Nothing collected yet.</Text>
+                ) : (
+                  tableEntries.map((e, i) =>
+                    e.text === RESTART_MARKER ? (
+                      <Text key={i} style={[styles.line, { color: colors.mutedForeground, textAlign: 'center', marginVertical: 4 }]}>
+                        {e.text}
+                      </Text>
+                    ) : (
+                      <Text key={i} selectable style={[styles.line, { color: tableLevelColor(e.text) }]}>
+                        {e.ts != null && <Text style={{ color: colors.mutedForeground }}>{fmtLogTime(e.ts)} </Text>}
+                        {e.text}
+                      </Text>
+                    )
+                  )
+                )}
+                <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, marginTop: spacing.md }}>
+                  Collected from the table whenever the app can reach it, so the history survives table restarts.
+                  {stored ? ` Last collected ${new Date(stored.updatedAt).toLocaleTimeString()}.` : ''}
+                </Text>
               </ScrollView>
-            )}
-            <SafeAreaView edges={['bottom']} />
-          </View>
+            )
+          ) : entries.length === 0 ? (
+            <Text style={{ color: colors.mutedForeground, paddingVertical: spacing.lg }}>Nothing logged yet.</Text>
+          ) : (
+            <ScrollView ref={scrollRef} style={{ flexShrink: 1 }} contentContainerStyle={{ paddingBottom: spacing.md }}>
+              {entries.map((e, i) => (
+                <Text key={i} selectable style={[styles.line, { color: appLevelColor(e.level) }]}>
+                  {new Date(e.ts).toLocaleTimeString()} [{e.tag}] {e.msg}
+                </Text>
+              ))}
+            </ScrollView>
+          )}
         </View>
-      </Modal>
+      </Sheet>
     </Card>
   )
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  sheet: { maxHeight: '85%', borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1, paddingTop: spacing.sm, paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
-  sheetHandle: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: spacing.sm },
-  sheetHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm },
+  body: { flex: 1, paddingHorizontal: spacing.lg },
   tabs: { flex: 1, flexDirection: 'row', gap: spacing.sm },
-  tabBtn: { paddingHorizontal: spacing.md, height: 40, borderRadius: radius.pill, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  tabBtn: { paddingHorizontal: spacing.md, minHeight: 40, borderRadius: radius.pill, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   line: { fontSize: 11, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', marginBottom: 3 },
 })

@@ -2,7 +2,7 @@ Dune Weaver turns your phone into a full remote for your kinetic sand table runn
 
 BROWSE & RUN
 - Explore a library of around 1000 patterns and run any of them with a tap.
-- Optional pre-run clear: adaptive, from the center, from the perimeter, or sideways.
+- Optional pre-run clear: adaptive, from the center, from the edge, or sideways.
 
 YOUR OWN PATTERNS
 - Import your own .thr files at full resolution and push them straight to the table's SD card.
@@ -22,6 +22,6 @@ LED RING
 
 MORE
 - Quiet hours ("Still Sands") to pause overnight.
-- Auto-play on boot, multi-table support with a quick switcher, custom name and logo, and light or dark themes.
+- Auto-play on boot, multi-table support with a quick switcher, custom name and logo, and a light or dark look that follows your system setting.
 
 The phone and table must be on the same Wi-Fi network. Dune Weaver is open source (GPL-3.0).

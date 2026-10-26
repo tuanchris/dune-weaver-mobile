@@ -1,16 +1,19 @@
-// Settings card: app + table firmware versions, with update actions.
-// - App: compares the running version to the store's latest; "Update" deep-
-//   links to the App Store / Play Store page.
-// - Firmware: compares the active table's reported version (status.fw) to the
-//   latest GitHub release and flashes it over OTA right from the app.
-// Both rows expose "What's new" — the app's from the bundled changelog (plus
-// the store's own notes for a pending update, where the store publishes them),
-// the firmware's from the GitHub release bodies, fetched lazily on first open.
+// Settings cards for versions + updates, one per Settings page:
+// - FirmwareCard (Settings › Firmware): compares the active table's reported
+//   version (status.fw) to the latest GitHub release and flashes it over OTA
+//   right from the app — the latest, or any release via the version picker.
+// - AppVersionCard (Settings › About): compares the running version to the
+//   store's latest; "Update" deep-links to the App Store / Play Store page
+//   (desktop: its GitHub release).
+// Both expose "What's new" — the app's from the bundled changelog (plus the
+// store's own notes for a pending update, where the store publishes them), the
+// firmware's from the GitHub release bodies, fetched lazily on first open.
+// The background update check runs on the Settings list's focus (SettingsScreen),
+// whose Firmware/About rows show what's pending.
 
-import React, { useCallback, useMemo, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { Alert, Linking, Pressable, StyleSheet, Text, View } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
-import { useFocusEffect } from '@react-navigation/native'
 import { isDemoBase } from '../api/demoBoard'
 import { usePrefs } from '../stores/usePrefs'
 import { useStatus } from '../stores/useStatus'
@@ -25,7 +28,7 @@ import { fetchFirmwareReleases, type BoardMcu, type FirmwareRelease } from '../l
 import { FwUpdateSplash } from './FwUpdateSplash'
 import { FirmwareVersionPicker } from './FirmwareVersionPicker'
 import { ReleaseNotesSheet, type NotesEntry } from './ReleaseNotesSheet'
-import { Button, Card, CardTitle } from './ui'
+import { Button, Card } from './ui'
 import { spacing, font } from '../theme'
 
 /** How a target version relates to what's on the table: 'up'grade, 'down'grade,
@@ -65,38 +68,11 @@ function NotesLink({ onPress }: { onPress: () => void }) {
   )
 }
 
-export function UpdatesCard({ base }: { base: string | null }) {
-  const colors = useTheme((s) => s.colors)
-  const appLatest = useUpdates((s) => s.appLatest)
-  const fwLatest = useUpdates((s) => s.fwLatest)
+/** Deliberate re-check: bypasses the 6 h throttle (maxAge 0) and reports the
+ * outcome, unlike the silent background check on Settings focus. */
+function CheckForUpdates() {
   const check = useUpdates((s) => s.check)
-  const showPre = usePrefs((s) => s.showPrereleaseFirmware)
-  const tableFw = useStatus((s) => s.status?.fw ?? null)
-  const tableMcu = useStatus((s) => s.status?.mcu ?? null)
-  const [stage, setStage] = useState<FwUpdateStage | null>(null)
   const [checking, setChecking] = useState(false)
-  const [pickerOpen, setPickerOpen] = useState(false)
-  // The version currently being flashed (latest or a picked one) — drives the
-  // splash label so it names what's actually installing.
-  const [target, setTarget] = useState<FirmwareRelease | null>(null)
-  // Which "What's new" sheet is open, and the firmware release bodies behind it
-  // (fetched once per session, on first open — same lazy rule as the picker).
-  const [notesFor, setNotesFor] = useState<'app' | 'firmware' | null>(null)
-  const [fwReleases, setFwReleases] = useState<FirmwareRelease[] | null>(null)
-  const [fwNotesLoading, setFwNotesLoading] = useState(false)
-
-  const openFirmwareNotes = () => {
-    setNotesFor('firmware')
-    if (fwReleases != null || fwNotesLoading) return
-    setFwNotesLoading(true)
-    void fetchFirmwareReleases()
-      .then((list) => setFwReleases(list))
-      .catch(() => setFwReleases([]))
-      .finally(() => setFwNotesLoading(false))
-  }
-
-  // Deliberate re-check: bypasses the 6 h throttle (maxAge 0) and reports the
-  // outcome, unlike the silent background checks on launch / Settings focus.
   const checkNow = async () => {
     setChecking(true)
     const before = useUpdates.getState().checkedAt
@@ -117,34 +93,42 @@ export function UpdatesCard({ base }: { base: string | null }) {
     else if (fwAvail) toast.info('A firmware update is available')
     else toast.success('Everything is up to date')
   }
-
-  // Refresh whenever Settings gains focus (the tab stays mounted, so a mount
-  // effect would only ever run once per session). Allow a re-check every
-  // 10 min here — cheap, and it picks up releases published mid-session.
-  useFocusEffect(
-    useCallback(() => {
-      void check(10 * 60_000)
-    }, [check])
+  return (
+    <View style={{ marginTop: spacing.md }}>
+      <Button title="Check for updates" icon="refresh" variant="secondary" loading={checking} onPress={() => void checkNow()} />
+    </View>
   )
+}
 
-  const appNew = appUpdateAvailable(appLatest)
+/** Settings › Firmware: the active table's firmware, update + version picker. */
+export function FirmwareCard({ base }: { base: string }) {
+  const colors = useTheme((s) => s.colors)
+  const fwLatest = useUpdates((s) => s.fwLatest)
+  const showPre = usePrefs((s) => s.showPrereleaseFirmware)
+  const tableFw = useStatus((s) => s.status?.fw ?? null)
+  const tableMcu = useStatus((s) => s.status?.mcu ?? null)
+  const [stage, setStage] = useState<FwUpdateStage | null>(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  // The version currently being flashed (latest or a picked one) — drives the
+  // splash label so it names what's actually installing.
+  const [target, setTarget] = useState<FirmwareRelease | null>(null)
+  // The release bodies behind "What's new" (fetched once, on first open — same
+  // lazy rule as the picker).
+  const [notesOpen, setNotesOpen] = useState(false)
+  const [fwReleases, setFwReleases] = useState<FirmwareRelease[] | null>(null)
+  const [notesLoading, setNotesLoading] = useState(false)
+
+  const openNotes = () => {
+    setNotesOpen(true)
+    if (fwReleases != null || notesLoading) return
+    setNotesLoading(true)
+    void fetchFirmwareReleases()
+      .then((list) => setFwReleases(list))
+      .catch(() => setFwReleases([]))
+      .finally(() => setNotesLoading(false))
+  }
+
   const fwNew = fwUpdateAvailable(fwLatest, tableFw)
-
-  // App notes: the bundled changelog is the spine (it's the only source that
-  // works offline and on both stores). A pending update whose version we don't
-  // ship notes for yet goes on top, using whatever the store published.
-  const appEntries = useMemo<NotesEntry[]>(() => {
-    const entries: NotesEntry[] = APP_CHANGELOG.map((e) => ({
-      version: `v${e.version}`,
-      notes: e.notes,
-      badge: e.version === APP_VERSION ? 'Installed' : undefined,
-    }))
-    const latest = appLatest?.version.replace(/^v/, '')
-    if (appNew && latest && appLatest?.notes && !APP_CHANGELOG.some((e) => e.version === latest)) {
-      entries.unshift({ version: `v${latest}`, notes: appLatest.notes, badge: 'Available' })
-    }
-    return entries
-  }, [appLatest, appNew])
 
   // Notes follow the picker's beta toggle — a reader who hides test builds
   // shouldn't have to scroll past their notes. The installed build is always
@@ -165,13 +149,12 @@ export function UpdatesCard({ base }: { base: string | null }) {
     [fwReleases, tableFw, showPre]
   )
   // The demo table isn't real hardware — show its version, never an update.
-  const isRealTable = !!base && !isDemoBase(base)
+  const isRealTable = !isDemoBase(base)
   const canFlash = isRealTable && fwNew && !!fwLatest
 
   // The flash itself (after the confirm). `forceMcu` is the user's answer to
   // the which-board dialog below, on firmware too old to report its MCU.
   const doInstall = async (release: FirmwareRelease, forceMcu?: BoardMcu) => {
-    if (!base) return
     setTarget(release)
     setStage('download')
     try {
@@ -211,7 +194,6 @@ export function UpdatesCard({ base }: { base: string | null }) {
   // Flash any release (the latest, or one picked from the version list). The
   // confirm wording adapts to whether it's an upgrade, downgrade, or reinstall.
   const installFirmware = (release: FirmwareRelease) => {
-    if (!base) return
     const rel = relation(release.version, tableFw)
     // Flashing reboots the board, so a running pattern is stopped first — the
     // confirm says so instead of the card simply being locked out.
@@ -238,89 +220,56 @@ export function UpdatesCard({ base }: { base: string | null }) {
       {/* Full-screen splash while an update runs; during the reboot it shows
           a 60s countdown and closes on reconnect or zero, whichever first. */}
       <FwUpdateSplash stage={stage} version={target?.version ?? fwLatest?.version} />
-      <CardTitle>About</CardTitle>
 
       <View style={styles.row}>
         <View style={{ flex: 1 }}>
-          <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>App</Text>
-          <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>
-            v{APP_VERSION}
-            {appNew ? ` · v${appLatest!.version.replace(/^v/, '')} available` : appLatest ? ' · up to date' : ''}
+          <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>Installed version</Text>
+          <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>
+            {tableFw ?? 'Unknown — table offline or firmware too old'}
+            {tableFw && fwLatest ? (fwNew ? ` · ${fwLatest.version} available` : ' · up to date') : ''}
           </Text>
-          <NotesLink onPress={() => setNotesFor('app')} />
+          <NotesLink onPress={openNotes} />
         </View>
-        {appNew ? (
-          <Button
-            title="Update"
-            icon="system-update"
-            variant="secondary"
-            onPress={() => Linking.openURL(appLatest!.url).catch(() => toast.error('Could not open the store'))}
-          />
-        ) : null}
       </View>
-
-      {base ? (
-        <>
-          <View style={[styles.divider, { backgroundColor: colors.border }]} />
-          <View style={styles.row}>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>Table firmware</Text>
-              <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>
-                {tableFw ?? 'Unknown — table offline or firmware too old'}
-                {tableFw && fwLatest ? (fwNew ? ` · ${fwLatest.version} available` : ' · up to date') : ''}
-              </Text>
-              <NotesLink onPress={openFirmwareNotes} />
-            </View>
-          </View>
-          {canFlash ? (
-            <View style={{ marginTop: spacing.sm, gap: spacing.sm }}>
-              <Button
-                title={stage ? FW_STAGE_LABELS[stage] : `Update to ${fwLatest!.version}`}
-                icon={stage ? undefined : 'system-update-alt'}
-                loading={stage != null}
-                onPress={() => installFirmware(fwLatest!)}
-              />
-              {stage ? (
-                <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, textAlign: 'center' }}>
-                  Keep the app open — the table restarts by itself when done.
-                </Text>
-              ) : null}
-            </View>
+      {canFlash ? (
+        <View style={{ marginTop: spacing.sm, gap: spacing.sm }}>
+          <Button
+            title={stage ? FW_STAGE_LABELS[stage] : `Update to ${fwLatest!.version}`}
+            icon={stage ? undefined : 'system-update-alt'}
+            loading={stage != null}
+            onPress={() => installFirmware(fwLatest!)}
+          />
+          {stage ? (
+            <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, textAlign: 'center' }}>
+              Keep the app open — the table restarts by itself when done.
+            </Text>
           ) : null}
-
-          {/* Pick any released version (reinstall the current one or roll back).
-              Available on real tables whether or not an update is pending. */}
-          {isRealTable ? (
-            <View style={{ marginTop: spacing.sm }}>
-              <Button
-                title="Install a specific version…"
-                icon="history"
-                variant="secondary"
-                disabled={stage != null}
-                onPress={() => setPickerOpen(true)}
-              />
-            </View>
-          ) : null}
-        </>
+        </View>
       ) : null}
 
-      <View style={{ marginTop: spacing.md }}>
-        <Button title="Check for updates" icon="refresh" variant="secondary" loading={checking} onPress={() => void checkNow()} />
-      </View>
+      {/* Pick any released version (reinstall the current one or roll back).
+          Available on real tables whether or not an update is pending. */}
+      {isRealTable ? (
+        <View style={{ marginTop: spacing.sm }}>
+          <Button
+            title="Install a specific version…"
+            icon="history"
+            variant="secondary"
+            disabled={stage != null}
+            onPress={() => setPickerOpen(true)}
+          />
+        </View>
+      ) : null}
+
+      <CheckForUpdates />
 
       <ReleaseNotesSheet
-        visible={notesFor === 'app'}
-        title="What’s new in the app"
-        entries={appEntries}
-        onClose={() => setNotesFor(null)}
-      />
-      <ReleaseNotesSheet
-        visible={notesFor === 'firmware'}
+        visible={notesOpen}
         title="What’s new in the firmware"
         entries={fwEntries}
-        loading={fwNotesLoading}
+        loading={notesLoading}
         emptyText="Couldn’t load the firmware release notes. Check that this phone is online and try again."
-        onClose={() => setNotesFor(null)}
+        onClose={() => setNotesOpen(false)}
       />
 
       <FirmwareVersionPicker
@@ -338,8 +287,58 @@ export function UpdatesCard({ base }: { base: string | null }) {
   )
 }
 
+/** Settings › About: this app's version, store update link and changelog. */
+export function AppVersionCard() {
+  const colors = useTheme((s) => s.colors)
+  const appLatest = useUpdates((s) => s.appLatest)
+  const [notesOpen, setNotesOpen] = useState(false)
+  const appNew = appUpdateAvailable(appLatest)
+
+  // App notes: the bundled changelog is the spine (it's the only source that
+  // works offline and on both stores). A pending update whose version we don't
+  // ship notes for yet goes on top, using whatever the store published.
+  const appEntries = useMemo<NotesEntry[]>(() => {
+    const entries: NotesEntry[] = APP_CHANGELOG.map((e) => ({
+      version: `v${e.version}`,
+      notes: e.notes,
+      badge: e.version === APP_VERSION ? 'Installed' : undefined,
+    }))
+    const latest = appLatest?.version.replace(/^v/, '')
+    if (appNew && latest && appLatest?.notes && !APP_CHANGELOG.some((e) => e.version === latest)) {
+      entries.unshift({ version: `v${latest}`, notes: appLatest.notes, badge: 'Available' })
+    }
+    return entries
+  }, [appLatest, appNew])
+
+  return (
+    <Card>
+      <View style={styles.row}>
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>App version</Text>
+          <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>
+            v{APP_VERSION}
+            {appNew ? ` · v${appLatest!.version.replace(/^v/, '')} available` : appLatest ? ' · up to date' : ''}
+          </Text>
+          <NotesLink onPress={() => setNotesOpen(true)} />
+        </View>
+        {appNew ? (
+          <Button
+            title="Update"
+            icon="system-update"
+            variant="secondary"
+            onPress={() => Linking.openURL(appLatest!.url).catch(() => toast.error('Could not open the store'))}
+          />
+        ) : null}
+      </View>
+
+      <CheckForUpdates />
+
+      <ReleaseNotesSheet visible={notesOpen} title="What’s new in the app" entries={appEntries} onClose={() => setNotesOpen(false)} />
+    </Card>
+  )
+}
+
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 36 },
-  divider: { height: 1, marginVertical: spacing.md },
   notesLink: { flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 4, alignSelf: 'flex-start' },
 })

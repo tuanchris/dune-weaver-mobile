@@ -5,8 +5,7 @@
 // clear moves their own feed. Table-wide settings, idle-gated by the firmware.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board } from '../api/board'
 import { isSettingsLocked } from '../api/status'
@@ -19,14 +18,14 @@ import { userMessage } from '../lib/errors'
 import { Button, Card, CardTitle, IconButton } from './ui'
 import { PatternThumb } from './PatternThumb'
 import { EmptyState } from './EmptyState'
+import { Sheet, useSheetWidth } from './Sheet'
+import { thumbGrid } from '../lib/layout'
 import { radius, spacing, font } from '../theme'
 
 // The firmware's built-in clear files (a ClearIn/ClearOut equal to these — or
 // empty — means "use the built-in", so we show it as the default).
 const STOCK_IN = '/patterns/clear_from_in.thr'
 const STOCK_OUT = '/patterns/clear_from_out.thr'
-
-const GRID_COLS = 3
 
 type Slot = 'in' | 'out'
 
@@ -38,8 +37,6 @@ function customKey(path: string, stock: string): string | null {
 }
 
 export function ClearPatternsCard({ base }: { base: string }) {
-  const { width: winW } = useWindowDimensions()
-  const gridThumb = Math.floor((winW - spacing.md * 2 - spacing.md * (GRID_COLS - 1)) / GRID_COLS)
   const colors = useTheme((s) => s.colors)
   // Writable whenever the settings lock is open — which now includes a paused
   // table, not just an idle one ($Playlist/Clear* accept writes in Hold).
@@ -116,7 +113,7 @@ export function ClearPatternsCard({ base }: { base: string }) {
   return (
     <Card>
       <CardTitle>Clear patterns</CardTitle>
-      <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginBottom: spacing.md }}>
+      <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, marginBottom: spacing.md }}>
         Choose which pattern erases the sand before the next one. The built-ins work for most tables; pick your own for a custom look. Needs firmware v0.1.11 or newer.
       </Text>
 
@@ -128,95 +125,95 @@ export function ClearPatternsCard({ base }: { base: string }) {
         <TextInput
           value={speed}
           onChangeText={(t) => setSpeed(t.replace(/[^0-9]/g, ''))}
-          onEndEditing={commitSpeed}
+          onBlur={commitSpeed}
           editable={writable}
           keyboardType="number-pad"
           style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.foreground, opacity: writable ? 1 : 0.5 }]}
         />
-        <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.sm }}>
+        <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, marginTop: spacing.sm }}>
           How fast the clear runs. 0 = same speed as the pattern.
         </Text>
       </View>
 
       {!writable ? (
-        <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.sm }}>
+        <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, marginTop: spacing.sm }}>
           Pause or stop the table to change the clear settings.
         </Text>
       ) : null}
 
       {/* Single-select pattern picker */}
-      <Modal visible={picker !== null} transparent animationType="slide" onRequestClose={() => setPicker(null)}>
-        <View style={styles.backdrop}>
-          <SafeAreaView edges={['bottom']} style={[styles.sheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
-            <View style={styles.header}>
-              <IconButton icon="close" size={26} color={colors.foreground} onPress={() => setPicker(null)} />
-              <Text style={{ color: colors.foreground, fontSize: font.size.lg, fontWeight: font.weight.semibold }}>
-                {picker === 'in' ? 'Clear from center' : 'Clear from edge'}
-              </Text>
-              <View style={{ width: 32 }} />
-            </View>
-
-            <View style={[styles.search, { backgroundColor: colors.inputBackground, borderColor: colors.border }]}>
-              <MaterialIcons name="search" size={18} color={colors.mutedForeground} />
-              <TextInput
-                value={query}
-                onChangeText={setQuery}
-                placeholder="Search"
-                placeholderTextColor={colors.mutedForeground}
-                autoCorrect={false}
-                autoCapitalize="none"
-                spellCheck={false}
-                style={[styles.searchInput, { color: colors.foreground }]}
-              />
-              {query ? <IconButton icon="close" size={18} color={colors.mutedForeground} onPress={() => setQuery('')} /> : null}
-            </View>
-
-            {/* Built-in (reset) option */}
-            <Pressable
-              onPress={() => picker && choose(picker, null)}
-              style={[styles.builtinRow, { borderColor: selectedKey === null ? colors.primary : colors.border, backgroundColor: colors.card }]}
-            >
-              <MaterialIcons name="auto-fix-high" size={22} color={colors.foreground} />
-              <Text style={{ flex: 1, color: colors.foreground, fontWeight: font.weight.medium }}>Use built-in clear</Text>
-              {selectedKey === null ? <MaterialIcons name="check-circle" size={22} color={colors.primary} /> : null}
-            </Pressable>
-
-            <FlatList
-              data={visible}
-              key={GRID_COLS}
-              numColumns={GRID_COLS}
-              keyExtractor={(p) => p}
-              contentContainerStyle={{ padding: spacing.md, gap: spacing.md }}
-              columnWrapperStyle={{ gap: spacing.md }}
-              ListEmptyComponent={
-                <EmptyState
-                  icon="grid-off"
-                  text={tablePatterns.length === 0 ? 'No patterns on the table. Send some from Browse first.' : 'No matches'}
-                />
-              }
-              renderItem={({ item }) => {
-                const on = item === selectedKey
-                return (
-                  <Pressable onPress={() => picker && choose(picker, item)} style={styles.cell}>
-                    <View style={[styles.thumb, { width: gridThumb, height: gridThumb, borderRadius: gridThumb / 2, backgroundColor: colors.card, borderColor: on ? colors.primary : 'transparent' }]}>
-                      <PatternThumb name={item} size={gridThumb - 4} />
-                      {on ? (
-                        <View style={[styles.check, { backgroundColor: colors.primary }]}>
-                          <MaterialIcons name="check" size={14} color={colors.primaryForeground} />
-                        </View>
-                      ) : null}
-                    </View>
-                    <Text numberOfLines={1} style={{ color: on ? colors.primary : colors.foreground, fontSize: font.size.xs, fontWeight: font.weight.medium, maxWidth: '100%', textAlign: 'center' }}>
-                      {prettyName(item)}
-                    </Text>
-                  </Pressable>
-                )
-              }}
-            />
-          </SafeAreaView>
+      <Sheet variant="page" visible={picker !== null} onClose={() => setPicker(null)} title={picker === 'in' ? 'Clear from center' : 'Clear from edge'}>
+        <View style={[styles.search, { backgroundColor: colors.inputBackground, borderColor: colors.border }]}>
+          <MaterialIcons name="search" size={18} color={colors.mutedForeground} />
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search"
+            placeholderTextColor={colors.mutedForeground}
+            autoCorrect={false}
+            autoCapitalize="none"
+            spellCheck={false}
+            style={[styles.searchInput, { color: colors.foreground }]}
+          />
+          {query ? <IconButton icon="close" size={18} color={colors.mutedForeground} onPress={() => setQuery('')} /> : null}
         </View>
-      </Modal>
+
+        {/* Built-in (reset) option */}
+        <Pressable
+          onPress={() => picker && choose(picker, null)}
+          style={[styles.builtinRow, { borderColor: selectedKey === null ? colors.primary : colors.border, backgroundColor: colors.card }]}
+        >
+          <MaterialIcons name="auto-fix-high" size={22} color={colors.foreground} />
+          <Text style={{ flex: 1, color: colors.foreground, fontWeight: font.weight.medium }}>Use built-in clear</Text>
+          {selectedKey === null ? <MaterialIcons name="check-circle" size={22} color={colors.primary} /> : null}
+        </Pressable>
+
+        <PickerGrid
+          data={visible}
+          selectedKey={selectedKey}
+          empty={tablePatterns.length === 0 ? 'No patterns on the table. Send some from Browse first.' : 'No matches'}
+          onPick={(key) => picker && choose(picker, key)}
+        />
+      </Sheet>
     </Card>
+  )
+}
+
+/** Rendered INSIDE the Sheet so it sizes from the sheet's width (an iPad
+ * pageSheet is narrower than the window). */
+function PickerGrid({ data, selectedKey, empty, onPick }: { data: string[]; selectedKey: string | null; empty: string; onPick: (key: string) => void }) {
+  const colors = useTheme((s) => s.colors)
+  const { cols, thumb } = thumbGrid(useSheetWidth())
+  return (
+    <FlatList
+      data={data}
+      key={cols}
+      numColumns={cols}
+      keyExtractor={(p) => p}
+      keyboardDismissMode="on-drag"
+      automaticallyAdjustKeyboardInsets
+      contentContainerStyle={{ padding: spacing.md, gap: spacing.md }}
+      columnWrapperStyle={{ gap: spacing.md }}
+      ListEmptyComponent={<EmptyState icon="grid-off" text={empty} />}
+      renderItem={({ item }) => {
+        const on = item === selectedKey
+        return (
+          <Pressable onPress={() => onPick(item)} style={[styles.cell, { flex: 1 / cols }]}>
+            <View style={[styles.thumb, { width: thumb, height: thumb, borderRadius: thumb / 2, backgroundColor: colors.card, borderColor: on ? colors.primary : 'transparent' }]}>
+              <PatternThumb name={item} size={thumb - 4} />
+              {on ? (
+                <View style={[styles.check, { backgroundColor: colors.primary }]}>
+                  <MaterialIcons name="check" size={14} color={colors.primaryForeground} />
+                </View>
+              ) : null}
+            </View>
+            <Text numberOfLines={1} style={{ color: on ? colors.primary : colors.foreground, fontSize: font.size.xs, fontWeight: font.weight.medium, maxWidth: '100%', textAlign: 'center' }}>
+              {prettyName(item)}
+            </Text>
+          </Pressable>
+        )
+      }}
+    />
   )
 }
 
@@ -229,7 +226,7 @@ function ClearRow({ label, iconKey, disabled, onChange }: { label: string; iconK
       </View>
       <View style={{ flex: 1 }}>
         <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>{label}</Text>
-        <Text numberOfLines={1} style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>
+        <Text numberOfLines={2} style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>
           {iconKey ? prettyName(iconKey) : 'Built-in'}
         </Text>
       </View>
@@ -240,16 +237,13 @@ function ClearRow({ label, iconKey, disabled, onChange }: { label: string; iconK
 
 const styles = StyleSheet.create({
   label: { fontSize: font.size.sm, fontWeight: font.weight.medium, marginBottom: spacing.sm },
-  input: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 46, fontSize: font.size.md },
+  input: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, minHeight: 46, fontSize: font.size.md },
   clearRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth },
   rowThumb: { width: 48, height: 48, borderRadius: 24, borderWidth: 1, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  sheet: { height: '86%', borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1 },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.md },
-  search: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 40, marginHorizontal: spacing.md },
+  search: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, minHeight: 40, marginHorizontal: spacing.md },
   searchInput: { flex: 1, fontSize: font.size.md, paddingVertical: 0 },
   builtinRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, marginHorizontal: spacing.md, marginTop: spacing.sm, borderRadius: radius.lg, borderWidth: 1 },
-  cell: { flex: 1 / GRID_COLS, alignItems: 'center', gap: spacing.xs },
+  cell: { alignItems: 'center', gap: spacing.xs },
   thumb: { borderWidth: 2, alignItems: 'center', justifyContent: 'center', overflow: 'visible' },
   check: { position: 'absolute', top: 2, right: 2, width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
 })

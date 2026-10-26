@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, Alert, FlatList, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { ActivityIndicator, Alert, FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
-import { board, type ClearMode } from '../api/board'
+import { board, CLEAR_DESC, CLEAR_MODES } from '../api/board'
 import { isBusy } from '../api/status'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
@@ -18,24 +17,18 @@ import { PatternThumb } from '../components/PatternThumb'
 import { PolarPattern } from '../components/PolarPattern'
 import { MissingPreviewsBanner } from '../components/MissingPreviewsBanner'
 import { useMissingPreviewCount } from '../lib/previewCoverage'
-import { Button, IconButton } from '../components/ui'
+import { Button, IconButton, Segmented } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { EmptyState } from '../components/EmptyState'
 import { prettyName } from '../lib/patternName'
 import { userMessage } from '../lib/errors'
+import { SCROLL_BOTTOM_PAD, thumbGrid } from '../lib/layout'
+import { Sheet } from '../components/Sheet'
 import { radius, spacing, font } from '../theme'
 
-const COLS = 3
-
-
-// dw "Pre-Execution Action" choices (a clear sequenced before the pattern runs).
-const PRE_EXEC: { mode: ClearMode; label: string }[] = [
-  { mode: 'adaptive', label: 'Adaptive' },
-  { mode: 'in', label: 'Clear From Center' },
-  { mode: 'out', label: 'Clear From Perimeter' },
-  { mode: 'sideway', label: 'Clear Sideway' },
-  { mode: 'none', label: 'None' },
-]
+// The clear run before a single pattern (dw's "Pre-Execution Action"). Random is
+// a playlist-only mode, so it's left out here.
+const BEFORE_DRAWING = CLEAR_MODES.filter((c) => c.mode !== 'random')
 
 /** Subfolder a pattern lives in ("custom_patterns/x.thr" -> "custom_patterns"); "" for top level. */
 function folderOf(name: string): string {
@@ -65,7 +58,7 @@ export function BrowseScreen() {
   const colors = useTheme((s) => s.colors)
   // Thumb size tracks the live window width (rotation / iPad split view safe).
   const { width, height } = useWindowDimensions()
-  const thumb = Math.floor((width - spacing.md * 2 - spacing.md * (COLS - 1)) / COLS)
+  const { cols, thumb } = thumbGrid(width)
   const base = useBoards((s) => s.getActiveBase())
   const refreshStatus = useStatus((s) => s.refresh)
   const imported = useLibrary((s) => s.patterns)
@@ -84,11 +77,14 @@ export function BrowseScreen() {
   const favorites = usePrefs((s) => s.favorites)
   const toggleFavorite = usePrefs((s) => s.toggleFavorite)
   const [selected, setSelected] = useState<string | null>(null)
-  // Pre-Execution Action is a remembered preference (persisted across launches).
+  // The detail sheet's sub-page: the pattern, or the before-drawing clear choice.
+  const [page, setPage] = useState<'detail' | 'clear'>('detail')
+  // The before-drawing clear is a remembered preference (persisted across launches).
   const clearMode = usePrefs((s) => s.clearMode)
   const setClearMode = usePrefs((s) => s.setClearMode)
   const [running, setRunning] = useState(false)
-  const [pushing, setPushing] = useState(false)
+  // Which button is sending: plain Send, or Play on a pattern the table doesn't have yet.
+  const [pushing, setPushing] = useState<false | 'send' | 'play'>(false)
   // 0..1 while an upload is in flight — drives the progress bar in the detail sheet.
   const [pushPct, setPushPct] = useState<number | null>(null)
   const [deleting, setDeleting] = useState(false)
@@ -117,8 +113,8 @@ export function BrowseScreen() {
     loadTable(base, true)
   }
 
-  // One unified library: every bundled preview (~1080: built-ins + custom_patterns)
-  // + imported patterns + anything else on the table, deduped by name.
+  // One unified library: the bundled defaults + imported patterns + anything
+  // else on the table, deduped by name.
   const allNames = useMemo(() => {
     const set = new Set<string>(previewNames())
     for (const p of imported) set.add(p.name)
@@ -190,17 +186,23 @@ export function BrowseScreen() {
     }
   }
 
-  const doPush = async (name: string) => {
+  /** Send a library pattern to the table; `andPlay` then draws it (Play on a
+   * pattern that isn't on the table yet), so it's one tap, not send-close-reopen-play. */
+  const doPush = async (name: string, andPlay = false) => {
     if (!base) return
     const replace = onTableSet.has(name)
     const go = async () => {
-      setPushing(true)
+      setPushing(andPlay ? 'play' : 'send')
       setPushPct(0)
       try {
         await pushToTable(base, name, setPushPct)
+        useLibrary.getState().addTablePattern(bareName(name))
+        if (andPlay) {
+          await run(name)
+          return
+        }
         toast.success(`Sent ${prettyName(name)} to table`)
         setSelected(null)
-        useLibrary.getState().addTablePattern(bareName(name))
       } catch (e) {
         toast.error(userMessage(e, 'send the pattern'))
       } finally {
@@ -286,6 +288,7 @@ export function BrowseScreen() {
     if (push && base) {
       // Open the pattern detail sheet first so the upload progress bar is
       // visible for the (possibly long) transfer.
+      setPage('detail')
       setSelected(p.name)
       await doPush(p.name)
     } else {
@@ -306,17 +309,28 @@ export function BrowseScreen() {
   // A table-bound action (play/send/delete) is in flight — block dismissing the
   // sheet and every other action until it finishes so we can't fire overlapping
   // SD operations or lose the in-progress feedback.
-  const busy = running || pushing || deleting
+  const busy = running || !!pushing || deleting
+  const sheetName = importPreview?.name ?? selected
+  // Play works for anything on the table, and for library patterns by sending them first.
+  const canPlay = selOnTable || selInLibrary
+  const filterLabel = filterOptions.find((o) => o.key === filter)?.label ?? ''
+  // Which tiles aren't on the table — only once we know what IS on it.
+  const tableKnown = patterns.length > 0
+  const where =
+    !selected ? ''
+    : selOnTable ? (folderOf(selected) ? `On the table · ${folderLabel(folderOf(selected))}` : 'On the table')
+    : selInLibrary ? 'On this phone — Play sends it to the table first'
+    : 'Not in your library or on the table.'
 
   return (
-    <Screen title="Browse Patterns">
+    <Screen title="Browse">
       <View style={styles.searchRow}>
         <View style={[styles.control, styles.search, { backgroundColor: colors.inputBackground, borderColor: colors.border }]}>
           <MaterialIcons name="search" size={18} color={colors.mutedForeground} />
           <TextInput
             value={query}
             onChangeText={setQuery}
-            placeholder="Search patterns"
+            placeholder={filterActive ? `Search in ${filterLabel}` : `Search ${allNames.length} patterns`}
             placeholderTextColor={colors.mutedForeground}
             autoCorrect={false}
             autoCapitalize="none"
@@ -326,100 +340,87 @@ export function BrowseScreen() {
           {query ? <IconButton icon="close" size={18} color={colors.mutedForeground} onPress={() => setQuery('')} /> : null}
         </View>
         <Pressable
-          onPress={() => setAsc((v) => !v)}
-          style={[styles.control, styles.sortBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
-        >
-          <MaterialIcons name={asc ? 'arrow-upward' : 'arrow-downward'} size={18} color={colors.foreground} />
-          <Text style={{ color: colors.foreground, fontSize: font.size.sm }}>{asc ? 'A–Z' : 'Z–A'}</Text>
-        </Pressable>
-        <Pressable
           onPress={() => setFilterOpen(true)}
           accessibilityRole="button"
-          accessibilityLabel={`Filter patterns${filterActive ? ` (${filterOptions.find((o) => o.key === filter)?.label ?? ''} active)` : ''}`}
+          accessibilityLabel={`Show and sort${filterActive ? ` (${filterLabel})` : ''}`}
           style={[
             styles.control,
             styles.iconBtn,
-            filter === FAVORITES
-              ? { backgroundColor: colors.destructive, borderColor: colors.destructive }
-              : filterActive
-                ? { backgroundColor: colors.primary, borderColor: colors.primary }
-                : { backgroundColor: colors.card, borderColor: colors.border },
+            filterActive ? { backgroundColor: colors.primary, borderColor: colors.primary } : { backgroundColor: colors.card, borderColor: colors.border },
           ]}
         >
           <MaterialIcons
             name={filter === FAVORITES ? 'favorite' : 'filter-list'}
             size={22}
-            color={filter === FAVORITES ? colors.destructiveForeground : filterActive ? colors.primaryForeground : colors.foreground}
+            color={filterActive ? colors.primaryForeground : colors.foreground}
           />
         </Pressable>
         <Pressable
           onPress={doImport}
           disabled={importing}
-          style={[styles.control, styles.iconBtn, { backgroundColor: colors.primary, borderColor: colors.primary, opacity: importing ? 0.5 : 1 }]}
+          accessibilityRole="button"
+          accessibilityLabel="Import patterns"
+          style={({ pressed }) => [styles.control, styles.iconBtn, { backgroundColor: colors.card, borderColor: colors.border, opacity: importing ? 0.5 : pressed ? 0.7 : 1 }]}
         >
           {importing ? (
-            <ActivityIndicator size="small" color={colors.primaryForeground} />
+            <ActivityIndicator size="small" color={colors.foreground} />
           ) : (
-            <MaterialIcons name="add" size={24} color={colors.primaryForeground} />
+            <MaterialIcons name="add" size={24} color={colors.foreground} />
           )}
         </Pressable>
       </View>
 
       {/* Filter dropdown — bottom sheet listing All / Favorites / folders */}
-      <Modal visible={filterOpen} transparent animationType="slide" onRequestClose={() => setFilterOpen(false)}>
-        <Pressable style={styles.modalBackdrop} onPress={() => setFilterOpen(false)}>
-          <Pressable style={[styles.detailSheet, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => {}}>
-            <View style={styles.detailHeader}>
-              <Text numberOfLines={1} style={[styles.detailTitle, { color: colors.foreground }]}>
-                Show
-              </Text>
-              <IconButton icon="close" size={26} color={colors.foreground} onPress={() => setFilterOpen(false)} />
-            </View>
-            <View style={[styles.detailRule, { backgroundColor: colors.border }]} />
-            {/* Cap the list height so a big catalog's folders scroll inside the
-                sheet instead of overflowing the screen. */}
-            <ScrollView
-              style={[styles.filterList, { maxHeight: height * 0.55 }]}
-              contentContainerStyle={{ gap: 2 }}
-              showsVerticalScrollIndicator
-            >
-              {filterOptions.map(({ key, label, icon }) => {
-                const on = filter === key
-                const fav = key === FAVORITES
-                return (
-                  <Pressable
-                    key={key}
-                    onPress={() => {
-                      setFilter(key)
-                      setFilterOpen(false)
-                    }}
-                    accessibilityRole="button"
-                    accessibilityLabel={label}
-                    style={[styles.filterRow, { backgroundColor: on ? colors.cardElevated : 'transparent' }]}
-                  >
-                    <MaterialIcons name={icon} size={20} color={fav ? colors.destructive : colors.mutedForeground} />
-                    <Text style={[styles.filterLabel, { color: colors.foreground }]}>{label}</Text>
-                    {fav && hasFavorites ? (
-                      <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, fontFamily: font.family.mono }}>
-                        {Object.keys(favorites).length}
-                      </Text>
-                    ) : null}
-                    {on ? <MaterialIcons name="check" size={20} color={colors.primary} /> : null}
-                  </Pressable>
-                )
-              })}
-            </ScrollView>
-            <SafeAreaView edges={['bottom']} />
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <Sheet visible={filterOpen} onClose={() => setFilterOpen(false)} title="Show">
+        <View style={styles.sortRow}>
+          <Segmented
+            fill
+            value={asc ? 'az' : 'za'}
+            options={[{ value: 'az', label: 'A–Z' }, { value: 'za', label: 'Z–A' }]}
+            onChange={(v) => setAsc(v === 'az')}
+          />
+        </View>
+        {/* Cap the list height so a big catalog's folders scroll inside the
+            sheet instead of overflowing the screen. */}
+        <ScrollView
+          style={{ maxHeight: height * 0.55 }}
+          contentContainerStyle={styles.filterList}
+          showsVerticalScrollIndicator
+        >
+          {filterOptions.map(({ key, label, icon }) => {
+            const on = filter === key
+            const fav = key === FAVORITES
+            return (
+              <Pressable
+                key={key}
+                onPress={() => {
+                  setFilter(key)
+                  setFilterOpen(false)
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={label}
+                style={[styles.filterRow, { backgroundColor: on ? colors.cardElevated : 'transparent' }]}
+              >
+                <MaterialIcons name={icon} size={20} color={colors.mutedForeground} />
+                <Text style={[styles.filterLabel, { color: colors.foreground }]}>{label}</Text>
+                {fav && hasFavorites ? (
+                  <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, fontFamily: font.family.mono }}>
+                    {Object.keys(favorites).length}
+                  </Text>
+                ) : null}
+                {on ? <MaterialIcons name="check" size={20} color={colors.primary} /> : null}
+              </Pressable>
+            )
+          })}
+        </ScrollView>
+      </Sheet>
 
       <FlatList
         data={visible}
-        key={COLS}
-        numColumns={COLS}
+        key={cols}
+        numColumns={cols}
         keyExtractor={(item) => item}
-        contentContainerStyle={{ padding: spacing.md, paddingBottom: 160 }}
+        contentContainerStyle={{ padding: spacing.md, paddingBottom: SCROLL_BOTTOM_PAD }}
         columnWrapperStyle={{ gap: spacing.md }}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={refreshTable} tintColor={colors.primary} />}
         ListHeaderComponent={<MissingPreviewsBanner missing={missingPreviews} />}
@@ -429,11 +430,16 @@ export function BrowseScreen() {
           ) : filter === FAVORITES && !hasFavorites ? (
             <EmptyState icon="favorite-border" text="No favorites yet — tap the heart on a pattern." />
           ) : (
-            <EmptyState icon="grid-off" text="No patterns" />
+            <EmptyState icon="grid-off" text={query.trim() ? `No patterns match “${query.trim()}”` : 'No patterns'} />
           )
         }
         renderItem={({ item }) => (
-          <Pressable onPress={() => setSelected(item)} style={styles.tile}>
+          <Pressable
+            onPress={() => { setPage('detail'); setSelected(item) }}
+            accessibilityRole="button"
+            accessibilityLabel={tableKnown && !onTableSet.has(item) ? `${prettyName(item)}, not on the table` : prettyName(item)}
+            style={[styles.tile, { flex: 1 / cols }]}
+          >
             <View style={[styles.tileThumb, { width: thumb, height: thumb, borderRadius: thumb / 2, backgroundColor: colors.card, borderColor: colors.border }]}>
               <PatternThumb name={item} size={thumb - 4} />
             </View>
@@ -447,115 +453,138 @@ export function BrowseScreen() {
               <MaterialIcons
                 name={favorites[item] ? 'favorite' : 'favorite-border'}
                 size={14}
-                color={favorites[item] ? colors.destructive : colors.mutedForeground}
+                color={favorites[item] ? colors.primary : colors.mutedForeground}
               />
             </Pressable>
-            <Text numberOfLines={1} style={[styles.tileName, { color: colors.foreground }]}>
-              {prettyName(item)}
-            </Text>
+            <View style={styles.tileCaption}>
+              {tableKnown && !onTableSet.has(item) ? <MaterialIcons name="smartphone" size={13} color={colors.mutedForeground} /> : null}
+              <Text numberOfLines={1} style={[styles.tileName, { color: colors.foreground }]}>
+                {prettyName(item)}
+              </Text>
+            </View>
           </Pressable>
         )}
       />
 
-      {/* Pattern detail sheet — mirrors the dw pattern dialog */}
-      <Modal visible={!!selected} transparent animationType="slide" onRequestClose={() => !busy && setSelected(null)}>
-        <Pressable style={styles.modalBackdrop} onPress={() => !busy && setSelected(null)}>
-          <Pressable style={[styles.detailSheet, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => {}}>
-            <View style={styles.detailHeader}>
-              <Text numberOfLines={1} style={[styles.detailTitle, { color: colors.foreground }]}>
-                {selected ? prettyName(selected) : ''}
-              </Text>
+      {/* ONE sheet for the import preview and the pattern detail: "Add & send"
+          swaps the preview for the detail body in place, so its upload progress
+          shows without handing off between two Modals (iOS drops the second). */}
+      <Sheet
+        visible={!!sheetName}
+        // Nothing closes it while a play/send/delete is in flight.
+        dismissible={!busy}
+        onClose={() => {
+          if (busy) return
+          setImportPreview(null)
+          setSelected(null)
+          setPage('detail')
+        }}
+        title={page === 'clear' && !importPreview ? 'Before drawing' : sheetName ? prettyName(sheetName) : undefined}
+        onBack={page === 'clear' && !importPreview ? () => setPage('detail') : undefined}
+        trailing={
+          importPreview || page === 'clear' ? undefined : (
+            <>
               <IconButton
                 icon={selected && favorites[selected] ? 'favorite' : 'favorite-border'}
                 label={selected && favorites[selected] ? 'Remove from favorites' : 'Add to favorites'}
-                size={26}
-                color={selected && favorites[selected] ? colors.destructive : colors.mutedForeground}
+                color={selected && favorites[selected] ? colors.primary : colors.mutedForeground}
                 onPress={() => selected && toggleFavorite(selected)}
               />
-              <IconButton icon="close" size={26} color={colors.foreground} disabled={busy} onPress={() => setSelected(null)} />
+              <IconButton icon="close" label="Close" disabled={busy} onPress={() => setSelected(null)} />
+            </>
+          )
+        }
+      >
+        {importPreview ? (
+          <View style={styles.importBody}>
+            <PolarPattern name={importPreview.name} size={240} showRings />
+            <View style={styles.sheetActions}>
+              <Button title="Add" icon="library-add" variant="secondary" onPress={() => confirmImport(false)} flex />
+              <Button title="Add & send" icon="cloud-upload" loading={!!pushing} onPress={() => confirmImport(true)} flex />
             </View>
-            <View style={[styles.detailRule, { backgroundColor: colors.border }]} />
-
-            <View style={{ alignItems: 'center', marginVertical: spacing.md }}>
-              {selected ? <PatternThumb name={selected} size={240} /> : null}
-            </View>
-
-            {selOnTable ? (
-              <View style={styles.preExecWrap}>
-                <Text style={[styles.preExecLabel, { color: colors.foreground }]}>Pre-Execution Action</Text>
-                <View style={styles.preExecGrid}>
-                  {PRE_EXEC.map(({ mode, label }) => {
-                    const on = clearMode === mode
-                    return (
-                      <Pressable
-                        key={mode}
-                        onPress={() => setClearMode(mode)}
-                        disabled={busy}
-                        style={[styles.preExecBtn, { borderColor: on ? colors.primary : colors.border, backgroundColor: on ? colors.primary : colors.cardElevated, opacity: busy ? 0.5 : 1 }]}
-                      >
-                        <Text style={{ color: on ? colors.primaryForeground : colors.foreground, fontSize: font.size.sm, fontWeight: font.weight.medium, textAlign: 'center' }}>{label}</Text>
-                      </Pressable>
-                    )
-                  })}
+          </View>
+        ) : page === 'clear' ? (
+          // The before-drawing clear, picked like a playlist's: a list with what each one does.
+          <ScrollView contentContainerStyle={styles.clearList}>
+            {BEFORE_DRAWING.map((c) => {
+              const on = c.mode === clearMode
+              return (
+                <Pressable
+                  key={c.mode}
+                  onPress={() => { setClearMode(c.mode); setPage('detail') }}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: on }}
+                  style={({ pressed }) => [styles.clearOption, { backgroundColor: pressed ? colors.cardElevated : colors.card, borderColor: on ? colors.primary : colors.border }]}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: colors.foreground, fontSize: font.size.md, fontWeight: font.weight.medium }}>{c.label}</Text>
+                    <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, marginTop: 2 }}>{CLEAR_DESC[c.mode]}</Text>
+                  </View>
+                  {on ? <MaterialIcons name="check-circle" size={22} color={colors.primary} /> : null}
+                </Pressable>
+              )
+            })}
+          </ScrollView>
+        ) : (
+          // Scrolls so large text sizes can't push the actions off-screen.
+          <ScrollView contentContainerStyle={styles.detailBody}>
+            <View style={styles.detailHero}>
+              {selected ? (
+                <View style={[styles.detailDisc, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <PatternThumb name={selected} size={236} />
                 </View>
-              </View>
-            ) : null}
+              ) : null}
+              <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, textAlign: 'center' }}>{where}</Text>
+            </View>
 
             {pushPct != null ? (
               <View style={styles.pushProgress}>
                 <View style={[styles.pushTrack, { backgroundColor: colors.border }]}>
                   <View style={[styles.pushFill, { width: `${Math.round(pushPct * 100)}%`, backgroundColor: colors.primary }]} />
                 </View>
-                <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, textAlign: 'center', marginTop: 4 }}>
+                <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, textAlign: 'center', marginTop: 4 }}>
                   {pushPct >= 1 ? 'Waiting for the table to finish writing…' : `Sending to table · ${Math.round(pushPct * 100)}%`}
                 </Text>
               </View>
             ) : null}
 
-            <View style={styles.detailActions}>
-              {selOnTable ? (
-                <Button title="Play" icon="play-arrow" loading={running} disabled={busy} onPress={() => selected && run(selected)} />
-              ) : null}
-              {selInLibrary ? (
-                <Button
-                  title={selOnTable ? 'Re-send to table' : 'Send to table'}
-                  icon="cloud-upload"
-                  variant="secondary"
-                  loading={pushing}
+            {canPlay ? (
+              <View style={styles.detailActions}>
+                {/* The clear is a remembered choice, so it's one row, not five buttons beside Play. */}
+                <Pressable
+                  onPress={() => setPage('clear')}
                   disabled={busy}
-                  onPress={() => selected && doPush(selected)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Before drawing, ${BEFORE_DRAWING.find((c) => c.mode === clearMode)?.label ?? ''}`}
+                  style={({ pressed }) => [styles.clearRow, { borderColor: colors.border, backgroundColor: pressed ? colors.cardElevated : 'transparent', opacity: busy ? 0.5 : 1 }]}
+                >
+                  <Text style={{ flex: 1, color: colors.foreground, fontSize: font.size.md }}>Before drawing</Text>
+                  <Text style={{ color: colors.mutedForeground, fontSize: font.size.md }}>{BEFORE_DRAWING.find((c) => c.mode === clearMode)?.label}</Text>
+                  <MaterialIcons name="chevron-right" size={22} color={colors.mutedForeground} />
+                </Pressable>
+                <Button
+                  title="Play"
+                  icon="play-arrow"
+                  loading={running || pushing === 'play'}
+                  disabled={busy}
+                  onPress={() => selected && (selOnTable ? run(selected) : doPush(selected, true))}
                 />
+              </View>
+            ) : null}
+
+            <View style={[styles.detailActions, { marginTop: spacing.sm }]}>
+              {selInLibrary && selOnTable ? (
+                <Button title="Re-send to table" icon="cloud-upload" variant="secondary" loading={pushing === 'send'} disabled={busy} onPress={() => selected && doPush(selected)} />
+              ) : selInLibrary ? (
+                <Button title="Send to table" icon="cloud-upload" variant="secondary" loading={pushing === 'send'} disabled={busy} onPress={() => selected && doPush(selected)} />
               ) : null}
               {selected && (selOnTable || imported.some((p) => p.name === bareName(selected))) ? (
-                <Button title="Delete" icon="delete-outline" variant="ghost" loading={deleting} disabled={busy} onPress={() => selected && del(selected)} />
-              ) : null}
-              {!selOnTable && !selInLibrary ? (
-                <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, textAlign: 'center' }}>Not in your library or on the table.</Text>
+                <Button title="Delete" icon="delete-outline" variant="destructive" loading={deleting} disabled={busy} onPress={() => selected && del(selected)} />
               ) : null}
             </View>
-            {/* Spacer sized to the modal window's bottom inset (Android nav bar / iOS home indicator) */}
-            <SafeAreaView edges={['bottom']} />
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      {/* Import preview sheet */}
-      <Modal visible={!!importPreview} transparent animationType="slide" onRequestClose={() => setImportPreview(null)}>
-        <Pressable style={styles.modalBackdrop} onPress={() => setImportPreview(null)}>
-          <Pressable style={[styles.sheet, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => {}}>
-            <View style={[styles.sheetHandle, { backgroundColor: colors.border }]} />
-            <PolarPattern name={importPreview?.name} size={240} showRings />
-            <Text numberOfLines={2} style={[styles.sheetTitle, { color: colors.foreground }]}>
-              {importPreview ? prettyName(importPreview.name) : ''}
-            </Text>
-            <View style={styles.sheetActions}>
-              <Button title="Add" icon="library-add" variant="secondary" onPress={() => confirmImport(false)} flex />
-              <Button title="Add & send" icon="cloud-upload" loading={pushing} onPress={() => confirmImport(true)} flex />
-            </View>
-            <SafeAreaView edges={['bottom']} />
-          </Pressable>
-        </Pressable>
-      </Modal>
+          </ScrollView>
+        )}
+      </Sheet>
     </Screen>
   )
 }
@@ -563,30 +592,26 @@ export function BrowseScreen() {
 const styles = StyleSheet.create({
   searchRow: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.md, paddingTop: spacing.sm, marginBottom: spacing.sm },
   favBadge: { position: 'absolute', top: -2, right: -2, width: 26, height: 26, borderRadius: 13, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  filterList: { marginTop: spacing.sm },
+  filterList: { gap: 2, paddingHorizontal: spacing.lg, paddingBottom: spacing.sm },
   filterRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 52, borderRadius: radius.md, paddingHorizontal: spacing.md },
   filterLabel: { flex: 1, fontSize: font.size.md, fontWeight: font.weight.medium, textTransform: 'capitalize' },
   control: { shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
-  search: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderRadius: radius.pill, borderWidth: 1, paddingHorizontal: spacing.md, height: 44 },
+  search: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderRadius: radius.pill, borderWidth: 1, paddingHorizontal: spacing.md, minHeight: 44 },
   searchInput: { flex: 1, fontSize: font.size.md, paddingVertical: 0 },
-  sortBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: radius.pill, borderWidth: 1, paddingHorizontal: spacing.md, height: 44 },
+  sortRow: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
   iconBtn: { alignItems: 'center', justifyContent: 'center', borderRadius: radius.pill, borderWidth: 1, width: 44, height: 44 },
-  tile: { flex: 1 / COLS, alignItems: 'center', gap: spacing.xs, marginBottom: spacing.md },
+  tile: { alignItems: 'center', gap: spacing.xs, marginBottom: spacing.md },
   tileThumb: { borderWidth: 2, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
-  tileName: { fontSize: font.size.xs, fontWeight: font.weight.medium, maxWidth: '100%', textAlign: 'center' },
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  sheet: { borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1, padding: spacing.xl, alignItems: 'center', gap: spacing.md },
-  sheetHandle: { width: 40, height: 4, borderRadius: 2, marginBottom: spacing.sm },
-  sheetTitle: { fontSize: font.size.lg, fontFamily: font.family.displaySemi, textAlign: 'center' },
+  tileCaption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, maxWidth: '100%' },
+  tileName: { flexShrink: 1, fontSize: font.size.sm, fontWeight: font.weight.medium, textAlign: 'center' },
+  importBody: { paddingHorizontal: spacing.xl, paddingBottom: spacing.lg, alignItems: 'center', gap: spacing.lg },
   sheetActions: { flexDirection: 'row', gap: spacing.md, alignSelf: 'stretch' },
-  detailSheet: { borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, borderWidth: 1, padding: spacing.xl, paddingTop: spacing.lg },
-  detailHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md },
-  detailTitle: { fontSize: font.size.lg, fontFamily: font.family.displaySemi, flex: 1 },
-  detailRule: { height: 1, marginTop: spacing.sm },
-  preExecWrap: { marginBottom: spacing.md },
-  preExecLabel: { fontSize: font.size.sm, fontWeight: font.weight.semibold, marginBottom: spacing.sm },
-  preExecGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  preExecBtn: { width: '48%', minHeight: 46, borderRadius: radius.md, borderWidth: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.sm },
+  detailBody: { paddingHorizontal: spacing.xl, paddingTop: spacing.sm, paddingBottom: spacing.lg },
+  detailHero: { alignItems: 'center', gap: spacing.sm, marginBottom: spacing.lg },
+  detailDisc: { width: 248, height: 248, borderRadius: 124, borderWidth: 2, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  clearRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 48, paddingLeft: spacing.md, paddingRight: spacing.sm, borderRadius: radius.lg, borderWidth: 1 },
+  clearList: { padding: spacing.md, gap: spacing.sm },
+  clearOption: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1 },
   detailActions: { gap: spacing.sm },
   pushProgress: { marginBottom: spacing.md },
   pushTrack: { height: 6, borderRadius: 3, overflow: 'hidden' },

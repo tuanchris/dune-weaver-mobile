@@ -1,4 +1,4 @@
-// "What's new" bottom sheet, shared by the app and the table's firmware.
+// "What's new" sheet, shared by the app and the table's firmware.
 //
 // The two sources are written differently — app notes are owner-facing bullets
 // ("• Favorites …"), firmware notes are the GitHub release body in markdown —
@@ -7,10 +7,9 @@
 // inline emphasis/code/link syntax that would otherwise show as raw punctuation.
 
 import React from 'react'
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useTheme } from '../stores/useTheme'
-import { IconButton } from './ui'
+import { Sheet } from './Sheet'
 import { radius, spacing, font } from '../theme'
 
 export interface NotesEntry {
@@ -31,6 +30,7 @@ function inline(s: string): string {
     .replace(/`([^`]+)`/g, '$1')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/(^|\s)_([^_]+)_(?=\s|$)/g, '$1$2')
+    .replace(/ -- /g, ' — ')
 }
 
 type Block =
@@ -61,21 +61,40 @@ function toBlocks(notes: string): Block[] {
     }
     const heading = /^#{1,6}\s+(.*)$/.exec(line)
     if (heading) {
-      out.push({ kind: 'heading', text: inline(heading[1]) })
+      out.push({ kind: 'heading', text: heading[1] })
       continue
     }
     const bullet = /^(?:[-*+]|•|\d+\.)\s+(.*)$/.exec(line)
     if (bullet) {
-      out.push({ kind: 'bullet', text: inline(bullet[1]) })
+      // The firmware notes title each section with a plain line ("WiFi
+      // recovery") straight above its bullets: a short one-liner there, with
+      // no closing punctuation, is a heading.
+      const last = out[out.length - 1]
+      if (last?.kind === 'para' && last.text.length <= 60 && !/[.!?:]$/.test(last.text) && (out.length === 1 || out[out.length - 2].kind === 'gap')) {
+        out[out.length - 1] = { kind: 'heading', text: last.text }
+      }
+      out.push({ kind: 'bullet', text: bullet[1] })
       continue
     }
-    if (!append(inline(line))) out.push({ kind: 'para', text: inline(line) })
+    if (!append(line)) out.push({ kind: 'para', text: line })
   }
   while (out.length && out[out.length - 1].kind === 'gap') out.pop()
-  return out
+  // Inline markdown last: a hard-wrapped bullet's **bold** often spans two source lines.
+  return out.map((b) => (b.kind === 'gap' ? b : { ...b, text: inline(b.text) }))
 }
 
-function Notes({ notes }: { notes: string }) {
+/** One line for a list row: the release's headings ("WiFi recovery · LED fixes"),
+ * else its first bullet — not the intro sentence every release repeats. */
+export function notesSummary(notes: string): string {
+  const blocks = toBlocks(notes)
+  const heads = blocks.flatMap((b) => (b.kind === 'heading' ? [b.text] : []))
+  if (heads.length) return heads.join(' · ')
+  const first = blocks.find((b) => b.kind === 'bullet') ?? blocks.find((b) => b.kind === 'para')
+  return first ? first.text : ''
+}
+
+/** Release notes, rendered (headings, bullets, paragraphs). */
+export function Notes({ notes }: { notes: string }) {
   const colors = useTheme((s) => s.colors)
   return (
     <View style={{ gap: spacing.xs }}>
@@ -131,62 +150,39 @@ export function ReleaseNotesSheet({
 }) {
   const colors = useTheme((s) => s.colors)
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.backdrop}>
-        <Pressable style={{ flex: 1 }} onPress={onClose} />
-        <View style={[styles.sheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
-          <View style={[styles.handle, { backgroundColor: colors.border }]} />
-          <View style={styles.header}>
-            <Text style={{ color: colors.foreground, fontSize: font.size.lg, fontWeight: font.weight.semibold, flex: 1 }}>
-              {title}
-            </Text>
-            <IconButton icon="close" size={22} color={colors.mutedForeground} label="Close" onPress={onClose} />
-          </View>
-
-          {loading ? (
-            <ActivityIndicator color={colors.primary} style={{ paddingVertical: spacing.xl }} />
-          ) : entries.length === 0 ? (
-            <Text style={{ color: colors.mutedForeground, paddingVertical: spacing.lg }}>{emptyText}</Text>
-          ) : (
-            <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ paddingBottom: spacing.md, gap: spacing.lg }}>
-              {entries.map((e) => (
-                <View key={e.version} style={{ gap: spacing.sm }}>
-                  <View style={styles.entryHead}>
-                    <Text style={{ color: colors.foreground, fontFamily: font.family.monoMedium, fontSize: font.size.md }}>
-                      {e.version}
-                    </Text>
-                    {e.badge ? (
-                      <Text style={[styles.tag, { color: colors.primary, borderColor: colors.primary }]}>{e.badge}</Text>
-                    ) : null}
-                    {e.meta ? (
-                      <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{e.meta}</Text>
-                    ) : null}
-                  </View>
-                  <Notes notes={e.notes} />
+    <Sheet variant="page" visible={visible} onClose={onClose} title={title}>
+      <View style={styles.body}>
+        {loading ? (
+          <ActivityIndicator color={colors.primary} style={{ paddingVertical: spacing.xl }} />
+        ) : entries.length === 0 ? (
+          <Text style={{ color: colors.mutedForeground, paddingVertical: spacing.lg }}>{emptyText}</Text>
+        ) : (
+          <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ paddingBottom: spacing.md, gap: spacing.lg }}>
+            {entries.map((e) => (
+              <View key={e.version} style={{ gap: spacing.sm }}>
+                <View style={styles.entryHead}>
+                  <Text style={{ color: colors.foreground, fontFamily: font.family.monoMedium, fontSize: font.size.md }}>
+                    {e.version}
+                  </Text>
+                  {e.badge ? (
+                    <Text style={[styles.tag, { color: colors.primary, borderColor: colors.primary }]}>{e.badge}</Text>
+                  ) : null}
+                  {e.meta ? (
+                    <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{e.meta}</Text>
+                  ) : null}
                 </View>
-              ))}
-            </ScrollView>
-          )}
-          <SafeAreaView edges={['bottom']} />
-        </View>
+                <Notes notes={e.notes} />
+              </View>
+            ))}
+          </ScrollView>
+        )}
       </View>
-    </Modal>
+    </Sheet>
   )
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  sheet: {
-    maxHeight: '85%',
-    borderTopLeftRadius: radius.xl,
-    borderTopRightRadius: radius.xl,
-    borderWidth: 1,
-    paddingTop: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.md,
-  },
-  handle: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: spacing.sm },
-  header: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm },
+  body: { flex: 1, paddingHorizontal: spacing.lg },
   entryHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
   bullet: { flexDirection: 'row', gap: spacing.sm, alignItems: 'flex-start' },
   tag: {

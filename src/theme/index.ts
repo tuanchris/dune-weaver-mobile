@@ -41,21 +41,24 @@ const dark: Palette = {
   live: '#7BC4B0',
 }
 
-// Day — fine-sand paper, not an inversion; accent deepened to hold AA contrast.
+// Day — fine-sand paper, not an inversion. Every ink token (muted, primary,
+// destructive, success, live) holds WCAG AA 4.5:1 on background, card AND
+// cardElevated (cardElevated is the tight one, ~4.5), and the *Foreground
+// tokens hold 4.5:1 on their fills — re-check all three surfaces if you tweak one.
 const light: Palette = {
   background: '#F5EFE6',
   card: '#FDFAF4',
   cardElevated: '#EDE4D4',
   border: '#E2D6C2',
   foreground: '#292219',
-  mutedForeground: '#8A7A63',
-  primary: '#A87F45',
+  mutedForeground: '#726552',
+  primary: '#816135',
   primaryForeground: '#FFF9EE',
-  destructive: '#BC5843',
+  destructive: '#A34C3A',
   destructiveForeground: '#FFF9EE',
   inputBackground: '#EDE4D4',
-  success: '#5E9950',
-  live: '#35836F',
+  success: '#3F6E36',
+  live: '#2E7261',
 }
 
 export const palettes: Record<ThemeMode, Palette> = { dark, light }

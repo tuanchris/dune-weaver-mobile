@@ -8,12 +8,13 @@
 
 import React, { useState } from 'react'
 import { Alert, StyleSheet, Text, TextInput, View } from 'react-native'
+import { MaterialIcons } from '@expo/vector-icons'
 import { board } from '../api/board'
 import { useBoards } from '../stores/useBoards'
 import { useTheme } from '../stores/useTheme'
 import { toast } from '../stores/useToast'
 import { userMessage } from '../lib/errors'
-import { Button, Card, CardTitle } from './ui'
+import { Button, Card } from './ui'
 import { radius, spacing, font } from '../theme'
 
 export function SecurityCard({ base }: { base: string }) {
@@ -100,15 +101,15 @@ export function SecurityCard({ base }: { base: string }) {
 
   return (
     <Card>
-      <CardTitle>Security</CardTitle>
-      <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginBottom: spacing.md }}>
+      <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, marginBottom: spacing.md }}>
         A password locks the table’s controls (run, stop, uploads, updates) to phones that know it. Watching — status and patterns — stays open. Needs firmware v0.1.11 or newer.
       </Text>
 
       {hasKey ? (
-        <Text style={{ color: colors.foreground, fontSize: font.size.sm, marginBottom: spacing.sm }}>
-          🔒 Locked · password saved on this phone
-        </Text>
+        <View style={styles.lockedRow}>
+          <MaterialIcons name="lock" size={16} color={colors.foreground} />
+          <Text style={{ color: colors.foreground, fontSize: font.size.sm }}>Locked · password saved on this phone</Text>
+        </View>
       ) : null}
 
       <TextInput
@@ -131,10 +132,10 @@ export function SecurityCard({ base }: { base: string }) {
         {hasKey ? (
           <Button title="Remove password" icon="lock-open" variant="secondary" disabled={busy} onPress={removeFromTable} />
         ) : (
-          <Button title="Table already locked? Save its password" icon="key" variant="secondary" disabled={busy} onPress={() => void saveExisting()} />
+          <Button title="Save existing password" icon="key" variant="secondary" disabled={busy} onPress={() => void saveExisting()} />
         )}
       </View>
-      <Text style={{ color: colors.mutedForeground, fontSize: font.size.xs, marginTop: spacing.sm }}>
+      <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, marginTop: spacing.sm }}>
         Forgot it? Connect over USB and send $Sand/Password= to clear it — serial is never locked.
       </Text>
     </Card>
@@ -142,5 +143,6 @@ export function SecurityCard({ base }: { base: string }) {
 }
 
 const styles = StyleSheet.create({
-  input: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, height: 46, fontSize: font.size.md },
+  input: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, minHeight: 46, fontSize: font.size.md },
+  lockedRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: spacing.sm },
 })

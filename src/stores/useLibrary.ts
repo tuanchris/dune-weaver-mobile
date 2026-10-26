@@ -136,6 +136,14 @@ interface TableCacheEntry {
    * loadTable never touches the board (the weak-Wi-Fi escape hatch). Absent =
    * 'board' (normal stale-while-revalidate fetch). */
   catalogSource?: 'board' | 'imported'
+  /** What each playlist holds — its count and first three patterns — remembered
+   * whenever the app reads or writes the file, so the list can show it without
+   * reading every playlist off the card. Keyed by filename. */
+  playlistCovers?: Record<string, PlaylistCover>
+}
+export interface PlaylistCover {
+  n: number
+  first: string[]
 }
 type TableCache = Record<string, TableCacheEntry>
 
@@ -181,6 +189,8 @@ interface LibraryStore {
   loadTable: (base: string | null, force?: boolean) => Promise<void>
   /** Same contract as loadTable, for the playlist listing (/sand_playlists). */
   loadPlaylists: (base: string | null, force?: boolean) => Promise<void>
+  /** Remember (or, with null, forget) what a playlist file holds. */
+  setPlaylistCover: (base: string, file: string, items: string[] | null) => void
   /** Optimistically reflect a push/delete without re-reading the manifest. */
   addTablePattern: (name: string) => void
   removeTablePattern: (name: string) => void
@@ -319,6 +329,13 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
     } finally {
       set({ playlistsLoading: false })
     }
+  },
+
+  setPlaylistCover: (base, file, items) => {
+    const covers = { ...get().tableCache[base]?.playlistCovers }
+    if (items) covers[file] = { n: items.length, first: items.slice(0, 3) }
+    else delete covers[file]
+    writeCache(get, set, base, { playlistCovers: covers })
   },
 
   addTablePattern: (name) => {

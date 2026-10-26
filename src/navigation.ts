@@ -1,19 +1,37 @@
-import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs'
-import type { RouteProp } from '@react-navigation/native'
+import type { NavigationProp, NavigatorScreenParams } from '@react-navigation/native'
 
 /**
- * The bottom-tab routes (wired in App.tsx). Only Settings takes params: `focus`
- * deep-links a single card so another screen can send the user straight to the
- * control they need — the Browse "missing previews" banner uses it to land on
- * (and briefly highlight) "Pattern previews", which sits far down the screen.
+ * Settings is a stack inside its tab (screens/settings/SettingsStack.tsx): a
+ * root list of rows, each opening one page. Other screens deep-link a page
+ * with `navigate('Settings', { screen, initial: false })` — `initial: false`
+ * keeps the root list underneath, so Back always lands on it.
  */
+export type SettingsStackParamList = {
+  SettingsHome: undefined
+  // Saved on the table (locks while it draws, except Firmware).
+  Playback: undefined
+  StillSands: undefined
+  Homing: undefined
+  LedStrip: undefined
+  Wifi: undefined
+  Password: undefined
+  Firmware: undefined
+  // On this phone.
+  Patterns: undefined
+  Branding: undefined
+  Diagnostics: undefined
+  About: undefined
+}
+
+/** The bottom-tab routes (wired in AppTabs.tsx / AppTabs.web.tsx). */
 export type TabParamList = {
   Browse: undefined
   Playlists: undefined
   Control: undefined
   LEDs: undefined
-  Settings: { focus?: 'previews' } | undefined
+  Settings: NavigatorScreenParams<SettingsStackParamList> | undefined
 }
 
-export type TabNav = BottomTabNavigationProp<TabParamList>
-export type SettingsRoute = RouteProp<TabParamList, 'Settings'>
+// Navigator-agnostic: the same types serve the native tabs and the web JS tabs.
+export type TabNav = NavigationProp<TabParamList>
+export type SettingsNav = NavigationProp<SettingsStackParamList>

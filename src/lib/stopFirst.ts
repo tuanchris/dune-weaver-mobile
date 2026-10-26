@@ -1,6 +1,7 @@
-// "Stop the table first, then go" — for the two actions that REBOOT the board:
-// changing its Wi-Fi (/wifi_save replies, then resets ~0.5 s later) and flashing
-// firmware (/updatefw, and updateBlocked() refuses while a job is up anyway).
+// "Stop the table first, then go" — for the three actions that REBOOT the board:
+// changing its Wi-Fi (/wifi_save replies, then resets ~0.5 s later), flashing
+// firmware (/updatefw, and updateBlocked() refuses while a job is up anyway), and
+// the Control screen's Restart table ($Bye).
 //
 // A reboot ends whatever is drawing, so these used to be locked out until the
 // owner went and stopped the table by hand — a dead end that just moved the work
