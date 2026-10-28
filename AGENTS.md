@@ -416,7 +416,11 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   finished part stays put: pieces of 256 points in static `DoneLayer` Svgs of 16 pieces
   (memoized; redrawn only when a piece joins), and only the piece in progress + the ball
   redraw per frame. Only for patterns the app holds (`useLibrary.has`); a
-  card-only one shows its static frame. Then a line
+  card-only one shows its static frame. While its path is built the frame is dimmed under a
+  spinner, and when none can be built it SAYS so ("Couldn't draw this pattern", play retries) —
+  never a silent still image. `playbackPath` caches only successes, so a retry really retries,
+  and the player re-lays out whenever it's started with no path for its CURRENT size (a size
+  that changed mid-load used to leave it "playing" the still image). Then a line
   saying where it lives ("On the table · <folder>" / "On this phone — Play sends it to the table
   first"), then a "Before drawing" ROW (the remembered clear, `CLEAR_MODES` minus Random, picked on
   an in-sheet sub-page with `CLEAR_DESC` under each — the same list as a playlist's clear) above

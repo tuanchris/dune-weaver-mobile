@@ -52,6 +52,7 @@ export function PatternPlayer({ name, autoplay, frameWidth, caption = true, onFu
   const [laidOut, setLaidOut] = useState<{ layout: string; path: PlaybackPath | null } | null>(null)
   const path = laidOut?.layout === layout ? laidOut.path : null
   const [loading, setLoading] = useState(false)
+  const [failed, setFailed] = useState(false) // no path could be built (said on the frame; play retries)
   const [started, setStarted] = useState(false)
   const [playing, setPlaying] = useState(false)
   const [progress, setProgress] = useState(1)
@@ -61,15 +62,21 @@ export function PatternPlayer({ name, autoplay, frameWidth, caption = true, onFu
   const load = async (): Promise<PlaybackPath | null> => {
     if (path) return path
     setLoading(true)
+    setFailed(false)
     const p = await playbackPath(name, width, height)
     setLaidOut({ layout, path: p })
     setLoading(false)
+    if (!p) setFailed(true)
     return p
   }
+  // Lay out again whenever started with no path for the current size — a new size
+  // (the sheet measured itself), and ALSO one that arrived while a load for the old
+  // size was still running: keyed on `layout` alone, that one was never redone and
+  // the player "played" the still image.
   useEffect(() => {
-    if (started && !path && !loading) void load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-lay out on a new size
-  }, [layout])
+    if (started && !path && !loading && !failed) void load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load reads this render's values
+  }, [layout, started, path, loading, failed])
 
   // The ball's clock. A frame gap counts as at most 0.1 s, so coming back from
   // a stall doesn't jump ahead (the viewer clamps the same way).
@@ -136,6 +143,20 @@ export function PatternPlayer({ name, autoplay, frameWidth, caption = true, onFu
         style={[styles.frame, frame(frameW), { backgroundColor: colors.card, borderColor: colors.border }]}
       >
         {drawing}
+        {/* Say why it's still: a spinner while the drawing is prepared, a reason when it can't be. */}
+        {loading || failed ? (
+          <View style={[StyleSheet.absoluteFill, styles.overlay, { backgroundColor: `${colors.card}cc` }]}>
+            {loading ? (
+              <ActivityIndicator size="large" color={colors.foreground} />
+            ) : (
+              <>
+                <MaterialIcons name="error-outline" size={28} color={colors.mutedForeground} />
+                <Text style={{ color: colors.foreground, fontWeight: font.weight.medium, textAlign: 'center' }}>Couldn’t draw this pattern</Text>
+                <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, textAlign: 'center' }}>Tap play to try again.</Text>
+              </>
+            )}
+          </View>
+        ) : null}
       </Pressable>
       {playable ? (
         <View style={[styles.transport, { width: frameW }]}>
@@ -241,6 +262,7 @@ const styles = StyleSheet.create({
   page: { alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.xl, paddingTop: spacing.sm, paddingBottom: spacing.lg },
   bare: { alignItems: 'center', gap: spacing.sm },
   frame: { borderWidth: 2, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  overlay: { alignItems: 'center', justifyContent: 'center', gap: spacing.xs, padding: spacing.lg },
   transport: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, maxWidth: '100%' },
   round: { width: 44, height: 44, borderRadius: radius.pill, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   scrubber: { flex: 1, justifyContent: 'center', minHeight: 44 },

@@ -162,10 +162,16 @@ export function playbackPath(name: string, width: number, height: number): Promi
   const key = `${name}|${width}|${height}`
   let p = cache.get(key)
   if (!p) {
-    p = build(name, width, height).catch((e) => {
-      console.warn(`playback path for ${name} failed`, e)
-      return null
-    })
+    p = build(name, width, height)
+      .catch((e) => {
+        console.warn(`playback path for ${name} failed`, e)
+        return null
+      })
+      // Keep only successes: a cached null would make "try again" fail without trying.
+      .then((built) => {
+        if (!built) cache.delete(key)
+        return built
+      })
     cache.set(key, p)
     if (cache.size > 6) cache.delete(cache.keys().next().value!)
   }
