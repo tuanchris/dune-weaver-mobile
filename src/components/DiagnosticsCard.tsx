@@ -6,7 +6,7 @@
 // share of the visible log.
 
 import React, { useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View, type ScrollViewInstance } from 'react-native'
 import Constants from 'expo-constants'
 import { useAppLog, appLogText } from '../stores/useAppLog'
 import { useBoards } from '../stores/useBoards'
@@ -51,7 +51,7 @@ export function DiagnosticsCard({ base }: { base: string | null }) {
   const [tab, setTab] = useState<LogTab>('table')
   const [tableErr, setTableErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const scrollRef = useRef<ScrollView>(null)
+  const scrollRef = useRef<ScrollViewInstance>(null)
 
   // Collected table-log history (harvested continuously by useTableLogSync;
   // the refresh below just forces a collection now).

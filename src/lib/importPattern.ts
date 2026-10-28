@@ -39,7 +39,7 @@ async function processThr(uri: string, rawName: string, rect: boolean): Promise<
   if (!dir.exists) dir.create({ intermediates: true })
   const dest = new File(dir, name)
   if (dest.exists) dest.delete()
-  dest.write(text)
+  dest.writeSync(text)
 
   // Geometry is decimated for RENDERING only (a multi-hundred-thousand-point SVG
   // path would be unusable); the stored/pushed file stays full-res.

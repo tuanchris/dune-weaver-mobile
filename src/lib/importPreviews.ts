@@ -51,7 +51,7 @@ export async function importPreviews(): Promise<PreviewIngestResult | null> {
     const ext = (rawName.match(IMG_EXT)?.[1] || 'webp').toLowerCase()
     const dest = new File(dir, `${safe(key)}.${ext}`)
     if (dest.exists) dest.delete()
-    dest.write(data)
+    dest.writeSync(data)
     entries.push({ key, uri: dest.uri })
     return true
   }

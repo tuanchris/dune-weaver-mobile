@@ -55,7 +55,8 @@
             "deploymentTarget": "16.4"
           },
           "android": {
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": true,
+            "enableMinifyInReleaseBuilds": false
           }
         }
       ],

@@ -46,7 +46,7 @@ function writeImageFile(dir: Directory, fileName: string, b64: string): string {
   if (!dir.exists) dir.create({ intermediates: true })
   const file = new File(dir, fileName)
   if (file.exists) file.delete()
-  file.write(b64, { encoding: 'base64' })
+  file.writeSync(b64, { encoding: 'base64' })
   // A real pattern image is several KB; a near-empty file means the capture
   // failed — discard it so the tile falls back to live SVG instead of a blank.
   if (!file.exists || file.size < 256) {

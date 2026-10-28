@@ -1,7 +1,7 @@
 # Expo HAS CHANGED
 
-Read the exact versioned docs at https://docs.expo.dev/versions/v56.0.0/ before writing any code.
-Expo SDK **56.0.12**. The app is managed Expo; `expo-file-system` uses the **new `File`/`Directory`/`Paths` class API** (not the legacy functional API).
+Read the exact versioned docs at https://docs.expo.dev/versions/v58.0.0/ before writing any code.
+Expo SDK **58.0.20** (React Native 0.88, iOS 27 SDK: the UIScene life cycle, so builds need Xcode 27+). The app is managed Expo; `expo-file-system` uses the **new `File`/`Directory`/`Paths` class API** (not the legacy functional API) — and since SDK 58 `File.write()` is ASYNC, so the app uses `writeSync()` (as does the desktop shim).
 
 ---
 
@@ -558,10 +558,10 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   a kill switch) it rides in the native tab bar's `bottomAccessory` (`regular`/`inline` placements,
   set only while something plays — `undefined` removes the glass capsule). The accessory content is
   **rendered twice**, so `MiniPlayer` must stay stateless: no Modals, no fetches, no per-instance
-  clock. Both copies draw the SAME content: react-native-screens 4.25.2 (Expo SDK 56's pin) hides
-  the other placement's copy by layer opacity, which UIKit resets, so both can show at once —
-  identical copies then line up exactly (upstream switched to `hidden` in 4.30; revisit on the
-  next Expo SDK). The tab bar never minimizes, so `inline` is the hidden copy anyway. A
+  clock. Both copies draw the SAME content: react-native-screens before 4.30 hid the other
+  placement's copy by layer opacity, which UIKit resets, so both could show at once — identical
+  copies then line up exactly. 4.30 (SDK 58) hides it with `hidden`; keep them identical anyway,
+  it costs nothing. The tab bar never minimizes, so `inline` is the hidden copy anyway. A
   rectangular table's thumbnail sits on a small framed table (`MiniThumb`). Everywhere else `Screen` renders it in flow (`placement="floating"`) as its last child —
   no absolute positioning, no tab-bar-height constant. `useNowPlaying()` derives the display from
   status + ONE module-level `session` clock (pattern start, last file, pause anchor), updated
@@ -655,6 +655,9 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   `headerShown` at runtime (throws). The Settings tab nests a native-stack (see `Settings` in the
   screens list); re-tapping the tab pops it to the list (`tabBarRepeatedPressBehavior` default /
   the JS tabs' tabPress), so any new nested navigator goes under BOTH tab files the same way.
+- **Android R8 is OFF** (`expo-build-properties` `android.enableMinifyInReleaseBuilds: false`):
+  SDK 58 turned it on by default; it stays off until a release build has been checked with it
+  (reflection-based modules like `react-native-zeroconf` can need keep rules).
 - **Sheets**: every bottom sheet goes through `src/components/Sheet.tsx`, the ONLY Modal wrapper
   (the other Modals are full screen: `FwUpdateSplash`, a blocker, and `FullscreenPlayer` (its
   content is a render prop), which Browse and the player open only once no sheet is up). `variant="page"` = a native

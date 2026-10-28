@@ -144,7 +144,7 @@ export async function syncPreviewBundle(
           if (!key) continue
           const dest = new File(dir, `${safe(key)}.webp`)
           if (dest.exists) dest.delete()
-          dest.write(data)
+          dest.writeSync(data)
           entries.push({ key, uri: dest.uri })
         }
         addMany(entries)

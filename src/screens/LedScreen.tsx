@@ -5,7 +5,7 @@
 // actually reads (WLED's slider meanings — see LED_EFFECTS), and the playing /
 // idle hooks. Effects are picked from a gallery sheet of rings, not a list of names.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { PanResponder, Pressable, ScrollView, SectionList, StyleSheet, Text, TextInput, View, useWindowDimensions, type ViewToken } from 'react-native'
+import { PanResponder, Pressable, ScrollView, SectionList, StyleSheet, Text, TextInput, View, useWindowDimensions, type ListViewToken, type ScrollViewInstance } from 'react-native'
 import Svg, { Circle, Defs, G, Path, RadialGradient, Stop } from 'react-native-svg'
 import { MaterialIcons } from '@expo/vector-icons'
 import { useFocusEffect, useIsFocused, useNavigation } from '@react-navigation/native'
@@ -596,7 +596,7 @@ function EffectGallery({ value, look, sim, leds, animate, onPick }: { value: str
   )
   // Which rows are on screen — only those animate.
   const [visible, setVisible] = useState<Set<string>>(() => new Set())
-  const onViewable = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
+  const onViewable = useRef(({ viewableItems }: { viewableItems: ListViewToken[] }) => {
     setVisible(new Set(viewableItems.map((v) => String(v.key))))
   }).current
   const viewability = useRef({ itemVisiblePercentThreshold: 10 }).current
@@ -823,7 +823,7 @@ function ColorWheel({ size, value, onChange, onComplete }: { size: number; value
 function ColorField({ label, value, onChange, onCommit }: { label: string; value: string; onChange: (hex: string) => void; onCommit: (hex: string) => void }) {
   const colors = useTheme((s) => s.colors)
   const scrollLocked = useScrollLock((s) => s.locked)
-  const scrollRef = useRef<ScrollView>(null)
+  const scrollRef = useRef<ScrollViewInstance>(null)
   const hexFocused = useRef(false)
   const [open, setOpen] = useState(false)
   const [hex, setHex] = useState(value.replace(/^#/, ''))
