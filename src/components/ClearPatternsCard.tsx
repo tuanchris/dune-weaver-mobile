@@ -17,6 +17,8 @@ import { prettyName } from '../lib/patternName'
 import { userMessage } from '../lib/errors'
 import { Button, Card, CardTitle, IconButton } from './ui'
 import { PatternThumb } from './PatternThumb'
+import { useIsRect, useThumbFrame } from './RectTable'
+import { isGcode } from '../lib/gcode'
 import { EmptyState } from './EmptyState'
 import { Sheet, useSheetWidth } from './Sheet'
 import { thumbGrid } from '../lib/layout'
@@ -42,6 +44,7 @@ export function ClearPatternsCard({ base }: { base: string }) {
   // table, not just an idle one ($Playlist/Clear* accept writes in Hold).
   const writable = useStatus((s) => !isSettingsLocked(s.status))
   const tablePatterns = useLibrary((s) => s.tablePatterns)
+  const rect = useIsRect()
   const loadTable = useLibrary((s) => s.loadTable)
 
   const [inPath, setInPath] = useState('')
@@ -104,9 +107,11 @@ export function ClearPatternsCard({ base }: { base: string }) {
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase()
-    const list = q ? tablePatterns.filter((p) => p.toLowerCase().includes(q)) : tablePatterns
+    // Only what this table can draw: G-code on a rectangular table, .thr on a round one.
+    const playable = tablePatterns.filter((p) => isGcode(p) === rect)
+    const list = q ? playable.filter((p) => p.toLowerCase().includes(q)) : playable
     return [...list].sort((a, b) => a.localeCompare(b))
-  }, [tablePatterns, query])
+  }, [tablePatterns, query, rect])
 
   const selectedKey = picker === 'in' ? inKey : picker === 'out' ? outKey : null
 
@@ -120,6 +125,8 @@ export function ClearPatternsCard({ base }: { base: string }) {
       <ClearRow label="Clear from center" iconKey={inKey} disabled={!writable} onChange={() => openPicker('in')} />
       <ClearRow label="Clear from edge" iconKey={outKey} disabled={!writable} onChange={() => openPicker('out')} />
 
+      {/* Only round tables read it: a rectangular table's wipes are G-code with their own feeds. */}
+      {rect ? null : (
       <View style={{ marginTop: spacing.md }}>
         <Text style={[styles.label, { color: colors.foreground }]}>Clear speed (mm/min)</Text>
         <TextInput
@@ -134,6 +141,7 @@ export function ClearPatternsCard({ base }: { base: string }) {
           How fast the clear runs. 0 = same speed as the pattern.
         </Text>
       </View>
+      )}
 
       {!writable ? (
         <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, marginTop: spacing.sm }}>
@@ -183,7 +191,8 @@ export function ClearPatternsCard({ base }: { base: string }) {
  * pageSheet is narrower than the window). */
 function PickerGrid({ data, selectedKey, empty, onPick }: { data: string[]; selectedKey: string | null; empty: string; onPick: (key: string) => void }) {
   const colors = useTheme((s) => s.colors)
-  const { cols, thumb } = thumbGrid(useSheetWidth())
+  const frame = useThumbFrame()
+  const { cols, thumb } = thumbGrid(useSheetWidth(), spacing.md, useIsRect())
   return (
     <FlatList
       data={data}
@@ -199,7 +208,7 @@ function PickerGrid({ data, selectedKey, empty, onPick }: { data: string[]; sele
         const on = item === selectedKey
         return (
           <Pressable onPress={() => onPick(item)} style={[styles.cell, { flex: 1 / cols }]}>
-            <View style={[styles.thumb, { width: thumb, height: thumb, borderRadius: thumb / 2, backgroundColor: colors.card, borderColor: on ? colors.primary : 'transparent' }]}>
+            <View style={[styles.thumb, frame(thumb), { backgroundColor: colors.card, borderColor: on ? colors.primary : 'transparent' }]}>
               <PatternThumb name={item} size={thumb - 4} />
               {on ? (
                 <View style={[styles.check, { backgroundColor: colors.primary }]}>
@@ -219,10 +228,11 @@ function PickerGrid({ data, selectedKey, empty, onPick }: { data: string[]; sele
 
 function ClearRow({ label, iconKey, disabled, onChange }: { label: string; iconKey: string | null; disabled: boolean; onChange: () => void }) {
   const colors = useTheme((s) => s.colors)
+  const f = useThumbFrame()(useIsRect() ? 64 : 48)
   return (
     <View style={[styles.clearRow, { borderColor: colors.border }]}>
-      <View style={[styles.rowThumb, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        {iconKey ? <PatternThumb name={iconKey} size={40} /> : <MaterialIcons name="auto-fix-high" size={22} color={colors.mutedForeground} />}
+      <View style={[styles.rowThumb, f, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        {iconKey ? <PatternThumb name={iconKey} size={f.width - 8} /> : <MaterialIcons name="auto-fix-high" size={22} color={colors.mutedForeground} />}
       </View>
       <View style={{ flex: 1 }}>
         <Text style={{ color: colors.foreground, fontWeight: font.weight.medium }}>{label}</Text>
@@ -239,7 +249,7 @@ const styles = StyleSheet.create({
   label: { fontSize: font.size.sm, fontWeight: font.weight.medium, marginBottom: spacing.sm },
   input: { borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, minHeight: 46, fontSize: font.size.md },
   clearRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth },
-  rowThumb: { width: 48, height: 48, borderRadius: 24, borderWidth: 1, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  rowThumb: { borderWidth: 1, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   search: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, minHeight: 40, marginHorizontal: spacing.md },
   searchInput: { flex: 1, fontSize: font.size.md, paddingVertical: 0 },
   builtinRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, marginHorizontal: spacing.md, marginTop: spacing.sm, borderRadius: radius.lg, borderWidth: 1 },

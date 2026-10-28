@@ -8,7 +8,7 @@ import { useStatus } from '../stores/useStatus'
 import { useScrollLock } from '../stores/useScrollLock'
 import { usePreviews } from '../stores/usePreviews'
 import { useTheme } from '../stores/useTheme'
-import { bareName } from '../stores/useLibrary'
+import { bareName, useLibrary } from '../stores/useLibrary'
 import { assertNotSyncing } from '../lib/sd'
 import { SCROLL_BOTTOM_PAD } from '../lib/layout'
 import { buildPath, toScreen, type Point } from '../lib/patternGeometry'
@@ -19,6 +19,9 @@ import { Button, Card, CardTitle } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { SpeedControl } from '../components/SpeedControl'
 import { EmptyState } from '../components/EmptyState'
+import { TableRect, useIsRect, useThumbFrame, useTravel } from '../components/RectTable'
+import { PatternThumb } from '../components/PatternThumb'
+import { isGcode } from '../lib/gcode'
 import { radius, spacing, font } from '../theme'
 
 /** Seconds-since-boot -> compact "2d 3h" / "3h 14m" / "14m" / "9s". */
@@ -53,6 +56,15 @@ const CLEARS: { mode: ClearMode; file: string; path: Point[]; start: Point }[] =
 ]
 const clearLabel = (m: ClearMode): string => CLEAR_MODES.find((c) => c.mode === m)?.label ?? m
 
+// A rectangular table's clears are whatever G-code wipes its card holds, named
+// clear_* or wipe_* (the firmware's CoreXY config template) by convention
+// ("clear_from_in.gcode" -> "From in"). No stock set.
+const isRectClear = (file: string): boolean => isGcode(file) && /^(clear|wipe)/i.test(bareName(file))
+const rectClearLabel = (file: string): string => {
+  const s = prettyName(file).replace(/^(clear|wipe)[\s_-]*/i, '').replace(/[_-]+/g, ' ')
+  return s ? s[0].toUpperCase() + s.slice(1) : 'Clear'
+}
+
 export function ControlScreen(): React.JSX.Element {
   const colors = useTheme((s) => s.colors)
   const { width } = useWindowDimensions()
@@ -64,6 +76,11 @@ export function ControlScreen(): React.JSX.Element {
   // single-threaded SD). Stop stays enabled — you must always be able to halt.
   const syncing = usePreviews((s) => s.syncing)
   const { busy, act } = useBoardAction()
+  const rect = useIsRect()
+  const travel = useTravel()
+  const frame = useThumbFrame()
+  const tablePatterns = useLibrary((s) => s.tablePatterns)
+  const rectClears = React.useMemo(() => tablePatterns.filter(isRectClear).sort(), [tablePatterns])
 
   if (!base) {
     return (
@@ -76,7 +93,11 @@ export function ControlScreen(): React.JSX.Element {
   const online = !!status?.connected
   const isAlarm = online && status.state === 'Alarm'
   const moving = online && (status.isRunning || status.isHoming || status.isClearing)
-  const clearing = online && status.isRunning ? CLEARS.find((c) => c.file === bareName(status.currentFile)) : undefined
+  const runningFile = online && status.isRunning ? bareName(status.currentFile) : ''
+  const clearing =
+    !runningFile ? null
+    : rect ? (isRectClear(runningFile) ? `Clear ${rectClearLabel(runningFile).toLowerCase()}` : null)
+    : (() => { const c = CLEARS.find((k) => k.file === runningFile); return c ? clearLabel(c.mode) : null })()
 
   // Moving the ball / clearing needs an idle, homed table (the firmware answers
   // 409 mid-pattern), and a preview sync holds the SD. Say WHY they're off.
@@ -104,13 +125,14 @@ export function ControlScreen(): React.JSX.Element {
     !online ? 'Can’t reach the table'
     : isAlarm ? 'Home or unlock it to carry on'
     : status.isHoming ? 'Finding its home position'
-    : clearing ? clearLabel(clearing.mode) + pct
+    : clearing ? clearing + pct
     : status.isClearing ? 'Before the next pattern'
     : status.isRunning || status.isPaused ? prettyName(status.currentFile) + pct
     : status.playlist ? 'Between patterns'
     : status.isQuiet ? 'Still Sands — the table is resting'
-    : Math.abs(status.rho) < 0.03 ? 'Ball at center'
-    : Math.abs(status.rho) > 0.97 ? 'Ball at edge'
+    : !rect && Math.abs(status.rho) < 0.03 ? 'Ball at center'
+    : !rect && Math.abs(status.rho) > 0.97 ? 'Ball at edge'
+    : rect && Math.hypot(status.x, status.y) < 2 ? 'Ball at home'
     : 'Ready'
   const ballColor = isAlarm ? colors.destructive : moving ? colors.live : colors.foreground
   const ball = online ? { theta: status.theta, rho: status.rho } : null
@@ -123,6 +145,8 @@ export function ControlScreen(): React.JSX.Element {
       rho === 0 ? 'Moving to center' : 'Moving to edge',
       'move the ball',
     )
+  const moveXY = (x: number, y: number, where: string) =>
+    act(() => { assertNotSyncing(); return board.moveToXY(base, x, y) }, `Moving to ${where}`, 'move the ball')
 
   // A reboot ends whatever is drawing, so stop it first (and say so), like the Wi-Fi and OTA restarts.
   const restart = () =>
@@ -143,12 +167,20 @@ export function ControlScreen(): React.JSX.Element {
         {/* The table from above: where the ball is, what it's doing, and the two buttons that always apply. */}
         <Card style={styles.hero}>
           <View style={{ opacity: online ? 1 : 0.5 }}>
-            <TableDisc size={Math.min(180, width - spacing.lg * 4)} ball={ball} color={ballColor} />
+            {rect ? (
+              <TableRect width={Math.min(340, width - spacing.lg * 4)} ball={online ? [status.x, status.y] : null} color={ballColor} />
+            ) : (
+              <TableDisc size={Math.min(180, width - spacing.lg * 4)} ball={ball} color={ballColor} />
+            )}
           </View>
           <View style={styles.caption}>
             <Text numberOfLines={1} style={[styles.stateWord, { color: colors.foreground }]}>{stateWord}</Text>
             <Text numberOfLines={2} style={[styles.subline, { color: colors.mutedForeground }]}>{subline}</Text>
-            {online ? (
+            {online && rect ? (
+              <Text style={[styles.tele, { color: colors.mutedForeground }]}>
+                X <Text style={{ color: colors.foreground }}>{Math.round(status.x)}</Text>   Y <Text style={{ color: colors.foreground }}>{Math.round(status.y)}</Text> mm
+              </Text>
+            ) : online ? (
               <Text style={[styles.tele, { color: colors.mutedForeground }]}>
                 θ <Text style={{ color: colors.foreground }}>{deg}°</Text>   ρ <Text style={{ color: colors.foreground }}>{status.rho.toFixed(2)}</Text>
               </Text>
@@ -165,6 +197,29 @@ export function ControlScreen(): React.JSX.Element {
 
         <Card>
           <TitleRow title="Clear sand" note={lockReason} />
+          {rect ? (
+            rectClears.length ? (
+              <View style={[styles.tileRow, { flexWrap: 'wrap' }]}>
+                {rectClears.map((file) => (
+                  <Tile
+                    key={file}
+                    width={tileW}
+                    label={rectClearLabel(file)}
+                    disabled={busy || !canPosition}
+                    onPress={() => act(() => { assertNotSyncing(); return board.runPattern(base, `/patterns/${file}`) }, `Clearing ${rectClearLabel(file).toLowerCase()}`, 'start the clear pattern')}
+                  >
+                    <View style={[styles.rectTile, frame(tileW * 0.92), { backgroundColor: colors.cardElevated, borderColor: colors.border }]}>
+                      <PatternThumb name={file} size={tileW * 0.92 - 4} />
+                    </View>
+                  </Tile>
+                ))}
+              </View>
+            ) : (
+              <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>
+                No clear patterns on the table. Clears here are the card’s clear_* and wipe_* G-code files.
+              </Text>
+            )
+          ) : (
           <View style={styles.tileRow}>
             {CLEARS.map((c) => (
               <Tile
@@ -182,9 +237,18 @@ export function ControlScreen(): React.JSX.Element {
               </Tile>
             ))}
           </View>
+          )}
           <View style={{ marginTop: spacing.xl }}>
             <CardTitle>Move ball</CardTitle>
           </View>
+          {rect ? (
+            <MovePad
+              width={Math.min(420, width - spacing.lg * 4)}
+              travel={travel}
+              disabled={busy || !canPosition || !travel}
+              onMove={moveXY}
+            />
+          ) : (
           <View style={styles.row}>
             <Pill label="Center" disabled={busy || !canPosition} onPress={() => move(0)}>
               <TableDisc size={26} ball={{ theta: 0, rho: 0 }} color={colors.foreground} />
@@ -194,13 +258,15 @@ export function ControlScreen(): React.JSX.Element {
               <TableDisc size={26} ball={{ theta: online ? status.theta : 0, rho: 1 }} color={colors.foreground} />
             </Pill>
           </View>
+          )}
         </Card>
 
         <Card>
           <SpeedControl
-            value={status?.speed ?? 50}
+            percent={rect}
+            value={rect ? status?.feedOverride ?? 100 : status?.speed ?? 50}
             feedOverride={status?.feedOverride ?? 100}
-            onCommit={(v) => board.setFeedLive(base, v).then(() => setTimeout(refreshStatus, 350)).catch(() => {})}
+            onCommit={(v) => (rect ? board.setFeedPct : board.setFeedLive)(base, v).then(() => setTimeout(refreshStatus, 350)).catch(() => {})}
           />
         </Card>
 
@@ -251,6 +317,49 @@ function TableDisc({ size, ball, color, path }: { size: number; ball: { theta: n
   )
 }
 
+/**
+ * Move ball on a rectangular table: a map of it with a target at each corner
+ * and the center (G-code's y up, like the hero: home, 0,0, is bottom left).
+ */
+function MovePad({ width, travel, disabled, onMove }: {
+  width: number
+  travel: [number, number] | null
+  disabled: boolean
+  onMove: (x: number, y: number, where: string) => void
+}): React.JSX.Element {
+  const colors = useTheme((s) => s.colors)
+  const [W, H] = travel ?? [2, 1]
+  // Kept tall enough for two rows of 44 pt targets on a very long table.
+  const height = Math.max(112, (width * H) / W)
+  const T = 44
+  const R = width - T - 6
+  const B = height - T - 6
+  const spots = [
+    { where: 'the top left corner', x: 0, y: H, left: 6, top: 6 },
+    { where: 'the top right corner', x: W, y: H, left: R, top: 6 },
+    { where: 'the center', x: W / 2, y: H / 2, left: (width - T) / 2, top: (height - T) / 2 },
+    { where: 'the bottom left corner', x: 0, y: 0, left: 6, top: B },
+    { where: 'the bottom right corner', x: W, y: 0, left: R, top: B },
+  ]
+  return (
+    <View style={[styles.pad, { width, height, backgroundColor: colors.cardElevated, borderColor: colors.border, opacity: disabled ? 0.45 : 1 }]}>
+      {spots.map((p) => (
+        <Pressable
+          key={p.where}
+          onPress={() => onMove(p.x, p.y, p.where)}
+          disabled={disabled}
+          accessibilityRole="button"
+          accessibilityLabel={`Move ball to ${p.where}`}
+          accessibilityState={{ disabled }}
+          style={({ pressed }) => [styles.target, { left: p.left, top: p.top, backgroundColor: pressed ? colors.primary : colors.card, borderColor: colors.border }]}
+        >
+          {({ pressed }) => <View style={[styles.targetDot, { backgroundColor: pressed ? colors.primaryForeground : colors.foreground }]} />}
+        </Pressable>
+      ))}
+    </View>
+  )
+}
+
 /** Card label with, on the right, why its buttons are off (if they are). */
 function TitleRow({ title, note }: { title: string; note: string | null }): React.JSX.Element {
   const colors = useTheme((s) => s.colors)
@@ -267,7 +376,8 @@ function TitleRow({ title, note }: { title: string; note: string | null }): Reac
   )
 }
 
-function Tile({ label, onPress, disabled, children }: { label: string; onPress: () => void; disabled?: boolean; children: React.ReactNode }): React.JSX.Element {
+/** `width` fixes the tile's size, for rows that wrap (a card with 4+ wipe files). */
+function Tile({ label, onPress, disabled, width, children }: { label: string; onPress: () => void; disabled?: boolean; width?: number; children: React.ReactNode }): React.JSX.Element {
   const colors = useTheme((s) => s.colors)
   return (
     <Pressable
@@ -276,7 +386,7 @@ function Tile({ label, onPress, disabled, children }: { label: string; onPress: 
       accessibilityRole="button"
       accessibilityLabel={`Clear ${label.toLowerCase()}`}
       accessibilityState={{ disabled: !!disabled }}
-      style={({ pressed }) => [styles.tile, { opacity: disabled ? 0.45 : pressed ? 0.7 : 1 }]}
+      style={({ pressed }) => [styles.tile, width ? { flex: 0, width } : null, { opacity: disabled ? 0.45 : pressed ? 0.7 : 1 }]}
     >
       {children}
       <Text style={{ color: colors.foreground, fontSize: font.size.sm, fontWeight: font.weight.medium, textAlign: 'center' }}>{label}</Text>
@@ -312,6 +422,10 @@ const styles = StyleSheet.create({
   note: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1, marginBottom: spacing.md },
   tileRow: { flexDirection: 'row', gap: spacing.sm },
   tile: { flex: 1, alignItems: 'center', gap: spacing.sm, minHeight: 44, borderRadius: radius.md },
+  rectTile: { borderWidth: 1, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  pad: { alignSelf: 'center', borderRadius: radius.lg, borderWidth: 1.5 },
+  target: { position: 'absolute', width: 44, height: 44, borderRadius: 22, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  targetDot: { width: 10, height: 10, borderRadius: 5 },
   pill: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, minHeight: 48, paddingVertical: spacing.xs, borderRadius: radius.pill },
   actionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 52, paddingVertical: spacing.sm, paddingHorizontal: spacing.lg, borderRadius: radius.lg },
 })

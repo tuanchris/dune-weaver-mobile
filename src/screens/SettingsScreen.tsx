@@ -19,6 +19,7 @@ import { useUpdates, appUpdateAvailable, fwUpdateAvailable, APP_VERSION } from '
 import { toast } from '../stores/useToast'
 import { Button, Card, IconButton } from '../components/ui'
 import { Screen } from '../components/Screen'
+import { useIsRect } from '../components/RectTable'
 import { useDiscovery, type DiscoveredTable } from '../lib/discovery'
 import { syncHostname, renameMessage } from '../lib/renameTable'
 import { parseSlots } from '../lib/quietSlots'
@@ -63,6 +64,7 @@ export function SettingsScreen(): React.JSX.Element {
   const { boards, activeId, addBoard, removeBoard, renameBoard, updateBase, setActive, getActiveBase } = useBoards()
   const base = getActiveBase()
   const active = boards.find((b) => b.id === activeId) ?? null
+  const rect = useIsRect()
 
   const [name, setName] = useState('')
   const [host, setHost] = useState('')
@@ -322,7 +324,8 @@ export function SettingsScreen(): React.JSX.Element {
             <Section>
               <NavRow icon="play-circle-outline" label="Playback" value={tv?.playback} onPress={() => go('Playback')} />
               <NavRow icon="bedtime" label="Still Sands" value={tv?.stillSands} onPress={() => go('StillSands')} />
-              <NavRow icon="my-location" label="Homing" value={tv?.homing} onPress={() => go('Homing')} />
+              {/* Homing mode, offset and orientation are round-table settings; a rectangular table always homes on its switches. */}
+              {rect ? null : <NavRow icon="my-location" label="Homing" value={tv?.homing} onPress={() => go('Homing')} />}
               {/* Only tables with an LED strip (firmware with $LED/Count) report one. */}
               {tv?.ledStrip ? (
                 <NavRow icon="lightbulb-outline" label="LED strip" value={tv.ledStrip} onPress={() => go('LedStrip')} />

@@ -26,6 +26,7 @@ import { usePrefs } from '../stores/usePrefs'
 import { usePreviews } from '../stores/usePreviews'
 import { useStatus } from '../stores/useStatus'
 import { parsePlaylist } from './playlists'
+import { isGcode } from './gcode'
 
 export const FAVORITES_PLAYLIST = 'Favorites.txt'
 const DEBOUNCE_MS = 1500
@@ -54,11 +55,15 @@ export async function reconcileFavoritesPlaylist(): Promise<ReconcileResult> {
   if (!boardId) return 'idle'
 
   const prefs = usePrefs.getState()
-  const favs = Object.keys(prefs.favorites)
-  const baseline = prefs.favSynced[boardId] ?? []
+  if (!st.status?.connected || isBusy(st.status)) return 'deferred'
+  // Favorites are shared by every table, but a table plays only its own kind:
+  // .thr on a round one, G-code on a rectangular one. The other kind in its
+  // playlist would be skipped, and 5 in a row cancel the whole run.
+  const rect = st.status.cartesian
+  const favs = Object.keys(prefs.favorites).filter((k) => isGcode(k) === rect)
+  const baseline = (prefs.favSynced[boardId] ?? []).filter((k) => isGcode(k) === rect)
   if (sameSet(favs, baseline)) return 'idle'
 
-  if (!st.status?.connected || isBusy(st.status)) return 'deferred'
   if (usePreviews.getState().syncing) return 'deferred'
 
   inFlight = true

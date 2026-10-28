@@ -24,6 +24,7 @@ import { Screen } from '../components/Screen'
 import { Sheet, SheetButton, useSheetWidth } from '../components/Sheet'
 import { EmptyState } from '../components/EmptyState'
 import { AnimatedLedRing, LedRing, useLedClock, useReduceMotion } from '../components/LedRing'
+import { useIsRect } from '../components/RectTable'
 import type { TabNav } from '../navigation'
 import { radius, spacing, font } from '../theme'
 
@@ -285,7 +286,10 @@ export function LedScreen() {
           }” effect below is set to it. Clear that, or pick an effect to override it until the table next starts or stops.`
         : null
 
-  const isBall = effect === 'ball'
+  // The ball tracker follows θ, which a rectangular (CoreXY) table doesn't have:
+  // the firmware shows only its background there, so the mode isn't offered.
+  const rect = useIsRect()
+  const isBall = !rect && effect === 'ball'
   // Remember the last non-ball effect so switching back to Effects can restore it.
   useEffect(() => {
     if (effect !== 'ball' && effect !== 'off') lastNonBallRef.current = effect
@@ -302,8 +306,8 @@ export function LedScreen() {
   // The ring preview: the user's ring size (clamped so it still reads as a ring),
   // and for the ball tracker, the blob where the sand ball is right now.
   const dotCount = Math.max(12, Math.min(72, ledCount ?? 48))
-  const turn = ((((status?.theta ?? 0) / (2 * Math.PI)) % 1) + 1) % 1
-  const ballAt = ((direction === 'ccw' ? 1 - turn : turn) + align / 360) % 1
+  const turn = rect ? -1 : ((((status?.theta ?? 0) / (2 * Math.PI)) % 1) + 1) % 1
+  const ballAt = rect ? -1 : ((direction === 'ccw' ? 1 - turn : turn) + align / 360) % 1
   const look: RingLook = { color, color2, palette, ball: { at: ballAt, size: ballSize, bg: ballBg } }
   // The same settings, for the firmware-effect simulation that animates the rings.
   const sim: SimParams = {
@@ -318,7 +322,8 @@ export function LedScreen() {
   // Animate only while someone can see it: tab in front, gallery closed, and
   // never under Reduce Motion (the rings then show a still sketch).
   const animate = focused && !reduceMotion
-  const ringSize = Math.min(240, width - spacing.lg * 4)
+  // A rectangular table's strip is drawn round the rectangle: as wide as fits.
+  const ringSize = Math.min(rect ? 340 : 240, width - spacing.lg * 4)
 
   if (!base) {
     return (
@@ -330,7 +335,7 @@ export function LedScreen() {
   if (hasLed === false) {
     return (
       <Screen title="LEDs">
-        <EmptyState icon="lightbulb-outline" text="This table has no LED ring set up." />
+        <EmptyState icon="lightbulb-outline" text="This table has no LEDs set up." />
       </Screen>
     )
   }
@@ -389,12 +394,14 @@ export function LedScreen() {
           </View>
         </Card>
 
-        <Segmented
-          fill
-          value={isBall ? 'ball' : 'effects'}
-          options={[{ value: 'effects', label: 'Effects' }, { value: 'ball', label: 'Ball tracker' }]}
-          onChange={switchMode}
-        />
+        {rect ? null : (
+          <Segmented
+            fill
+            value={isBall ? 'ball' : 'effects'}
+            options={[{ value: 'effects', label: 'Effects' }, { value: 'ball', label: 'Ball tracker' }]}
+            onChange={switchMode}
+          />
+        )}
 
         {isBall ? (
           <>
@@ -468,7 +475,7 @@ export function LedScreen() {
               accessibilityLabel={`Effect, ${effectLabel(effect)}. Browse effects`}
               style={({ pressed }) => [styles.effectRow, { opacity: pressed ? 0.7 : 1 }]}
             >
-              <LedRing dots={ringDots(effect, 16, look)} size={44} glow={false} />
+              <LedRing dots={ringDots(effect, 16, look)} size={rect ? 60 : 44} glow={false} />
               <View style={{ flex: 1 }}>
                 <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>Effect</Text>
                 <Text numberOfLines={1} style={[styles.effectName, { color: colors.foreground }]}>{effectLabel(effect)}</Text>
@@ -573,7 +580,8 @@ export function LedScreen() {
  * Rendered INSIDE the sheet so it sizes from the sheet's width. */
 function EffectGallery({ value, look, sim, leds, animate, onPick }: { value: string; look: RingLook; sim: SimParams; leds: number; animate: boolean; onPick: (name: string) => void }) {
   const colors = useTheme((s) => s.colors)
-  const { cols, thumb } = thumbGrid(useSheetWidth())
+  const rect = useIsRect()
+  const { cols, thumb } = thumbGrid(useSheetWidth(), spacing.md, rect)
   const ring = thumb - 10 // tile border (2) + padding (3), both sides
   const sections = useMemo(
     () =>
@@ -617,7 +625,7 @@ function EffectGallery({ value, look, sim, leds, animate, onPick }: { value: str
                 accessibilityLabel={e.label}
                 style={({ pressed }) => [styles.tile, { opacity: pressed ? 0.7 : 1 }]}
               >
-                <View style={[styles.tileRing, { borderColor: on ? colors.primary : 'transparent' }]}>
+                <View style={[styles.tileRing, { borderColor: on ? colors.primary : 'transparent', borderRadius: rect ? radius.lg : 999 }]}>
                   <AnimatedLedRing
                     // Preview what a tap gives: picking an effect resets speed and
                     // intensity to its defaults. The playing one keeps your tuning.
@@ -933,7 +941,7 @@ const styles = StyleSheet.create({
   effectRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 52 },
   effectName: { fontSize: font.size.lg, fontFamily: font.family.displaySemi },
   tile: { flex: 1, alignItems: 'center', gap: spacing.xs },
-  tileRing: { borderWidth: 2, borderRadius: 999, padding: 3 },
+  tileRing: { borderWidth: 2, padding: 3 },
   tileCheck: { position: 'absolute', top: 2, right: 2, width: 22, height: 22, borderRadius: 11, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
   galleryRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.lg },
   groupTitle: { fontSize: font.size.sm, fontWeight: font.weight.semibold, letterSpacing: 0.6, textTransform: 'uppercase', marginTop: spacing.sm, marginBottom: spacing.md, marginLeft: spacing.xs },

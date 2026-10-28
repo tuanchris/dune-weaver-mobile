@@ -52,7 +52,8 @@ export interface RingLook {
   color2: string
   palette: string
   /** Ball tracker: where the ball is (0..1 around the ring), the glow size in
-   * LEDs, and what renders behind it. */
+   * LEDs, and what renders behind it. `at` < 0: no ball to follow (a rectangular
+   * table), so just the background, as the firmware shows. */
   ball?: { at: number; size: number; bg: string }
 }
 
@@ -75,6 +76,7 @@ export function ringDots(effect: string, n: number, look: RingLook): Dot[] {
         b.bg === 'off' ? all(() => dark)
         : b.bg === 'static' ? all(() => lit(look.color2))
         : ringDots(b.bg, n, { ...look, ball: undefined })
+      if (b.at < 0) return bg
       const head = Math.round(b.at * n)
       const half = Math.max(1, b.size) / 2
       return bg.map((d, i) => {

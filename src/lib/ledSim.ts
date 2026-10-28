@@ -23,7 +23,7 @@ export interface SimParams {
   palette: string
   color: string // #RRGGBB
   color2: string
-  ball: { bg: string; bgBright: number; bright: number; size: number; dir: 'cw' | 'ccw'; align: number; angle: number /* 0..1 */ }
+  ball: { bg: string; bgBright: number; bright: number; size: number; dir: 'cw' | 'ccw'; align: number; angle: number /* 0..1, or -1 = no theta (rectangular table) */ }
 }
 
 type Rgb = [number, number, number]
@@ -572,6 +572,7 @@ export class LedSim {
         const bgBright = u8(p.ball.bgBright)
         if (bgBright < 255) for (let i = 0; i < this.fb.length; i++) this.fb[i] = scale8(this.fb[i], bgBright)
 
+        if (p.ball.angle < 0) return // no ThetaRho (a rectangular table) -> just the background
         let pf = p.ball.angle * (p.ball.dir === 'ccw' ? -1 : 1) + p.ball.align / 360
         pf -= Math.floor(pf)
         if (this.ballTrack < 0) this.ballTrack = pf

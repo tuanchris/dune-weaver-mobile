@@ -46,6 +46,8 @@ yarn-error.*
 /assets/geom/
 /assets/thr/
 /assets/pattern-manifest.js
+/assets/gcode/
+/assets/gcode-previews/
 
 # fastlane
 fastlane/asc_api_key.json

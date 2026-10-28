@@ -4,7 +4,8 @@ import { Asset } from 'expo-asset'
 import { File } from 'expo-file-system'
 // @ts-ignore - shared plain-ESM module (Metro resolves .mjs; allowJs covers TS)
 import { thrToXY } from '../lib/thrGeometry.mjs'
-import { THR, PREVIEW } from '../../assets/pattern-manifest'
+import { isGcode, parseGcode } from '../lib/gcode'
+import { THR, PREVIEW, GCODE, GCODE_PREVIEW } from '../../assets/pattern-manifest'
 import { board } from '../api/board'
 import { isBusy } from '../api/status'
 import { isDemoBase } from '../api/demoBoard'
@@ -55,7 +56,10 @@ export interface LibraryPattern {
   previewUri?: string
 }
 
-const THR_MAP = THR as Record<string, number>
+// Every pattern file the app bundles: round tables' .thr and rectangular tables'
+// G-code (scripts/gen-pattern-geometry.mjs), keyed by filename.
+const THR_MAP = { ...THR, ...GCODE } as Record<string, number>
+const PREVIEW_MAP = { ...PREVIEW, ...GCODE_PREVIEW } as Record<string, number>
 
 /** Resolve any pattern reference to its bare "<name>.thr" filename key. */
 export function bareName(name: string | null | undefined): string {
@@ -79,8 +83,8 @@ export function patternKey(name: string | null | undefined): string {
 }
 
 export type PreviewSource =
-  | { kind: 'webp'; module: number }
-  | { kind: 'svg' } // render from geometry (imported, or on-table w/o bundled webp)
+  | { kind: 'image'; module: number } // bundled preview (dw's webp, or a G-code pattern's rendered png)
+  | { kind: 'svg' } // render from geometry (imported, or on-table w/o bundled preview)
 
 /**
  * How to show a thumbnail for a pattern. Depends only on the static bundle, so
@@ -94,13 +98,13 @@ export function previewSource(name: string | null | undefined): PreviewSource {
   // '+'-named webp ("Asset not found"), so render those few patterns from live
   // geometry instead of their bundled preview.
   if (key.includes('+')) return { kind: 'svg' }
-  const mod = (PREVIEW as Record<string, number>)[key]
-  return mod != null ? { kind: 'webp', module: mod } : { kind: 'svg' }
+  const mod = PREVIEW_MAP[key]
+  return mod != null ? { kind: 'image', module: mod } : { kind: 'svg' }
 }
 
 /**
- * True when the app holds this pattern's .thr in its bundle — i.e. its shape can
- * be drawn live from geometry (<PolarPattern>) with no preview image at all.
+ * True when the app holds this pattern's file (.thr or G-code) in its bundle —
+ * i.e. it can push it, and draw it live from geometry with no preview image.
  */
 export function hasBundledThr(name: string | null | undefined): boolean {
   const key = bareName(name)
@@ -108,13 +112,14 @@ export function hasBundledThr(name: string | null | undefined): boolean {
 }
 
 /**
- * Every pattern the app ships a bundled preview for — the ~100 DEFAULT
- * (top-level) patterns, keyed by filename. Custom pattern previews are no longer
- * bundled (they live in app storage), so they surface in Browse once the
- * on-table manifest loads / they're imported, not from this list.
+ * The patterns the app ships for one table shape: dune-weaver's ~100 DEFAULT
+ * (top-level) .thr for a round table, every bundled G-code pattern for a
+ * rectangular one. Keyed by filename. Custom pattern previews aren't bundled
+ * (they live in app storage), so those surface in Browse once the on-table
+ * manifest loads / they're imported, not from this list.
  */
-export function previewNames(): string[] {
-  return Object.keys(PREVIEW as Record<string, number>)
+export function bundledNames(rect: boolean): string[] {
+  return Object.keys(rect ? GCODE : PREVIEW)
 }
 
 interface Persisted {
@@ -464,7 +469,8 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
       // Imported files are full-resolution on disk; bundled defaults are already
       // decimated. thrToXY decimates as needed so the render path stays bounded.
       const text = await new File(resolved.uri).text()
-      const xy = thrToXY(text) as Point[]
+      // G-code (rectangular tables) is mm points, not the unit circle.
+      const xy = isGcode(key) ? parseGcode(text) : (thrToXY(text) as Point[])
       get().setXY(key, xy)
     } catch {
       // leave uncached -> placeholder

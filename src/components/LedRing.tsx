@@ -1,14 +1,44 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { AccessibilityInfo, StyleSheet, View } from 'react-native'
-import Svg, { Circle } from 'react-native-svg'
+import Svg, { Circle, Rect } from 'react-native-svg'
 import { useTheme } from '../stores/useTheme'
+import { useAspect, useIsRect } from './RectTable'
 import { LedSim, SIM_FRAME_MS, type SimParams } from '../lib/ledSim'
 import type { Dot } from '../lib/ledPreview'
+
+/** Where dot i of n sits on a rounded rectangle (x0,y0)-(x1,y1), corner radius
+ * r: evenly spaced along its outline from 12 o'clock, clockwise — the ring's
+ * order, so every effect runs the same way round. */
+function rectPoint(i: number, n: number, x0: number, y0: number, x1: number, y1: number, r: number): [number, number] {
+  const w = x1 - x0 - 2 * r
+  const h = y1 - y0 - 2 * r
+  const arc = (Math.PI / 2) * r
+  // Outline from 12 o'clock: half the top, then each corner + side clockwise.
+  const segs: [number, (t: number) => [number, number]][] = [
+    [w / 2, (t) => [x0 + r + w / 2 + t, y0]],
+    [arc, (t) => { const a = -Math.PI / 2 + t / r; return [x1 - r + r * Math.cos(a), y0 + r + r * Math.sin(a)] }],
+    [h, (t) => [x1, y0 + r + t]],
+    [arc, (t) => { const a = t / r; return [x1 - r + r * Math.cos(a), y1 - r + r * Math.sin(a)] }],
+    [w, (t) => [x1 - r - t, y1]],
+    [arc, (t) => { const a = Math.PI / 2 + t / r; return [x0 + r + r * Math.cos(a), y1 - r + r * Math.sin(a)] }],
+    [h, (t) => [x0, y1 - r - t]],
+    [arc, (t) => { const a = Math.PI + t / r; return [x0 + r + r * Math.cos(a), y0 + r + r * Math.sin(a)] }],
+    [w / 2, (t) => [x0 + r + t, y0]],
+  ]
+  let d = (i / n) * (2 * (w + h) + 4 * arc)
+  for (const [len, at] of segs) {
+    if (d <= len) return at(d)
+    d -= len
+  }
+  return [x0 + r + w / 2, y0]
+}
 
 /**
  * The table's LED ring seen from above: one glowing dot per LED around the sand
  * disc, dark dots for unlit LEDs. Pure SVG, no animation (it's a still sketch of
  * the effect — see lib/ledPreview.ts). `children` sit centered in the disc.
+ * On a rectangular table the strip runs round the rectangle instead: `size`
+ * is then its width, and it's the table's proportions tall.
  */
 export function LedRing({
   dots,
@@ -26,21 +56,34 @@ export function LedRing({
   children?: React.ReactNode
 }): React.JSX.Element {
   const colors = useTheme((s) => s.colors)
+  const rect = useIsRect()
+  const aspect = useAspect()
   const n = dots.length
   const c = size / 2
+  const height = rect ? Math.round(size / aspect) : size
   // Dot size from the gap between neighbours, so 12 or 72 LEDs both read as a ring.
-  const dotR = Math.max(1.5, Math.min(size * 0.045, (Math.PI * size * 0.84) / n / 2.6))
+  const around = rect ? 2 * (size + height) * 0.9 : Math.PI * size * 0.84
+  const dotR = Math.max(1.5, Math.min(Math.min(size, height) * (rect ? 0.07 : 0.045), around / n / 2.6))
   const ringR = c - dotR * (glow ? 2.2 : 1.4)
+  // The rectangle's strip, inset like the ring's: its outline and corner radius.
+  const m = dotR * (glow ? 2.2 : 1.4)
+  const cr = Math.min(height * 0.2, 16)
+  const inner = m + dotR * 2.2
   const level = 0.35 + 0.65 * (Math.max(0, Math.min(255, brightness)) / 255)
   return (
-    <View style={{ width: size, height: size }}>
-      <Svg width={size} height={size}>
-        {/* The sand disc the ring wraps around. */}
-        <Circle cx={c} cy={c} r={ringR - dotR * 2.2} fill={colors.cardElevated} />
+    <View style={{ width: size, height }}>
+      <Svg width={size} height={height}>
+        {/* The sand the strip wraps around. */}
+        {rect ? (
+          <Rect x={inner} y={inner} width={size - inner * 2} height={height - inner * 2} rx={Math.max(2, cr - inner + m)} fill={colors.cardElevated} />
+        ) : (
+          <Circle cx={c} cy={c} r={ringR - dotR * 2.2} fill={colors.cardElevated} />
+        )}
         {dots.map((d, i) => {
           const ang = (i / n) * Math.PI * 2 - Math.PI / 2 // index 0 at 12 o'clock
-          const x = c + ringR * Math.cos(ang)
-          const y = c + ringR * Math.sin(ang)
+          const [x, y] = rect
+            ? rectPoint(i, n, m, m, size - m, height - m, cr)
+            : [c + ringR * Math.cos(ang), c + ringR * Math.sin(ang)]
           if (d.a < 0.04) return <Circle key={i} cx={x} cy={y} r={dotR * 0.8} fill={colors.border} />
           return (
             <React.Fragment key={i}>

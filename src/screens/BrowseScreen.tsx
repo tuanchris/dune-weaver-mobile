@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, Alert, FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { ActivityIndicator, Alert, FlatList, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
 import { board, CLEAR_DESC, CLEAR_MODES } from '../api/board'
 import { isBusy } from '../api/status'
@@ -8,22 +8,26 @@ import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
 import { usePrefs } from '../stores/usePrefs'
 import { toast } from '../stores/useToast'
-import { useLibrary, previewNames, bareName } from '../stores/useLibrary'
+import { useLibrary, bundledNames, bareName } from '../stores/useLibrary'
 import { pushToTable } from '../lib/pushPattern'
 import { assertSdIdle, assertNotSyncing } from '../lib/sd'
 import { updateTableManifest } from '../lib/tableManifest'
 import { importThr, type ImportedThr } from '../lib/importPattern'
 import { PatternThumb } from '../components/PatternThumb'
+import { PatternPlayer } from '../components/PatternPlayer'
 import { PolarPattern } from '../components/PolarPattern'
+import { useIsRect, useThumbFrame } from '../components/RectTable'
+import { isGcode } from '../lib/gcode'
 import { MissingPreviewsBanner } from '../components/MissingPreviewsBanner'
 import { useMissingPreviewCount } from '../lib/previewCoverage'
 import { Button, IconButton, Segmented } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { EmptyState } from '../components/EmptyState'
-import { prettyName } from '../lib/patternName'
+import { prettyName, PATTERN_EXT } from '../lib/patternName'
 import { userMessage } from '../lib/errors'
 import { SCROLL_BOTTOM_PAD, thumbGrid } from '../lib/layout'
-import { Sheet } from '../components/Sheet'
+import { Sheet, useAnySheetOpen } from '../components/Sheet'
+import { FullscreenPlayer } from '../components/FullscreenPlayer'
 import { radius, spacing, font } from '../theme'
 
 // The clear run before a single pattern (dw's "Pre-Execution Action"). Random is
@@ -58,7 +62,13 @@ export function BrowseScreen() {
   const colors = useTheme((s) => s.colors)
   // Thumb size tracks the live window width (rotation / iPad split view safe).
   const { width, height } = useWindowDimensions()
-  const { cols, thumb } = thumbGrid(width)
+  // A rectangular table plays G-code, a round one .thr: list only what this one
+  // can draw, on frames of its shape.
+  const rect = useIsRect()
+  const frame = useThumbFrame()
+  const { cols, thumb } = thumbGrid(width, spacing.md, rect)
+  // The detail sheet's table: a 248 disc, or the rectangle as wide as fits.
+  const heroW = rect ? Math.min(width - spacing.xl * 2, 360) : 248
   const base = useBoards((s) => s.getActiveBase())
   const refreshStatus = useStatus((s) => s.refresh)
   const imported = useLibrary((s) => s.patterns)
@@ -78,7 +88,7 @@ export function BrowseScreen() {
   const toggleFavorite = usePrefs((s) => s.toggleFavorite)
   const [selected, setSelected] = useState<string | null>(null)
   // The detail sheet's sub-page: the pattern, or the before-drawing clear choice.
-  const [page, setPage] = useState<'detail' | 'clear'>('detail')
+  const [page, setPage] = useState<'detail' | 'clear' | 'preview'>('detail')
   // The before-drawing clear is a remembered preference (persisted across launches).
   const clearMode = usePrefs((s) => s.clearMode)
   const setClearMode = usePrefs((s) => s.setClearMode)
@@ -116,18 +126,19 @@ export function BrowseScreen() {
   // One unified library: the bundled defaults + imported patterns + anything
   // else on the table, deduped by name.
   const allNames = useMemo(() => {
-    const set = new Set<string>(previewNames())
-    for (const p of imported) set.add(p.name)
-    for (const p of patterns) set.add(p)
+    const set = new Set<string>(bundledNames(rect))
+    for (const p of imported) if (isGcode(p.name) === rect) set.add(p.name)
+    for (const p of patterns) if (isGcode(p) === rect) set.add(p)
     return [...set]
-  }, [imported, patterns])
+  }, [imported, patterns, rect])
 
   const onTableSet = useMemo(() => new Set(patterns), [patterns])
 
   // Patterns that can only render the blank placeholder — no bundled webp, no
   // ingested preview image, no local geometry. Always on-table ones the card was
   // bulk-loaded with; the banner points at Settings' preview sync.
-  const missingPreviews = useMissingPreviewCount(allNames)
+  // (Not on a rectangular table: the preview bundle is .thr-only, a sync can't help.)
+  const missingPreviews = useMissingPreviewCount(rect ? [] : allNames)
 
   // Distinct subfolders present in the library. Only worth showing the filter
   // when patterns actually live in subfolders (e.g. custom_patterns/).
@@ -137,7 +148,8 @@ export function BrowseScreen() {
     return [...set].filter((f) => f !== '').sort((a, b) => a.localeCompare(b))
   }, [allNames])
   const hasTopLevel = useMemo(() => allNames.some((n) => folderOf(n) === ''), [allNames])
-  const hasFavorites = Object.keys(favorites).length > 0
+  // Only favorites this table can draw (they're shared across tables of both shapes).
+  const hasFavorites = allNames.some((n) => favorites[n])
 
   // Reset a folder filter whose folder disappears (e.g. on table reload).
   useEffect(() => {
@@ -153,7 +165,7 @@ export function BrowseScreen() {
     else if (filter !== ALL_FOLDERS) {
       list = list.filter((p) => (filter === TOP_LEVEL ? folderOf(p) === '' : folderOf(p) === filter))
     }
-    if (q) list = list.filter((p) => fuzzyMatch(p.replace(/\.thr$/i, ''), q))
+    if (q) list = list.filter((p) => fuzzyMatch(p.replace(PATTERN_EXT, ''), q))
     list = [...list].sort((a, b) => prettyName(a).localeCompare(prettyName(b)) * (asc ? 1 : -1))
     return list
   }, [allNames, query, asc, filter, favorites])
@@ -223,11 +235,12 @@ export function BrowseScreen() {
   const doImport = async () => {
     setImporting(true)
     try {
-      const result = await importThr()
+      const result = await importThr(rect)
       if (!result) return // cancelled
       const { imported, failed } = result
       if (imported.length === 0) {
-        toast.error(failed.length ? `No valid .thr files (skipped ${failed.length})` : 'No valid .thr files')
+        const kind = rect ? 'G-code' : '.thr'
+        toast.error(failed.length ? `No valid ${kind} files (skipped ${failed.length})` : `No valid ${kind} files`)
         return
       }
       // A single clean pick keeps the preview/confirm sheet (with push option).
@@ -311,6 +324,42 @@ export function BrowseScreen() {
   // SD operations or lose the in-progress feedback.
   const busy = running || !!pushing || deleting
   const sheetName = importPreview?.name ?? selected
+
+  // On a rectangular table the preview page can go full screen and sideways
+  // (FullscreenPlayer) when asked. That's a Modal of its own and iOS shows one at
+  // a time, so the pattern's sheet closes first, the player opens once it's gone,
+  // and the sheet comes back on the preview page after.
+  const [fullscreen, setFullscreen] = useState<string | null>(null)
+  const [pendingFull, setPendingFull] = useState<string | null>(null)
+  const reopenAfterFull = useRef<string | null>(null)
+  // Back from full screen the preview page shows the finished drawing, not a replay.
+  const [backFromFull, setBackFromFull] = useState(false)
+  const anySheetOpen = useAnySheetOpen()
+  useEffect(() => {
+    if (pendingFull && !anySheetOpen) {
+      setFullscreen(pendingFull)
+      setPendingFull(null)
+    }
+  }, [pendingFull, anySheetOpen])
+  const openFullscreen = (name: string) => {
+    setPendingFull(name)
+    setSelected(null)
+  }
+  const reopenSheet = () => {
+    const name = reopenAfterFull.current
+    reopenAfterFull.current = null
+    if (name) {
+      setBackFromFull(true)
+      setPage('preview')
+      setSelected(name)
+    }
+  }
+  const closeFullscreen = () => {
+    reopenAfterFull.current = fullscreen
+    setFullscreen(null)
+    // Android and web stack modals fine; iOS waits for the player's onDismiss.
+    if (Platform.OS !== 'ios') reopenSheet()
+  }
   // Play works for anything on the table, and for library patterns by sending them first.
   const canPlay = selOnTable || selInLibrary
   const filterLabel = filterOptions.find((o) => o.key === filter)?.label ?? ''
@@ -440,7 +489,7 @@ export function BrowseScreen() {
             accessibilityLabel={tableKnown && !onTableSet.has(item) ? `${prettyName(item)}, not on the table` : prettyName(item)}
             style={[styles.tile, { flex: 1 / cols }]}
           >
-            <View style={[styles.tileThumb, { width: thumb, height: thumb, borderRadius: thumb / 2, backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={[styles.tileThumb, frame(thumb), { backgroundColor: colors.card, borderColor: colors.border }]}>
               <PatternThumb name={item} size={thumb - 4} />
             </View>
             <Pressable
@@ -480,9 +529,9 @@ export function BrowseScreen() {
           setPage('detail')
         }}
         title={page === 'clear' && !importPreview ? 'Before drawing' : sheetName ? prettyName(sheetName) : undefined}
-        onBack={page === 'clear' && !importPreview ? () => setPage('detail') : undefined}
+        onBack={page !== 'detail' && !importPreview ? () => setPage('detail') : undefined}
         trailing={
-          importPreview || page === 'clear' ? undefined : (
+          importPreview || page !== 'detail' ? undefined : (
             <>
               <IconButton
                 icon={selected && favorites[selected] ? 'favorite' : 'favorite-border'}
@@ -497,12 +546,22 @@ export function BrowseScreen() {
       >
         {importPreview ? (
           <View style={styles.importBody}>
-            <PolarPattern name={importPreview.name} size={240} showRings />
+            {rect ? (
+              <View style={[styles.detailDisc, frame(heroW), { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <PatternThumb name={importPreview.name} size={heroW - 12} />
+              </View>
+            ) : (
+              <PolarPattern name={importPreview.name} size={240} showRings />
+            )}
             <View style={styles.sheetActions}>
               <Button title="Add" icon="library-add" variant="secondary" onPress={() => confirmImport(false)} flex />
               <Button title="Add & send" icon="cloud-upload" loading={!!pushing} onPress={() => confirmImport(true)} flex />
             </View>
           </View>
+        ) : page === 'preview' && selected ? (
+          // The playback preview, opened from the pattern's image (one sheet at a time).
+          // Full screen (sideways) only when asked for, on a rectangular table.
+          <PatternPlayer key={selected} name={selected} autoplay={!backFromFull} onFullscreen={rect ? () => openFullscreen(selected) : undefined} />
         ) : page === 'clear' ? (
           // The before-drawing clear, picked like a playlist's: a list with what each one does.
           <ScrollView contentContainerStyle={styles.clearList}>
@@ -530,9 +589,31 @@ export function BrowseScreen() {
           <ScrollView contentContainerStyle={styles.detailBody}>
             <View style={styles.detailHero}>
               {selected ? (
-                <View style={[styles.detailDisc, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <PatternThumb name={selected} size={236} />
-                </View>
+                // Tapping the pattern opens its playback preview (dune-weaver-viewer's
+                // player), when the app holds a copy to play; the badge says so.
+                <Pressable
+                  onPress={() => {
+                    setBackFromFull(false)
+                    setPage('preview')
+                  }}
+                  disabled={!selInLibrary}
+                  accessibilityRole={selInLibrary ? 'button' : 'image'}
+                  accessibilityLabel={selInLibrary ? 'Preview drawing' : prettyName(selected)}
+                >
+                  {({ pressed }) => (
+                    <View style={[styles.detailDisc, frame(heroW), { backgroundColor: colors.card, borderColor: colors.border, opacity: pressed ? 0.8 : 1 }]}>
+                      <PatternThumb name={selected} size={heroW - 12} />
+                      {selInLibrary ? (
+                        // Centred on the pattern, like a video's play button, on either shape.
+                        <View style={styles.previewBadgeWrap} pointerEvents="none">
+                          <View style={[styles.previewBadge, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                            <MaterialIcons name="play-arrow" size={28} color={colors.foreground} />
+                          </View>
+                        </View>
+                      ) : null}
+                    </View>
+                  )}
+                </Pressable>
               ) : null}
               <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, textAlign: 'center' }}>{where}</Text>
             </View>
@@ -585,6 +666,9 @@ export function BrowseScreen() {
           </ScrollView>
         )}
       </Sheet>
+      <FullscreenPlayer title={fullscreen ? prettyName(fullscreen) : null} onClose={closeFullscreen} onDismissed={reopenSheet}>
+        {(w) => (fullscreen ? <PatternPlayer key={fullscreen} name={fullscreen} autoplay frameWidth={w} caption={false} /> : null)}
+      </FullscreenPlayer>
     </Screen>
   )
 }
@@ -608,7 +692,9 @@ const styles = StyleSheet.create({
   sheetActions: { flexDirection: 'row', gap: spacing.md, alignSelf: 'stretch' },
   detailBody: { paddingHorizontal: spacing.xl, paddingTop: spacing.sm, paddingBottom: spacing.lg },
   detailHero: { alignItems: 'center', gap: spacing.sm, marginBottom: spacing.lg },
-  detailDisc: { width: 248, height: 248, borderRadius: 124, borderWidth: 2, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  detailDisc: { borderWidth: 2, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  previewBadgeWrap: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, alignItems: 'center', justifyContent: 'center' },
+  previewBadge: { width: 52, height: 52, borderRadius: 26, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   clearRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 48, paddingLeft: spacing.md, paddingRight: spacing.sm, borderRadius: radius.lg, borderWidth: 1 },
   clearList: { padding: spacing.md, gap: spacing.sm },
   clearOption: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1 },

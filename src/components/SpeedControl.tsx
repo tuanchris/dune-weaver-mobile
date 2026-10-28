@@ -10,6 +10,9 @@ import { radius, spacing, font } from '../theme'
  * so 275 was unreachable), not to quietly widen the range. */
 const MIN = 50
 const MAX = 500
+// Rectangular tables have no base feed (each G-code file sets its own), so
+// their speed is the firmware's override percent (/sand_feed?pct=, 10..200).
+const PCT = { min: 10, max: 200, step: 10 }
 
 /**
  * Speed (feed-rate) slider with its live readout. The label shows the value
@@ -19,16 +22,24 @@ const MAX = 500
  *
  * The readout is also TAPPABLE: it turns into a number field so an exact feed
  * can be typed instead of dragged onto a multiple of the step.
+ *
+ * `percent` (rectangular tables): `value` is the override percent and the
+ * control runs 10–200 %.
  */
 export function SpeedControl({
   value,
   feedOverride,
   onCommit,
+  percent = false,
 }: {
   value: number
   feedOverride: number
   onCommit: (v: number) => void
+  percent?: boolean
 }) {
+  const min = percent ? PCT.min : MIN
+  const max = percent ? PCT.max : MAX
+  const unit = percent ? '%' : 'mm/min'
   const colors = useTheme((s) => s.colors)
   const [drag, setDrag] = useState<number | null>(null)
   const [editing, setEditing] = useState(false)
@@ -57,7 +68,7 @@ export function SpeedControl({
     // Unparseable or unchanged: leave the board alone rather than committing a
     // guess — an empty field should cancel, not set the speed to the minimum.
     if (!Number.isFinite(n)) return
-    const clamped = Math.min(MAX, Math.max(MIN, n))
+    const clamped = Math.min(max, Math.max(min, n))
     if (clamped === value) return
     holdThen(clamped)
   }
@@ -78,14 +89,14 @@ export function SpeedControl({
               keyboardType="number-pad"
               returnKeyType="done"
               maxLength={6}
-              accessibilityLabel="Speed in mm per minute"
+              accessibilityLabel={percent ? 'Speed in percent' : 'Speed in mm per minute'}
               style={[
                 styles.input,
                 { color: colors.foreground, backgroundColor: colors.inputBackground, borderColor: colors.primary },
               ]}
             />
             <Text style={{ color: colors.mutedForeground, fontFamily: font.family.monoMedium, fontSize: font.size.sm }}>
-              mm/min
+              {unit}
             </Text>
           </View>
         ) : (
@@ -93,20 +104,20 @@ export function SpeedControl({
             onPress={startEdit}
             hitSlop={8}
             accessibilityRole="button"
-            accessibilityLabel={`Speed ${shown} mm per minute, tap to type an exact value`}
+            accessibilityLabel={`Speed ${shown} ${percent ? 'percent' : 'mm per minute'}, tap to type an exact value`}
             style={({ pressed }) => [styles.readout, { opacity: pressed ? 0.6 : 1 }]}
           >
             <Text style={{ color: colors.foreground, fontFamily: font.family.monoMedium, fontSize: font.size.sm }}>
-              {shown} mm/min{feedOverride !== 100 ? ` · ${feedOverride}%` : ''}
+              {percent ? `${shown}%` : `${shown} mm/min${feedOverride !== 100 ? ` · ${feedOverride}%` : ''}`}
             </Text>
           </Pressable>
         )}
       </View>
       <Slider
         value={shown}
-        min={MIN}
-        max={MAX}
-        step={50}
+        min={min}
+        max={max}
+        step={percent ? PCT.step : 50}
         onChange={(v) => {
           if (holdRef.current) clearTimeout(holdRef.current)
           setDrag(v)

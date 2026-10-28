@@ -12,6 +12,8 @@ import { Screen } from '../components/Screen'
 import { Sheet, SheetButton, useSheetWidth } from '../components/Sheet'
 import { thumbGrid, SCROLL_BOTTOM_PAD } from '../lib/layout'
 import { PatternThumb } from '../components/PatternThumb'
+import { useIsRect, useThumbFrame, type Frame } from '../components/RectTable'
+import { isGcode } from '../lib/gcode'
 import { EmptyState } from '../components/EmptyState'
 import { bareName, useLibrary, type PlaylistCover } from '../stores/useLibrary'
 import { usePrefs, type PauseUnit, type PlaylistPref } from '../stores/usePrefs'
@@ -44,7 +46,7 @@ const DEFAULT_PREF: PlaylistPref = { loop: true, shuffle: true, pauseTime: 3, pa
 /** Grid size from the presenting sheet's width: useSheetWidth only sees the
  * sheet from inside its tree, so the grids render through this. */
 function SheetGridSize({ children }: { children: (g: { cols: number; thumb: number }) => React.ReactElement }) {
-  return children(thumbGrid(useSheetWidth()))
+  return children(thumbGrid(useSheetWidth(), spacing.md, useIsRect()))
 }
 
 export function PlaylistsScreen() {
@@ -91,10 +93,12 @@ export function PlaylistsScreen() {
   const [pref, setPref] = useState<PlaylistPref>(DEFAULT_PREF)
 
   // "Copy to another table" — other saved (non-demo) tables we can write this
-  // playlist's .txt to. Demo tables aren't real SD targets.
+  // playlist's .txt to. Demo tables aren't real SD targets, and a table of the
+  // other shape can't play any of it (.thr vs G-code; a saved size = rectangular).
+  const rect = useIsRect()
   const copyTargets = useMemo(
-    () => boards.filter((b) => b.id !== activeId && !isDemoBase(b.base)),
-    [boards, activeId]
+    () => boards.filter((b) => b.id !== activeId && !isDemoBase(b.base) && !!b.travel === rect),
+    [boards, activeId, rect]
   )
 
   // Update one or more options and remember them for the open playlist. Saved
@@ -108,6 +112,7 @@ export function PlaylistsScreen() {
   // Pattern picker state. The on-table list comes from the shared store (fetched
   // once at startup) — the picker never triggers its own manifest read.
   const tablePatterns = useLibrary((s) => s.tablePatterns)
+  const frame = useThumbFrame()
   const loadTable = useLibrary((s) => s.loadTable)
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [pickerQuery, setPickerQuery] = useState('')
@@ -269,9 +274,11 @@ export function PlaylistsScreen() {
 
   const pickerVisible = useMemo(() => {
     const q = pickerQuery.trim().toLowerCase()
-    const list = q ? tablePatterns.filter((p) => p.toLowerCase().includes(q)) : tablePatterns
+    // Only what this table can draw: G-code on a rectangular table, .thr on a round one.
+    const playable = tablePatterns.filter((p) => isGcode(p) === rect)
+    const list = q ? playable.filter((p) => p.toLowerCase().includes(q)) : playable
     return [...list].sort((a, b) => a.localeCompare(b))
-  }, [tablePatterns, pickerQuery])
+  }, [tablePatterns, pickerQuery, rect])
 
   const allPickedVisible = pickerVisible.length > 0 && pickerVisible.every((p) => picked.has(p))
 
@@ -541,7 +548,7 @@ export function PlaylistsScreen() {
                   }
                   renderItem={({ item, index }) => (
                     <View style={[styles.gridCell, { flex: 1 / cols }]}>
-                      <View style={[styles.gridThumb, { width: thumb, height: thumb, borderRadius: thumb / 2, backgroundColor: colors.card, borderColor: colors.border }]}>
+                      <View style={[styles.gridThumb, frame(thumb), { backgroundColor: colors.card, borderColor: colors.border }]}>
                         <PatternThumb name={item} size={thumb - 4} />
                         {/* Neutral, not ember: removing is undone by discarding the edit. */}
                         <Pressable onPress={() => removeItem(index)} hitSlop={8} style={[styles.removeBadge, { backgroundColor: colors.foreground }]}>
@@ -663,7 +670,7 @@ export function PlaylistsScreen() {
                         <View
                           style={[
                             styles.gridThumb,
-                            { width: thumb, height: thumb, borderRadius: thumb / 2 },
+                            frame(thumb),
                             { backgroundColor: colors.card, borderColor: on ? colors.primary : 'transparent' },
                           ]}
                         >
@@ -695,21 +702,25 @@ const COVER_STEP = 14
 const COVER_W = COVER_D + COVER_STEP * 2
 
 /** A playlist's cover: its first patterns as overlapping sand discs. Before the
- * app has seen what's in it (never opened here), a plain disc. */
+ * app has seen what's in it (never opened here), a plain disc. A rectangular
+ * table's patterns stack as rectangles, stepping down as well as right. */
 function Cover({ cover }: { cover?: PlaylistCover }): React.JSX.Element {
   const colors = useTheme((s) => s.colors)
+  const rect = useIsRect()
+  const f: Frame = useThumbFrame()(rect ? COVER_W - COVER_STEP : COVER_D)
   const first = cover?.first ?? []
+  const at = (k: number) => (rect ? { left: k * (COVER_STEP / 2), top: k * 6 } : { left: k * COVER_STEP })
   return (
     <View style={styles.cover}>
       {first.length === 0 ? (
-        <View style={[styles.coverDisc, { left: 0, backgroundColor: colors.cardElevated, borderColor: colors.card }]}>
-          <MaterialIcons name="queue-music" size={20} color={colors.mutedForeground} />
+        <View style={[styles.coverDisc, f, at(0), { backgroundColor: colors.cardElevated, borderColor: colors.card }]}>
+          <MaterialIcons name="queue-music" size={Math.min(20, f.height - 6)} color={colors.mutedForeground} />
         </View>
       ) : (
         // Drawn back to front, so the first pattern sits on top at the left.
         [...first].reverse().map((p, i) => (
-          <View key={p + i} style={[styles.coverDisc, { left: (first.length - 1 - i) * COVER_STEP, backgroundColor: colors.cardElevated, borderColor: colors.card }]}>
-            <PatternThumb name={p} size={COVER_D - 6} />
+          <View key={p + i} style={[styles.coverDisc, f, at(first.length - 1 - i), { backgroundColor: colors.cardElevated, borderColor: colors.card }]}>
+            <PatternThumb name={p} size={f.width - 6} />
           </View>
         ))
       )}
@@ -722,7 +733,7 @@ const styles = StyleSheet.create({
   subRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   liveDot: { width: 7, height: 7, borderRadius: 4 },
   cover: { width: COVER_W, height: COVER_D },
-  coverDisc: { position: 'absolute', top: 0, width: COVER_D, height: COVER_D, borderRadius: COVER_D / 2, borderWidth: 2, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  coverDisc: { position: 'absolute', top: 0, borderWidth: 2, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
   footer: { borderRadius: radius.lg, borderWidth: 1, overflow: 'hidden', marginTop: spacing.sm },
   footerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 48, paddingHorizontal: spacing.md },
   rowName: { fontSize: font.size.md, fontWeight: font.weight.medium },

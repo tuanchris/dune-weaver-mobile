@@ -13,9 +13,10 @@ export const SCROLL_BOTTOM_PAD = NATIVE_ACCESSORY ? 160 : spacing.xl
 
 /** Thumbnail grid for a container `width` wide (padded by `gap` each side):
  * ~140 pt per column, never fewer than 3 (3 at 375 pt, 7 at 1024 pt).
- * Screens pass the window width; grids inside a Sheet pass useSheetWidth(). */
-export function thumbGrid(width: number, gap: number = spacing.md): { cols: number; thumb: number } {
+ * Screens pass the window width; grids inside a Sheet pass useSheetWidth().
+ * A rectangular table's tiles are wide and short (`rect`): ~190 pt, min 2. */
+export function thumbGrid(width: number, gap: number = spacing.md, rect = false): { cols: number; thumb: number } {
   const inner = width - gap * 2
-  const cols = Math.max(3, Math.floor(inner / 140))
+  const cols = rect ? Math.max(2, Math.floor(inner / 190)) : Math.max(3, Math.floor(inner / 140))
   return { cols, thumb: Math.floor((inner - gap * (cols - 1)) / cols) }
 }

@@ -21,6 +21,11 @@ export interface Board {
    * every request as X-Sand-Key (see registerKeyLookup in board.ts). Stored
    * locally on this phone only. */
   key?: string
+  /** A rectangular table's size in mm ([x, y] travel), read off the board
+   * (board.travel) and kept so the table draws right before the first read —
+   * e.g. when the app opens mid-pattern, when the read is refused. Only
+   * rectangular tables have one. */
+  travel?: [number, number]
 }
 
 interface Persisted {
@@ -46,6 +51,8 @@ interface BoardsStore {
    * with this base — lets manually-added (IP-only) boards gain the stable
    * hardware ID so discovery dedupe and auto-relocate work for them too. */
   noteIdentity: (base: string, mac?: string | null, hostname?: string | null) => void
+  /** Remember a rectangular table's size (no-op when unchanged). */
+  setTravel: (base: string, travel: [number, number]) => void
   setActive: (id: string) => void
   getActive: () => Board | null
   getActiveBase: () => string | null
@@ -140,6 +147,16 @@ export const useBoards = create<BoardsStore>((set, get) => ({
       if ((!m || b.mac === m) && (!hostname || b.hostname === hostname)) return b
       return { ...b, mac: m ?? b.mac, hostname: hostname ?? b.hostname }
     })
+    if (boards.some((b, i) => b !== get().boards[i])) {
+      set({ boards })
+      persist(boards, get().activeId)
+    }
+  },
+
+  setTravel: (base, travel) => {
+    const boards = get().boards.map((b) =>
+      b.base === base && (b.travel?.[0] !== travel[0] || b.travel?.[1] !== travel[1]) ? { ...b, travel } : b,
+    )
     if (boards.some((b, i) => b !== get().boards[i])) {
       set({ boards })
       persist(boards, get().activeId)

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { board } from '../api/board'
-import { translateStatus, isActive, type Status } from '../api/status'
+import { translateStatus, isActive, isBusy, type Status } from '../api/status'
 import { useBoards } from './useBoards'
 import { log } from './useAppLog'
 
@@ -49,6 +49,34 @@ let generation = 0 // bumps on every setBase to invalidate in-flight loops
 let failCount = 0 // consecutive failed polls, for unreachable backoff
 let lowHeap = false // last poll saw the board under heap pressure
 
+// A rectangular table's size, read once per app session and again after the
+// table restarts (a new config only takes effect on a restart: one booted on
+// FluidNC's defaults reported 1000 x 1000, and the app kept drawing squares
+// after it came back as 725 x 305). Read only while idle (`$/` reads 503 while
+// moving); a failed read retries a minute later, the saved size standing meanwhile.
+const travelRead = new Set<string>()
+const travelTried = new Map<string, number>()
+const lastUptime = new Map<string, number>()
+function noteUptime(base: string, uptime: number | null) {
+  if (uptime == null) return
+  const prev = lastUptime.get(base)
+  lastUptime.set(base, uptime)
+  if (prev != null && uptime < prev) {
+    travelRead.delete(base)
+    travelTried.delete(base)
+  }
+}
+async function learnTravel(base: string) {
+  if (travelRead.has(base) || Date.now() - (travelTried.get(base) ?? 0) < 60_000) return
+  travelTried.set(base, Date.now())
+  try {
+    useBoards.getState().setTravel(base, await board.travel(base))
+    travelRead.add(base)
+  } catch (e) {
+    log.warn('table', `Couldn't read the table size: ${(e as Error)?.message ?? e}`)
+  }
+}
+
 async function pollOnce(base: string, gen: number, set: (p: Partial<StatusStore>) => void, get: () => StatusStore) {
   if (gen !== generation) return
   const started = Date.now()
@@ -65,6 +93,8 @@ async function pollOnce(base: string, gen: number, set: (p: Partial<StatusStore>
     if (status.mac || status.hostname) {
       useBoards.getState().noteIdentity(base, status.mac, status.hostname)
     }
+    noteUptime(base, status.uptime)
+    if (status.cartesian && !isBusy(status)) void learnTravel(base)
   } catch (e) {
     if (gen !== generation) return
     failCount++

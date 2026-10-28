@@ -3,6 +3,8 @@ import Svg, { Circle, Path, G } from 'react-native-svg'
 import { useTheme } from '../stores/useTheme'
 import { useLibrary, patternKey } from '../stores/useLibrary'
 import { buildPath } from '../lib/patternGeometry'
+import { isGcode } from '../lib/gcode'
+import { RectPattern } from './RectTable'
 
 interface Props {
   name: string | null | undefined
@@ -19,7 +21,12 @@ interface Props {
  * (showRings on). Live geometry only — bundled patterns show their webp via
  * <PatternThumb>; this is the fallback for imported / unbundled ones.
  */
-export function PolarPattern({ name, size, showRings, step = 1 }: Props) {
+export function PolarPattern(props: Props) {
+  // A G-code pattern belongs to a rectangular table: draw it on one.
+  return isGcode(props.name) ? <RectPattern name={props.name} size={props.size} step={props.step} /> : <DiscPattern {...props} />
+}
+
+function DiscPattern({ name, size, showRings, step = 1 }: Props) {
   const colors = useTheme((s) => s.colors)
   const key = patternKey(name)
   // Geometry is derived from the decimated .thr (bundled or imported), loaded

@@ -3,8 +3,12 @@ import { View } from 'react-native'
 import Svg, { Path } from 'react-native-svg'
 import { Directory, File, Paths } from 'expo-file-system'
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator'
-import { useLibrary } from '../stores/useLibrary'
+import { useLibrary, type Point } from '../stores/useLibrary'
 import { buildPath } from '../lib/patternGeometry'
+import { isGcode } from '../lib/gcode'
+import { rectPathD } from './RectTable'
+// @ts-ignore - shared plain-ESM module (the build script renders the bundled previews with it)
+import { gcodeExtent, PREVIEW_WIDTH, previewStroke } from '../lib/gcodeGeometry.mjs'
 
 // Mirror dw's preview.py: render the theta-rho path as a thin black line on a
 // transparent square (no rings), supersample, downscale, and save a WEBP — the
@@ -57,11 +61,12 @@ function writeImageFile(dir: Directory, fileName: string, b64: string): string {
 }
 
 /**
- * Take the base64 PNG from toDataURL, re-encode it to WEBP at OUT_SIZE via
+ * Take the base64 PNG from toDataURL, re-encode it at `out` size via
  * expo-image-manipulator (which needs a file uri, not a data uri), persist it in
- * document storage, and return the webp uri. Cleans up the temp PNG.
+ * document storage, and return its uri. Cleans up the temp PNG. Round patterns
+ * keep WEBP (like dw's bundled previews); G-code saves PNG, like its bundled ones.
  */
-async function pngBase64ToWebp(name: string, pngB64: string): Promise<string> {
+async function saveCapture(name: string, pngB64: string, out: { width: number; height: number; png: boolean }): Promise<string> {
   const tmpDir = new Directory(Paths.cache, 'dw-preview-tmp')
   const pngFile = `${safeName(name)}.png`
   // Reuse writeImageFile for the temp PNG (also rejects an empty capture early).
@@ -69,11 +74,13 @@ async function pngBase64ToWebp(name: string, pngB64: string): Promise<string> {
   const tmp = new File(tmpDir, pngFile)
   try {
     const rendered = await ImageManipulator.manipulate(tmp.uri)
-      .resize({ width: OUT_SIZE, height: OUT_SIZE })
+      .resize({ width: out.width, height: out.height })
       .renderAsync()
-    const out = await rendered.saveAsync({ format: SaveFormat.WEBP, compress: 0.85, base64: true })
+    const saved = await rendered.saveAsync(
+      out.png ? { format: SaveFormat.PNG, base64: true } : { format: SaveFormat.WEBP, compress: 0.85, base64: true }
+    )
     const previews = new Directory(Paths.document, 'previews')
-    return writeImageFile(previews, `${safeName(name)}.webp`, out.base64 ?? '')
+    return writeImageFile(previews, `${safeName(name)}.${out.png ? 'png' : 'webp'}`, saved.base64 ?? '')
   } finally {
     try {
       if (tmp.exists) tmp.delete()
@@ -107,6 +114,7 @@ export function PreviewGenerator() {
   // (e.g. storage cleared) — self-heals a stale path instead of a blank tile.
   const target = patterns.find((p) => !attempted.current.has(p.name) && !previewExists(p.previewUri))
   const pts = target ? xyCache[target.name] : null
+  const view = target && pts ? renderView(target.name, pts) : null
 
   // Load geometry for the current target if needed.
   useEffect(() => {
@@ -122,6 +130,7 @@ export function PreviewGenerator() {
     if (rasterized.current || !svgRef.current || !target) return
     rasterized.current = true
     const name = target.name
+    const out = view!.out
     try {
       svgRef.current.toDataURL((b64: string) => {
         attempted.current.add(name)
@@ -129,7 +138,7 @@ export function PreviewGenerator() {
         // advance to the next target whether it succeeds or fails.
         void (async () => {
           try {
-            if (b64) setPreviewUri(name, await pngBase64ToWebp(name, b64))
+            if (b64) setPreviewUri(name, await saveCapture(name, b64, out))
           } catch {
             // leave it without a preview -> live SVG fallback
           } finally {
@@ -143,17 +152,41 @@ export function PreviewGenerator() {
     }
   }
 
-  if (!target || !pts) return null
-  // Render at RENDER_SIZE (supersampled); strokeWidth scales with it so the
-  // downscaled line lands at STROKE_OUT px in the final OUT_SIZE webp.
-  const STROKE_OUT = 0.9 // effective line width at OUT_SIZE
-  const d = buildPath(pts, RENDER_SIZE, { pad: PAD })
-  const stroke = STROKE_OUT * (RENDER_SIZE / OUT_SIZE)
+  if (!view) return null
   return (
-    <View style={{ position: 'absolute', left: -10000, top: 0, width: RENDER_SIZE, height: RENDER_SIZE, opacity: 0 }} pointerEvents="none">
-      <Svg ref={svgRef} width={RENDER_SIZE} height={RENDER_SIZE} onLayout={rasterize}>
-        <Path d={d} stroke="#000000" strokeWidth={stroke} fill="none" strokeLinejoin="round" strokeLinecap="round" />
+    <View style={{ position: 'absolute', left: -10000, top: 0, width: view.width, height: view.height, opacity: 0 }} pointerEvents="none">
+      <Svg ref={svgRef} width={view.width} height={view.height} onLayout={rasterize}>
+        <Path d={view.d} stroke="#000000" strokeWidth={view.stroke} fill="none" strokeLinejoin="round" strokeLinecap="round" />
       </Svg>
     </View>
   )
+}
+
+/** What to draw off-screen for one pattern, and the image to save from it. */
+function renderView(name: string, pts: Point[]) {
+  if (isGcode(name)) {
+    // Like the bundled G-code previews (scripts/rectPreview.mjs): the drawing's
+    // own extent, PREVIEW_WIDTH px wide. Laid out at that many POINTS, the
+    // capture comes back supersampled by the screen scale, then downscaled.
+    const [W, H] = (gcodeExtent(pts) as [number, number] | null) ?? [2, 1]
+    const width = PREVIEW_WIDTH
+    const height = Math.round((width * H) / W)
+    return {
+      width,
+      height,
+      d: rectPathD(pts, [W, H], width, height),
+      stroke: previewStroke(width),
+      out: { width, height, png: true },
+    }
+  }
+  // Render at RENDER_SIZE (supersampled); strokeWidth scales with it so the
+  // downscaled line lands at STROKE_OUT px in the final OUT_SIZE webp.
+  const STROKE_OUT = 0.9 // effective line width at OUT_SIZE
+  return {
+    width: RENDER_SIZE,
+    height: RENDER_SIZE,
+    d: buildPath(pts, RENDER_SIZE, { pad: PAD }),
+    stroke: STROKE_OUT * (RENDER_SIZE / OUT_SIZE),
+    out: { width: OUT_SIZE, height: OUT_SIZE, png: false },
+  }
 }

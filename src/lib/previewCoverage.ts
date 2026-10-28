@@ -15,7 +15,7 @@ export function hasThumbnail(
   previews: Record<string, string>,
   importedNames: Set<string>,
 ): boolean {
-  if (previewSource(name).kind === 'webp') return true
+  if (previewSource(name).kind === 'image') return true
   if (previews[previewKey(name)]) return true
   return hasBundledThr(name) || importedNames.has(bareName(name))
 }

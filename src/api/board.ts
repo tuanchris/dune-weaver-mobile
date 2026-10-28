@@ -76,10 +76,13 @@ export const CLEAR_MODES: { mode: ClearMode; label: string }[] = [
 /** One line on what each clear does — under the choice wherever it's picked (mirrors dw's preExecutionOptions copy). */
 export const CLEAR_DESC: Record<ClearMode, string> = {
   none: 'Start drawing immediately without clearing the sand first',
-  adaptive: 'Automatically picks the best clear direction based on where the ball is',
-  in: 'Spirals outward from the center to erase the current pattern',
-  out: 'Spirals inward from the edge to erase the current pattern',
-  sideway: 'Sweeps side-to-side across the sand to erase the current pattern',
+  // Shape-neutral: true on round tables (spiral clears) and rectangular ones
+  // (the G-code wipes their config names), where adaptive has no start radius
+  // to go by and picks at random.
+  adaptive: 'Picks from center or from edge to suit where the pattern starts (at random on a rectangular table)',
+  in: 'Erases the current pattern from the center outward',
+  out: 'Erases the current pattern from the edge inward',
+  sideway: 'Sweeps side to side across the sand to erase the current pattern',
   random: 'Picks a random clear direction each run',
 }
 
@@ -646,12 +649,38 @@ const realBoard = {
    * Idle persists to $THR/Feed; running is in-memory for the current pattern.
    */
   setFeedLive: (base: string, mmPerMin: number) => hit(base, `/sand_feed?mm=${clampInt(mmPerMin, 10, 500)}`),
+  /** Speed as a percent override — the only speed a rectangular table has
+   * (its G-code carries its own feeds; `mm=` answers 400 there). */
+  setFeedPct: (base: string, pct: number) => hit(base, `/sand_feed?pct=${clampInt(pct, 10, 200)}`),
 
   // ---- Manual positioning (between patterns; needs Idle + homed, else HTTP 409) ----
   /** Jog the ball to the center (ρ=0). */
   moveToCenter: (base: string) => hit(base, '/sand_goto?rho=0'),
   /** Jog the ball to the perimeter (ρ=1). */
   moveToPerimeter: (base: string) => hit(base, '/sand_goto?rho=1'),
+  /** Rectangular tables: jog to machine mm (the firmware clamps to its travel). */
+  moveToXY: (base: string, x: number, y: number) => hit(base, `/sand_goto?x=${x.toFixed(1)}&y=${y.toFixed(1)}`),
+  /** A rectangular table's size in mm — its configured X/Y travel, the same
+   * envelope the firmware's soft limits and goto clamp use. `$/` reads answer
+   * in the body ("$/axes/x/max_travel_mm=735.000"), but 503 while moving. */
+  travel: async (base: string): Promise<[number, number]> => {
+    const read = async (axis: 'x' | 'y') => {
+      // Not getText: its per-segment path encoding would mangle the query.
+      const { signal, cancel } = withTimeout(5000)
+      let text: string
+      try {
+        const res = await fetch(`${base}/command?plain=${encodeURIComponent(`$/axes/${axis}/max_travel_mm`)}`, { signal, headers: keyHeaders(base) })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        text = await res.text()
+      } finally {
+        cancel()
+      }
+      const n = Number(/=\s*([\d.]+)/.exec(text)?.[1])
+      if (!(n > 0)) throw new Error(`no ${axis} travel in "${text.trim()}"`)
+      return n
+    }
+    return [await read('x'), await read('y')]
+  },
   /** Rotate the arm to an absolute angle (radians, continuous — same frame as
    * status.theta), parking the ball at the perimeter. Powers the crash-homing
    * align-orientation nudges. 409 while a previous jog is still finishing. */
@@ -813,8 +842,20 @@ const realBoard = {
   wifiStandalone: (base: string) => postWifi(base, '/wifi_standalone'),
 
   // ---- System ----
-  /** Clear an Alarm without homing ($X). */
-  unlock: (base: string) => command(base, '$X'),
+  /** Clear an Alarm without homing. A soft/hard-limit alarm is FluidNC's
+   * Critical state, which only a reset (Ctrl-X) clears: `$X` answers Ok there
+   * and changes nothing. So reset first (/restart_reload; it redirects to a 503
+   * page, so its status means nothing), then `$X` for every other alarm. Only
+   * offered in Alarm: a reset mid-move aborts it and loses position. */
+  unlock: async (base: string) => {
+    const { signal, cancel } = withTimeout(6000)
+    try {
+      await fetch(`${base}/restart_reload`, { signal, headers: keyHeaders(base) })
+    } finally {
+      cancel()
+    }
+    await command(base, '$X')
+  },
   /** Reboot the controller ($Bye); it needs ~25-30s to rejoin Wi-Fi. */
   reboot: (base: string) => command(base, '$Bye'),
   /**

@@ -30,7 +30,9 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
   `$Playlist/Run|Stop|Skip`, `$Playlist/Mode|Shuffle|PauseTime|PauseFromStart|ClearPattern|AutoHome=`,
   `$THR/Feed=`, `$LED/Effect|Palette|Color|Color2|Brightness|Speed|Intensity|Count|Order|RunEffect|IdleEffect=`,
   `$Sands/Enabled|Slots=` (quiet hours), `$Hostname=` (rename, fw ≥ v0.1.18 — see the rename
-  bullet), `$X` (unlock from Alarm), `$Bye` (reboot). Built with
+  bullet), `$X` (unlock from Alarm; the app's Unlock first sends the Ctrl-X reset via
+  `GET /restart_reload`, because a soft/hard-limit alarm is FluidNC's Critical state, which `$X`
+  answers Ok and leaves alone; the route redirects to a 503 page, so its status is ignored), `$Bye` (reboot). Built with
   `encodeURIComponent` on the whole `plain` value (the firmware `arg("plain")` URL-decodes it).
   EnumSetting values are case-insensitive (`strcasecmp`); booleans are `ON`/`OFF`.
 - Files: `POST /upload` multipart (file part's **filename = full SD path**, e.g. `/patterns/x.thr`;
@@ -160,6 +162,54 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
 - `.thr` files are `"<theta> <rho>"` lines (theta radians, possibly hundreds of turns — converting to
   xy destroys the winding, so we never store xy for anything that gets pushed back).
 
+### Rectangular (CoreXY) tables (firmware ≥ v0.2.1-rc3 with `kinematics: CoreXY`)
+The firmware plays plain G-code (`.gcode`/`.gc`/`.nc`, e.g. Sandify output) through the same run /
+playlist / clear commands; `.thr` plays only on round tables. On such a table `/sand_status` carries
+`kinematics` and **`x`/`y` in machine mm instead of `theta`/`rho`**, and `feed` is 0.
+- `translateStatus` sets `Status.cartesian` (= the status has `x`) plus `x`/`y`; `theta`/`rho` read 0.
+  `useIsRect()` (`components/RectTable.tsx`) is the UI's switch: live status, else "has a saved size".
+- **Size** = the board's `$/axes/x|y/max_travel_mm` (`board.travel`, a `/command` `$/` read that
+  answers in the body and 503s while moving). `useStatus` reads it once per app session per table, and AGAIN after the table restarts (uptime
+  going backwards: a new config only lands on a restart — one booted on FluidNC's defaults reported
+  1000 × 1000 and the frames stayed square after it came back),
+  while idle (60 s retry) and saves it on the board (`Board.travel`), so it draws right offline or
+  mid-pattern. Not typed in: it's the envelope the firmware's soft limits and goto clamp use.
+- Drawing (`RectTable.tsx`): G-code's y points UP (machine 0,0 = bottom-left), like Sandify's
+  preview. `TableRect` is Control's hero. Every list frames a rectangular table's patterns in
+  `useThumbFrame()` (the table's own proportions, not a disc). Inside it, `PatternThumb` shows the
+  pattern's preview IMAGE (`RectPreview`: the bundled png, or the one rendered on import) and
+  falls back to `RectPattern` (live SVG of the geometry; `PolarPattern` dispatches G-code names to
+  it, which also covers `LiveDrawing`'s fallback). Image and live drawing share
+  `lib/gcodeGeometry.mjs`: the viewer's 96% inset and `max(1, width/600)` stroke. Every G-code
+  view (preview image, live drawing, the Fast player, Now Playing) frames a pattern by its OWN
+  extent (0,0 to its max x/y), never the table's travel: some of DWCX's own files reach y 320 on
+  its 307 mm travel, and framing by travel cut their tops off. Geometry is
+  `parseGcode` (`lib/gcode.ts`, mm points, decimated) via `useLibrary.ensureXY`, from the bundled
+  or imported file.
+- Browse lists only what the table can draw (`isGcode(name) === rect`): on a rectangle that is the
+  bundled G-code set (`bundledNames(rect)`, see "Bundled defaults") + imports + the card's G-code;
+  the playlist picker lists the card's. Import takes G-code there (`importThr(rect)`), and the
+  missing-previews banner stays off (every bundled G-code pattern has its preview, and the card's
+  preview bundle is `.thr`-only).
+- Control: Clear tiles are the card's `clear_*` G-code files (no stock set — the firmware's own
+  clears point at whatever the config / `$Playlist/ClearIn|Out` name), Move ball is Center only
+  (`/sand_goto?x=&y=`; Home already parks in the corner), telemetry is X/Y mm.
+- Speed is the override PERCENT (`SpeedControl percent`, `/sand_feed?pct=` 10–200) — `mm=` 400s.
+- Settings hides Homing (crash mode, θ offset and orientation are polar; CoreXY always `$H`s), and
+  Playback's clear card hides Clear speed (`$Playlist/ClearSpeed` is read only by ThetaRho).
+- LEDs: `LedRing` draws the strip round the RECTANGLE (`rectPoint`: evenly spaced on a rounded
+  rect from 12 o'clock, clockwise — the ring's order), `size` = width; the gallery goes 2 columns.
+  The Ball tracker mode is hidden: the firmware's ball effect follows θ and, without ThetaRho,
+  draws only its background — `ledSim.ts` mirrors that exit (`ball.angle < 0`) and
+  `ringDots` too (`ball.at < 0`).
+- Favorites are shared by every table, so the Favorites-playlist sync writes only the active
+  table's kind (`isGcode(k) === status.cartesian`) — the firmware skips unplayable entries and 5 in
+  a row cancel the run. Browse's Favorites filter counts only visible kinds; Copy-to-table offers
+  only tables of the same shape (`!!Board.travel === rect`).
+- Control's clear tiles match `clear_*` AND `wipe_*` G-code (the firmware's CoreXY config template
+  names its wipes `wipe_in/out/sideway.gcode`). `CLEAR_DESC` is worded to hold on both shapes;
+  adaptive is random on a rectangle (G-code has no first ρ).
+
 ## Pattern library + previews + upload
 The app is the source of truth for LOCAL patterns; it never reads pattern DATA (.thr) back off the SD
 for previews. Card-only patterns (bulk-loaded via the website's SD Card Pattern Manager) get their
@@ -168,8 +218,24 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   `assets/thr/<name>.thr` (decimated to `MAX_POINTS=15000`, the pushable copy) + `assets/previews/<name>.webp`
   (dw's pre-rendered preview) + `assets/pattern-manifest.js` (static `require()` maps `THR`/`PREVIEW`).
   Metro needs literal require paths, so the manifest is generated.
-- **Previews**: bundled patterns render their **webp** (`PatternThumb` → `<Image>`); imported/unbundled
-  render **live SVG** from geometry (`PolarPattern`, geometry derived on demand by `useLibrary.ensureXY`).
+- **Bundled G-code (rectangular tables)**: the same run copies EVERY top-level `.gcode`/`.gc`/`.nc`
+  in `../dwcx-patterns/patterns/` (the Sandify-made set, see its README) verbatim to
+  `assets/gcode/` and RENDERS each one's preview into `assets/gcode-previews/<stem>.png`
+  (`scripts/rectPreview.mjs`, no dependencies), mapped as `GCODE`/`GCODE_PREVIEW`. Adding a
+  pattern to the app = drop the file there and re-run `npm run gen-geometry` (Node 20; the
+  round assets come out byte-identical). The previews follow dune-weaver-viewer's thumbnails
+  (`mac/Shared/ThrPath.swift`): the finished pattern, inset to 96%, stroked at `max(1, w/600)` px
+  with round caps and joins. The image is ONLY the grooves, black on transparent, so the tile's
+  frame is the table and `tintColor` (the theme's ink) makes it follow light/dark like an SF
+  Symbol. Format per the HIG (`images.md`): an 8-bit PALETTE png (256 alphas of black, 1
+  byte/px) with an sRGB chunk, 1080 px wide = the 360 pt detail view at @3x. The preview file
+  drops the pattern extension (`x.png`, never `x.gcode.png` — a second assetExt in a name trips
+  Metro's dev server, like the `.thr` webps). `.gcode`/`.gc`/`.nc` are Metro `assetExts` here AND
+  in `../dune-weaver-desktop/metro.config.js`.
+- **Previews**: bundled patterns render their image (`PatternThumb` → `<Image>`); imported/unbundled
+  render **live SVG** from geometry (`PolarPattern`, geometry derived on demand by `useLibrary.ensureXY`)
+  until `PreviewGenerator` has rendered theirs (once, on import: a webp for `.thr`, a png at the
+  bundled previews' size, inset and stroke for G-code).
 - **Import**: `expo-document-picker` → parse/validate → decimate → save to `Paths.document/thr/` →
   `useLibrary.addImported`. See `src/lib/importPattern.ts`.
 - **Push to table**: read the decimated `.thr` (bundled asset via `expo-asset`, or imported file) and
@@ -322,7 +388,35 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
 - `src/screens/` — `Browse` (one grid: bundled + imported + on-table patterns deduped by name,
   circular thumbs with 13 pt names; once the table's list is known, a small phone glyph marks the
   tiles the table DOESN'T have. Search row = search · Show (filter + sort) · import "+" — plain,
-  not sand: sand there means a filter is on. The detail sheet: the pattern on its disc, a line
+  not sand: sand there means a filter is on. The detail sheet: the pattern on its frame (disc or the table's rectangle). TAPPING it
+  (a play badge on the frame says it can be tapped, only when the app holds a copy) opens the
+  sheet's `preview` sub-page (a page, not a second sheet — one at a time) with a FAST PLAYBACK
+  PREVIEW. On a RECTANGULAR table that page also offers full screen — a tap on the drawing, or
+  the full-screen button by the controls — never on its own: `FullscreenPlayer`, sideways so a
+  wide pattern gets the phone's length. The app is portrait-only with no native orientation
+  module, so on an upright window the player's content is laid out landscape and turned 90°
+  (turn the phone left to watch; safe-area insets mapped to the turned sides), unturned when
+  the window is already landscape (iPad, desktop). It's its own Modal, so Browse closes the
+  pattern's sheet, opens the player once `!useAnySheetOpen()`, and reopens the sheet on the preview
+  page after (iOS: from the Modal's `onDismiss`; Android/web stack Modals, so at once), showing
+  the finished drawing rather than replaying it. The player (`PatternPlayer` + `lib/playbackPath.ts`) is a port of
+  dune-weaver-viewer's Fast player (`mac/Shared/PlayerView.swift` + `ThrPath.swift`): the
+  pattern draws itself on the phone as the ball moves at constant speed, 30 s for the whole
+  path at 1×, speeds 0.25–8× (a tap cycles them), play/pause and a scrubber, a frame gap
+  counted as at most 0.1 s, sized to the sheet's width (or the screen's). Nothing reaches the table (its caption
+  says so); it starts playing on open, since the tap asked for it, and play from the end
+  starts over. `.thr` moves are subdivided
+  in theta-rho (0.01 radii) so arcs stay arcs, G-code moves are straight; the path is laid
+  out with the previews' 96% inset, simplified to 0.25 pt in runs of 1024 points (a long
+  spiral is near RDP's worst case), and drawn by `PathDrawing` with a ball in the ink color
+  (not patina: that color means the real table). PERFORMANCE: react-native-svg redraws a
+  whole `<Svg>` on any prop change and strokes by outlining the path
+  (`CGContextReplacePathWithStrokedPath`), so ONE Svg re-stroking the full path each frame (the
+  first version: a moving stroke dash) ran at a few fps. Like the viewer's Ink bitmap, the
+  finished part stays put: pieces of 256 points in static `DoneLayer` Svgs of 16 pieces
+  (memoized; redrawn only when a piece joins), and only the piece in progress + the ball
+  redraw per frame. Only for patterns the app holds (`useLibrary.has`); a
+  card-only one shows its static frame. Then a line
   saying where it lives ("On the table · <folder>" / "On this phone — Play sends it to the table
   first"), then a "Before drawing" ROW (the remembered clear, `CLEAR_MODES` minus Random, picked on
   an in-sheet sub-page with `CLEAR_DESC` under each — the same list as a playlist's clear) above
@@ -441,23 +535,43 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   `Screen`'s `back` row — our own header, not the native nav bar, so safe areas and the iOS 26
   accessory behave as on every tab.
 - `src/components/` — `PolarPattern` (static SVG path preview), `LiveDrawing` (the expanded player's
-  signature view: the full pattern on a disc whose rim is a glowing progress ARC in the `live`
-  color — sweep driven by the same `pct` as the linear bar, so the between-patterns pause fills it
-  too; NO live-ball dot (owner removed it); falls back to `PatternThumb` inside the disc when no
-  local geometry exists), `PatternThumb`, `NowPlayingBar` (three parts in one file:
+  signature view: the pattern DRAWING ITSELF AS THE TABLE DRAWS IT, on a disc (or the table's
+  rectangle) whose rim is a glowing progress ARC in the `live` color — sweep driven by the same
+  `pct` as the linear bar, so the between-patterns pause fills it too. The drawing is
+  dune-weaver-viewer's player (`PathDrawing` + `lib/playbackPath.ts`, shared with Browse's
+  preview player): the grooves so far and a ball at their tip, both in the ink color. The tip
+  goes where the POLLED ball is (`NowPlaying.ball`: status x/y mm on a rectangle, ρ·cosθ/ρ·sinθ
+  on a disc, mapped by the path's own `place`): `locate()` in `playbackPath.ts` takes the point
+  of the path nearest it, searched only within ±2% of the file around `NowPlaying.drawn` =
+  `Status.fraction` (the firmware's UNROUNDED progress, the share of the file's bytes executed,
+  queued moves netted out — `SandStatus::executed_percent`), so a path crossing itself can't
+  jump passes, and where it retraces itself (maze walls) the candidate nearer the file's
+  estimate wins. File share alone was off by ~10–25 mm (its 0.1% steps, planner lag);
+  `npm run check-playback` checks the tip lands on the ball. `useChase` eases the tip along
+  the path's LENGTH across each 1 s poll and snaps on a new pattern. Whole pattern between
+  patterns (`drawn` 1), and shown whole (no ball) while clearing or homing, when the progress
+  is another file's. Still ONE ball, the drawing's tip (the owner removed a separate live-θ/ρ
+  dot). Patterns the app has no copy of fall back to `PatternThumb`), `PatternThumb`, `NowPlayingBar` (three parts in one file:
   `MiniPlayer` = Pause/Resume + Skip only, tap to open (the floating one also swipes up) — **no Stop in the mini bar**
   (a one-tap stop was too easy to hit; the expanded player and Control have one). On iOS 26+
   (`NATIVE_ACCESSORY` in `lib/layout.ts`, mirroring react-native-screens' gate — set it `false` as
   a kill switch) it rides in the native tab bar's `bottomAccessory` (`regular`/`inline` placements,
   set only while something plays — `undefined` removes the glass capsule). The accessory content is
   **rendered twice**, so `MiniPlayer` must stay stateless: no Modals, no fetches, no per-instance
-  clock. Everywhere else `Screen` renders it in flow (`placement="floating"`) as its last child —
+  clock. Both copies draw the SAME content: react-native-screens 4.25.2 (Expo SDK 56's pin) hides
+  the other placement's copy by layer opacity, which UIKit resets, so both can show at once —
+  identical copies then line up exactly (upstream switched to `hidden` in 4.30; revisit on the
+  next Expo SDK). The tab bar never minimizes, so `inline` is the hidden copy anyway. A
+  rectangular table's thumbnail sits on a small framed table (`MiniThumb`). Everywhere else `Screen` renders it in flow (`placement="floating"`) as its last child —
   no absolute positioning, no tab-bar-height constant. `useNowPlaying()` derives the display from
   status + ONE module-level `session` clock (pattern start, last file, pause anchor), updated
   idempotently at render, so every copy agrees on elapsed time. `NowPlayingSheet` is the expanded
-  player (`page` Sheet, queue as a sub-page, keeps Stop), mounted ONCE in App.tsx; its open state
+  player (`fit` Sheet: content height, so a rectangular table's short frame doesn't leave a tall
+  empty page; queue as a sub-page, keeps Stop), mounted ONCE in App.tsx; its open state
   is the `usePlayerSheet` store, and the auto-open on a playlist start waits for
-  `!useAnySheetOpen()`), `Screen` (header = branding logo + table chip/switcher only — no theme or
+  `!useAnySheetOpen()` and for full screen to be closed. On a rectangular table, tapping the
+  drawing (a full-screen badge on its frame) shows the live drawing in `FullscreenPlayer`, sideways,
+  with the same close-sheet → open → reopen-on-dismiss handoff as Browse's preview), `Screen` (header = branding logo + table chip/switcher only — no theme or
   restart buttons; screen title below), `AppTabs` (see the native-tabs gotcha), `Sheet` (see the
   sheets gotcha), `ui.tsx` (`Button`/`Card`/`IconButton`/`Slider`/`Select`/`Segmented`/`Toggle` —
   the `Slider` is PanResponder-based, no native dep), `IdleGate` + `IdleGateBanner`
@@ -521,7 +635,8 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   files (`AppTabs.web.tsx`), so an iOS bundle doesn't cover it. This repo can't export web itself
   (no `react-dom`/`react-native-web`; the desktop metro config resolves this source against its own
   node_modules), and desktop's `npm run web` writes to the desktop app's own `dist/`. There are no
-  unit tests.
+  unit tests; the one check is `npm run check-playback` (`scripts/check-playback-path.mjs`:
+  the Fast-preview path on real bundled patterns — run it after touching `lib/playbackPath.ts`).
 - **Native tab bar** (`src/components/AppTabs.tsx`, iOS + Android): `createNativeBottomTabNavigator`
   from `@react-navigation/bottom-tabs/unstable` — an UNSTABLE API; re-check it after any
   react-navigation / react-native-screens upgrade.
@@ -541,7 +656,8 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   screens list); re-tapping the tab pops it to the list (`tabBarRepeatedPressBehavior` default /
   the JS tabs' tabPress), so any new nested navigator goes under BOTH tab files the same way.
 - **Sheets**: every bottom sheet goes through `src/components/Sheet.tsx`, the ONLY Modal wrapper
-  (`FwUpdateSplash`, a full-screen blocker, is the one other Modal). `variant="page"` = a native
+  (the other Modals are full screen: `FwUpdateSplash`, a blocker, and `FullscreenPlayer` (its
+  content is a render prop), which Browse and the player open only once no sheet is up). `variant="page"` = a native
   iOS `pageSheet` (non-transparent, `backdropColor` = theme background, system swipe-to-dismiss, no
   grabber), a tall JS sheet on Android/web — for editors, pickers, logs. `variant="fit"` = a
   content-height JS sheet everywhere (max 560 wide, centered) with a REAL draggable grabber (the

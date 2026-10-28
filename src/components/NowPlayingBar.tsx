@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { FlatList, PanResponder, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native'
+import { FlatList, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
 import { create } from 'zustand'
 import { board } from '../api/board'
@@ -13,10 +13,12 @@ import { prettyName } from '../lib/patternName'
 import { useBoardAction } from '../lib/useBoardAction'
 import { PatternThumb } from './PatternThumb'
 import { LiveDrawing } from './LiveDrawing'
+import { useIsRect, useThumbFrame } from './RectTable'
 import { patternKey } from '../stores/useLibrary'
 import { IconButton } from './ui'
 import { Sheet, useAnySheetOpen } from './Sheet'
 import { SpeedControl } from './SpeedControl'
+import { FullscreenPlayer } from './FullscreenPlayer'
 import { radius, spacing, font } from '../theme'
 
 /** ms -> "M:SS", or "H:MM:SS" once it's an hour or more (a long between-patterns
@@ -58,6 +60,12 @@ interface NowPlaying {
   name: string
   pausing: boolean
   pct: number
+  /** How much of the pattern on show the table has drawn, 0..1, for the drawing
+   * to follow: all of it between patterns, null (show it whole) while clearing
+   * or homing, when the table's progress is about another file's moves. */
+  drawn: number | null
+  /** Where the ball is, polled: mm on a rectangular table, the unit disc on a round one. */
+  ball: [number, number]
   hasProgress: boolean
   elapsedMs: number
   remainingMs: number | null
@@ -147,7 +155,13 @@ function useNowPlaying(): NowPlaying | null {
     : status.isPaused ? 'Paused'
     : status.state
 
-  return { status, base, displayFile, name: prettyName(displayFile), pausing, pct, hasProgress, elapsedMs, remainingMs, subtitle }
+  const drawn = pausing ? 1 : status.isClearing || status.isHoming ? null : status.fraction
+
+  const ball: [number, number] = status.cartesian
+    ? [status.x, status.y]
+    : [status.rho * Math.cos(status.theta), status.rho * Math.sin(status.theta)]
+
+  return { status, base, displayFile, name: prettyName(displayFile), pausing, pct, drawn, ball, hasProgress, elapsedMs, remainingMs, subtitle }
 }
 
 type Act = ReturnType<typeof useBoardAction>['act']
@@ -173,11 +187,32 @@ function PlayPause({ np, act, size }: { np: NowPlaying; act: Act; size: number }
 // Dynamic Type cap inside the system-sized accessory capsule (it can't grow).
 const CAPSULE_TEXT_MAX = 1.2
 
+/** The playing pattern's thumbnail. A rectangular table's is a short strip, so
+ * it sits on a little table of its own (framed like Browse's tiles) to read. */
+function MiniThumb({ name, size }: { name: string; size: number }) {
+  const rect = useIsRect()
+  const frame = useThumbFrame()
+  const colors = useTheme((s) => s.colors)
+  if (!rect) return <PatternThumb name={name} size={size} />
+  const w = Math.round(size * 1.75)
+  return (
+    <View style={[frame(w), styles.miniRect, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <PatternThumb name={name} size={w - 2} />
+    </View>
+  )
+}
+
 /**
  * The mini player: Pause/Resume + Skip, tap to open the full player. Stop lives
  * only in the expanded player (a one-tap stop here was too easy to hit).
  * Stateless and safe to mount several times (no Modals, no fetches):
  *  - 'regular' / 'inline': iOS 26 tab-bar `bottomAccessory` (the system draws the glass capsule).
+ *    Both copies draw the SAME thing: they're stacked in one capsule and
+ *    react-native-screens 4.25.2 hides one by layer opacity, which UIKit can
+ *    reset, leaving both on screen (fixed upstream in 4.30 with `hidden`; Expo
+ *    SDK 56 pins 4.25.2). Identical copies line up exactly when that happens.
+ *    The tab bar never minimizes (no tabBarMinimizeBehavior), so 'inline' is the
+ *    hidden copy anyway.
  *  - 'floating': in-flow card at the bottom of each Screen everywhere else.
  */
 export function MiniPlayer({ placement }: { placement: 'regular' | 'inline' | 'floating' }) {
@@ -199,28 +234,25 @@ export function MiniPlayer({ placement }: { placement: 'regular' | 'inline' | 'f
   ) : null
 
   if (placement !== 'floating') {
-    const inline = placement === 'inline'
     return (
-      <Pressable onPress={openPlayer} style={[styles.capsule, { gap: inline ? spacing.sm : spacing.md }]}>
-        <PatternThumb name={patternKey(np.displayFile)} size={inline ? 24 : 32} />
+      <Pressable onPress={openPlayer} style={[styles.capsule, { gap: spacing.md }]}>
+        <MiniThumb name={patternKey(np.displayFile)} size={32} />
         <View style={{ flex: 1 }}>
           <Text numberOfLines={1} maxFontSizeMultiplier={CAPSULE_TEXT_MAX} style={[styles.capsuleTitle, { color: colors.foreground }]}>
             {np.name || 'Idle'}
           </Text>
-          {inline ? null : (
-            <Text numberOfLines={1} maxFontSizeMultiplier={CAPSULE_TEXT_MAX} style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>
-              {np.subtitle}
-            </Text>
-          )}
+          <Text numberOfLines={1} maxFontSizeMultiplier={CAPSULE_TEXT_MAX} style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>
+            {np.subtitle}
+          </Text>
         </View>
         <IconButton
           icon={np.status.isPaused ? 'play-arrow' : 'pause'}
-          size={inline ? 24 : 28}
+          size={28}
           color={colors.foreground}
           label={np.status.isPaused ? 'Resume' : 'Pause'}
           onPress={() => togglePause(np, act)}
         />
-        {inline ? null : skipBtn}
+        {skipBtn}
       </Pressable>
     )
   }
@@ -228,7 +260,7 @@ export function MiniPlayer({ placement }: { placement: 'regular' | 'inline' | 'f
   return (
     <View {...swipeUp.panHandlers} style={styles.barWrap}>
       <Pressable onPress={openPlayer} style={[styles.bar, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <PatternThumb name={patternKey(np.displayFile)} size={46} />
+        <MiniThumb name={patternKey(np.displayFile)} size={46} />
         <View style={{ flex: 1 }}>
           <Text numberOfLines={1} style={[styles.title, { color: colors.foreground }]}>{np.name || 'Idle'}</Text>
           <Text numberOfLines={1} style={{ color: colors.mutedForeground, fontSize: font.size.xs }}>{np.subtitle}</Text>
@@ -252,6 +284,9 @@ export function MiniPlayer({ placement }: { placement: 'regular' | 'inline' | 'f
 
 /** The expanded player (+ its queue as a sub-page). Rendered ONCE, from App.tsx. */
 export function NowPlayingSheet() {
+  // A rectangular table's patterns sit on rectangles (wider: they're short).
+  const rect = useIsRect()
+  const frame = useThumbFrame()
   const colors = useTheme((s) => s.colors)
   const scrollLocked = useScrollLock((s) => s.locked)
   const status = useStatus((s) => s.status)
@@ -295,6 +330,19 @@ export function NowPlayingSheet() {
   // a second present, so wait (pending) until no sheet is up.
   // ponytail: waits on EVERY sheet; exclude self if the player ever registers before opening.
   // null = no status yet (launch / table switch reset it): it seeds `prev`, never an edge.
+  // Full screen (rectangular tables): FullscreenPlayer is a Modal of its own and
+  // iOS shows one at a time, so the sheet closes first, the player opens once it's
+  // gone, and the sheet comes back after (on iOS once the player is dismissed).
+  const [full, setFull] = useState(false)
+  const [pendingFull, setPendingFull] = useState(false)
+  const reopenAfterFull = useRef(false)
+  useEffect(() => {
+    if (pendingFull && !anySheetOpen) {
+      setPendingFull(false)
+      setFull(true)
+    }
+  }, [pendingFull, anySheetOpen])
+
   const playlistActive = status ? !!status.playlist : null
   const prevPlaylistActive = useRef<boolean | null>(null)
   const [pendingExpand, setPendingExpand] = useState(false)
@@ -306,11 +354,11 @@ export function NowPlayingSheet() {
   useEffect(() => {
     if (!pendingExpand) return
     if (expanded) setPendingExpand(false)
-    else if (!anySheetOpen) {
+    else if (!anySheetOpen && !full && !pendingFull) {
       setPendingExpand(false)
       setExpanded(true)
     }
-  }, [pendingExpand, anySheetOpen, expanded, setExpanded])
+  }, [pendingExpand, anySheetOpen, expanded, setExpanded, full, pendingFull])
 
   // Playback ended → close (and drop a pending auto-open).
   const active = !!np
@@ -318,6 +366,9 @@ export function NowPlayingSheet() {
     if (active) return
     setExpanded(false)
     setPendingExpand(false)
+    setFull(false)
+    setPendingFull(false)
+    reopenAfterFull.current = false
   }, [active, setExpanded])
   // Every open starts on the player, not wherever the queue was left.
   useEffect(() => {
@@ -345,15 +396,35 @@ export function NowPlayingSheet() {
 
   // Sized so disc + title + up-next + progress + controls + speed fit the sheet
   // without scrolling on a phone (capped, so an iPad sheet doesn't balloon it).
-  const vizSize = Math.min(winWidth - spacing.xl * 2, 290)
+  const vizSize = Math.min(winWidth - spacing.xl * 2, rect ? 340 : 290)
   const close = () => setExpanded(false)
+  const openFull = () => {
+    setPendingFull(true)
+    setExpanded(false)
+  }
+  const closeFull = () => {
+    setFull(false)
+    if (Platform.OS === 'ios') reopenAfterFull.current = true
+    else setExpanded(true)
+  }
+  const afterFull = () => {
+    if (!reopenAfterFull.current) return
+    reopenAfterFull.current = false
+    setExpanded(true)
+  }
+  const timeLine = shown.hasProgress
+    ? `${fmt(shown.elapsedMs)} · ${shown.pct}%${shown.remainingMs != null ? ` · -${fmt(shown.remainingMs)}` : ''}`
+    : `${shown.pct}%`
 
   const queue = page === 'queue'
   return (
+    <>
     <Sheet
       visible={expanded && active}
       onClose={close}
-      variant="page"
+      // Content height, not a full page: a rectangular table's frame is short,
+      // and a page sheet left half the screen empty under the speed slider.
+      variant="fit"
       title={queue ? st.playlist?.name ?? 'Queue' : shown.subtitle}
       onBack={queue ? () => setPage('player') : undefined}
       leading={<IconButton icon="expand-more" size={28} color={colors.foreground} label="Collapse player" onPress={close} />}
@@ -376,8 +447,8 @@ export function NowPlayingSheet() {
           renderItem={({ item, index }) => (
             <View style={[styles.queueRow, { borderColor: colors.border, backgroundColor: colors.card }]}>
               <Text style={{ color: colors.mutedForeground, minWidth: 24, textAlign: 'center', fontSize: font.size.sm }}>{index + 1}</Text>
-              <View style={styles.queueThumb}>
-                <PatternThumb name={item} size={36} />
+              <View style={[styles.queueThumb, frame(rect ? 52 : 36)]}>
+                <PatternThumb name={item} size={rect ? 52 : 36} />
               </View>
               <Text numberOfLines={2} style={{ flex: 1, color: colors.foreground }}>{prettyName(item)}</Text>
             </View>
@@ -390,8 +461,21 @@ export function NowPlayingSheet() {
           contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl }}
         >
           <View style={{ alignItems: 'center', marginVertical: spacing.md }}>
-            {/* The signature view: full pattern on the sand disc, progress as the glowing rim arc. */}
-            <LiveDrawing name={shown.displayFile} size={vizSize} pct={shown.pct} />
+            {/* The signature view: the pattern drawing itself as the table draws it, progress as the glowing rim.
+                On a rectangular table a tap (the badge says so) shows it full screen, sideways. */}
+            <Pressable
+              onPress={openFull}
+              disabled={!rect}
+              accessibilityRole={rect ? 'button' : undefined}
+              accessibilityLabel={rect ? 'Full screen' : undefined}
+            >
+              <LiveDrawing name={shown.displayFile} size={vizSize} pct={shown.pct} drawn={shown.drawn} ball={shown.ball} />
+              {rect ? (
+                <View style={[styles.fullBadge, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <MaterialIcons name="fullscreen" size={20} color={colors.foreground} />
+                </View>
+              ) : null}
+            </Pressable>
           </View>
 
           <Text numberOfLines={2} style={[styles.bigTitle, { color: colors.foreground }]}>{shown.name || 'Idle'}</Text>
@@ -407,8 +491,8 @@ export function NowPlayingSheet() {
           ) : null}
           {upNextFile ? (
             <Pressable onPress={() => setPage('queue')} style={styles.upNextRow}>
-              <View style={[styles.upNextThumb, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <PatternThumb name={upNextFile} size={64} />
+              <View style={[styles.upNextThumb, frame(rect ? 88 : 64), { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <PatternThumb name={upNextFile} size={rect ? 84 : 64} />
               </View>
               <Text numberOfLines={2} style={[styles.upNext, { color: colors.mutedForeground }]}>
                 Up next: {prettyName(upNextFile)}
@@ -429,14 +513,24 @@ export function NowPlayingSheet() {
 
           <View style={[styles.speedWrap, { borderTopColor: colors.border }]}>
             <SpeedControl
-              value={st.speed}
+              percent={st.cartesian}
+              value={st.cartesian ? st.feedOverride : st.speed}
               feedOverride={st.feedOverride}
-              onCommit={(v) => board.setFeedLive(shown.base, v).then(() => setTimeout(refresh, 350)).catch(() => {})}
+              onCommit={(v) => (st.cartesian ? board.setFeedPct : board.setFeedLive)(shown.base, v).then(() => setTimeout(refresh, 350)).catch(() => {})}
             />
           </View>
         </ScrollView>
       )}
     </Sheet>
+    <FullscreenPlayer title={full ? shown.name || 'Now playing' : null} onClose={closeFull} onDismissed={afterFull}>
+      {(w) => (
+        <View style={{ width: w, alignItems: 'center', gap: spacing.sm }}>
+          <LiveDrawing name={shown.displayFile} size={w} pct={shown.pct} drawn={shown.drawn} ball={shown.ball} />
+          <Text style={{ color: colors.mutedForeground, fontFamily: font.family.mono, fontSize: font.size.xs }}>{timeLine}</Text>
+        </View>
+      )}
+    </FullscreenPlayer>
+    </>
   )
 }
 
@@ -461,6 +555,8 @@ const styles = StyleSheet.create({
   bar: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.sm, paddingRight: spacing.md, borderRadius: radius.lg, borderWidth: 1 },
   capsule: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md },
   capsuleTitle: { fontSize: font.size.sm, fontWeight: font.weight.semibold },
+  fullBadge: { position: 'absolute', right: spacing.sm, bottom: spacing.sm, width: 32, height: 32, borderRadius: radius.pill, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  miniRect: { borderWidth: 1, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
   title: { fontSize: font.size.md, fontWeight: font.weight.semibold },
   miniTrack: { height: 3, borderRadius: 2, marginTop: 5, overflow: 'hidden' },
   miniFill: { height: 3, borderRadius: 2 },
@@ -469,12 +565,12 @@ const styles = StyleSheet.create({
   bigTitle: { fontSize: font.size.xl + 2, fontFamily: font.family.display, letterSpacing: -0.3, textAlign: 'center' },
   pausePill: { flexDirection: 'row', alignItems: 'center', alignSelf: 'center', gap: spacing.xs, marginTop: spacing.sm, borderWidth: 1, borderRadius: radius.pill, paddingVertical: 4, paddingHorizontal: spacing.md },
   upNextRow: { alignItems: 'center', justifyContent: 'center', gap: spacing.xs, marginTop: spacing.sm },
-  upNextThumb: { width: 64, height: 64, borderRadius: 32, borderWidth: 1, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  upNextThumb: { borderWidth: 1, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
   upNext: { fontSize: font.size.sm, textAlign: 'center', flexShrink: 1, maxWidth: '100%' },
   track: { height: 6, borderRadius: 3, overflow: 'hidden' },
   fill: { height: 6, borderRadius: 3 },
   timeRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 5 },
   speedWrap: { marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: 1, gap: spacing.sm },
   queueRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, marginBottom: spacing.sm },
-  queueThumb: { width: 36, height: 36, borderRadius: 18, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  queueThumb: { overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
 })

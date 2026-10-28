@@ -1,7 +1,8 @@
 import * as DocumentPicker from 'expo-document-picker'
 import { File, Directory, Paths } from 'expo-file-system'
 // @ts-ignore - shared plain-ESM module (Metro resolves .mjs; allowJs covers TS)
-import { parseThr, thrToXY } from './thrGeometry.mjs'
+import { thrToXY } from './thrGeometry.mjs'
+import { isGcode, parseGcode } from './gcode'
 import type { Point } from '../stores/useLibrary'
 import { bareName } from '../stores/useLibrary'
 
@@ -23,12 +24,15 @@ export interface ImportResult {
  * the board runs every original point), and derive a decimated copy of its
  * geometry for fast on-screen preview only. Throws on an invalid file.
  */
-async function processThr(uri: string, rawName: string): Promise<ImportedThr> {
-  let name = bareName(rawName || 'pattern.thr')
-  if (!/\.thr$/i.test(name)) name = `${name}.thr`
+async function processThr(uri: string, rawName: string, rect: boolean): Promise<ImportedThr> {
+  // A rectangular table plays G-code; a round one plays .thr. Each kind is
+  // validated by content, so the other kind (or anything else) fails here.
+  let name = bareName(rawName || 'pattern')
+  if (rect ? !isGcode(name) : !/\.thr$/i.test(name)) name = `${name}${rect ? '.gcode' : '.thr'}`
 
   const text = await new File(uri).text()
-  if (parseThr(text).length === 0) throw new Error('not a valid .thr file')
+  const xy = (rect ? parseGcode(text) : thrToXY(text)) as Point[]
+  if (xy.length === 0) throw new Error(`not a valid ${rect ? 'G-code' : '.thr'} file`)
 
   // Store the file verbatim, full-resolution.
   const dir = new Directory(Paths.document, 'thr')
@@ -39,16 +43,16 @@ async function processThr(uri: string, rawName: string): Promise<ImportedThr> {
 
   // Geometry is decimated for RENDERING only (a multi-hundred-thousand-point SVG
   // path would be unusable); the stored/pushed file stays full-res.
-  const xy = thrToXY(text) as Point[]
   return { name, xy, thrUri: dest.uri, sizeBytes: dest.size }
 }
 
 /**
- * Let the user pick one OR many .thr files, validating + saving each. Invalid
+ * Let the user pick one OR many pattern files (.thr, or G-code for a
+ * rectangular table: `rect`), validating + saving each. Invalid
  * files (no theta-rho points) are skipped and reported in `failed` rather than
  * aborting the whole batch. Returns null only if the user cancels the picker.
  */
-export async function importThr(): Promise<ImportResult | null> {
+export async function importThr(rect = false): Promise<ImportResult | null> {
   // .thr has no standard MIME type, so accept anything and validate by content.
   const res = await DocumentPicker.getDocumentAsync({
     type: ['*/*'],
@@ -61,7 +65,7 @@ export async function importThr(): Promise<ImportResult | null> {
   const failed: string[] = []
   for (const asset of res.assets) {
     try {
-      imported.push(await processThr(asset.uri, asset.name))
+      imported.push(await processThr(asset.uri, asset.name, rect))
     } catch {
       failed.push(asset.name || 'unknown')
     }

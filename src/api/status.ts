@@ -5,8 +5,14 @@ import { isNewer } from '../lib/version'
 
 export interface RawStatus {
   state: string // Idle | Run | Hold | Home | Jog | Alarm | ...
-  theta: number // radians (table's native theta-rho frame, same as .thr)
-  rho: number // radial position, may be signed (~ -1..1)
+  /** "ThetaRho" (round) or "CoreXY"/"Cartesian" (rectangular). Absent on
+   * firmware older than v0.2.1-rc3, which is always round. */
+  kinematics?: string
+  theta?: number // radians (table's native theta-rho frame, same as .thr); round tables only
+  rho?: number // radial position, may be signed (~ -1..1); round tables only
+  /** Machine mm, replacing theta/rho on a rectangular (cartesian) table. */
+  x?: number
+  y?: number
   feed: number // mm/min
   feed_override: number // percent
   running: boolean
@@ -93,10 +99,19 @@ export interface Status {
   isHoming: boolean
   isClearing: boolean
   percentage: number | null
+  /** The same progress unrounded, 0..1: the share of the file's bytes the table
+   * has executed (the firmware nets out moves still queued). What the Now Playing
+   * drawing follows; null when idle. */
+  fraction: number | null
   speed: number
   feedOverride: number
   theta: number
   rho: number
+  /** A rectangular (CoreXY) table: the ball is at `x`/`y` mm, patterns are
+   * G-code, and speed is a percentage (there is no base feed). */
+  cartesian: boolean
+  x: number
+  y: number
   playlist: { index: number; total: number; name: string | null; next: string | null; last: string | null } | null
   /** Seconds left in the between-patterns pause, or null when not pausing. */
   pauseRemaining: number | null
@@ -158,10 +173,15 @@ export function translateStatus(raw: RawStatus): Status {
     isHoming,
     isClearing: raw.playlist?.clearing ?? false,
     percentage,
+    fraction: raw.progress < 0 ? null : Math.min(1, raw.progress <= 1 ? raw.progress : raw.progress / 100),
     speed: raw.feed,
     feedOverride: raw.feed_override,
-    theta: raw.theta,
-    rho: raw.rho,
+    theta: raw.theta ?? 0,
+    rho: raw.rho ?? 0,
+    // The firmware swaps theta/rho for x/y exactly when it isn't ThetaRho.
+    cartesian: typeof raw.x === 'number',
+    x: raw.x ?? 0,
+    y: raw.y ?? 0,
     playlist: plActive
       ? {
           index: raw.playlist.index,

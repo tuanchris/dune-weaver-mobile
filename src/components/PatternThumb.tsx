@@ -4,9 +4,11 @@ import { previewSource, bareName, useLibrary } from '../stores/useLibrary'
 import { usePreviews, previewKey } from '../stores/usePreviews'
 import { useTheme } from '../stores/useTheme'
 import { PolarPattern } from './PolarPattern'
+import { RectPreview } from './RectTable'
+import { isGcode } from '../lib/gcode'
 
 /**
- * Grid thumbnail for a pattern. Bundled defaults use their pre-rendered webp
+ * Grid thumbnail for a pattern. Bundled patterns use their pre-rendered image
  * (full quality, cheap); imported / unbundled patterns render live from
  * geometry. `previewSource` is a pure function of the static bundle, so this
  * doesn't subscribe to the library store.
@@ -23,7 +25,14 @@ export function PatternThumb({ name, size }: { name: string; size: number }) {
   // User-ingested preview image (Settings → import previews), matched by name.
   const ingested = usePreviews((s) => s.map[previewKey(name)])
   const src = previewSource(name)
-  if (src.kind === 'webp') {
+  // G-code (a rectangular table's) sits on its rectangle: the bundled preview, or
+  // the one rendered when it was imported, else live geometry until that's ready.
+  if (isGcode(name)) {
+    if (src.kind === 'image') return <RectPreview source={src.module} size={size} />
+    if (cached) return <RectPreview source={{ uri: cached }} size={size} />
+    return <PolarPattern name={name} size={size} step={2} />
+  }
+  if (src.kind === 'image') {
     return <Image source={src.module} style={{ width: size, height: size, tintColor: ink }} resizeMode="contain" />
   }
   if (ingested) {
