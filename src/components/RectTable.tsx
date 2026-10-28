@@ -8,6 +8,7 @@ import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
 import { useLibrary, patternKey, type Point } from '../stores/useLibrary'
+import { buildPath, toScreen } from '../lib/patternGeometry'
 
 // Rectangular (CoreXY) tables: the table from above is a W×H mm rectangle,
 // with G-code's y axis pointing UP (machine 0,0 = bottom-left), like Sandify's
@@ -157,6 +158,33 @@ export function TableRect({ width, ball, color }: { width: number; ball: Size | 
   return (
     <Svg width={width} height={height}>
       <Rect x={1} y={1} width={width - 2} height={height - 2} rx={Math.min(8, height * 0.08)} fill={colors.cardElevated} stroke={colors.border} strokeWidth={1.5} />
+      {ball ? (
+        <>
+          <Circle cx={x} cy={y} r={r * 2.2} fill={color} opacity={0.18} />
+          <Circle cx={x} cy={y} r={r} fill={color} />
+        </>
+      ) : null}
+    </Svg>
+  )
+}
+
+/**
+ * The table from above: the sand disc and the ball where it is. θ/ρ in the .thr
+ * frame (θ = 0 points right), mapped like the pattern previews so the ball and a
+ * drawing line up.
+ */
+export function TableDisc({ size, ball, color, path }: { size: number; ball: { theta: number; rho: number } | null; color: string; path?: Point[] }): React.JSX.Element {
+  const colors = useTheme((s) => s.colors)
+  const c = size / 2
+  const r = Math.max(2.5, size * 0.03)
+  const rho = ball ? Math.max(-1, Math.min(1, ball.rho)) : 0
+  // Inset by the ball and the rim stroke so ρ = 1 sits just inside the rim.
+  const pad = (r + 2.5) / c
+  const [x, y] = ball ? toScreen([rho * Math.cos(ball.theta), rho * Math.sin(ball.theta)], size, pad) : [c, c]
+  return (
+    <Svg width={size} height={size}>
+      <Circle cx={c} cy={c} r={c - 1} fill={colors.cardElevated} stroke={colors.border} strokeWidth={1.5} />
+      {path ? <Path d={buildPath(path, size, { pad })} fill="none" stroke={colors.mutedForeground} strokeWidth={1.25} strokeLinejoin="round" /> : null}
       {ball ? (
         <>
           <Circle cx={x} cy={y} r={r * 2.2} fill={color} opacity={0.18} />

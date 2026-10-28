@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { FlatList, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native'
+import { FlatList, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
 import { create } from 'zustand'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { board } from '../api/board'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
@@ -11,14 +12,16 @@ import { isActive, type Status } from '../api/status'
 import { loadPlaylist } from '../lib/playlists'
 import { prettyName } from '../lib/patternName'
 import { useBoardAction } from '../lib/useBoardAction'
+import { NATIVE_ACCESSORY, useScreenWidth, useSplit, type Split } from '../lib/layout'
 import { PatternThumb } from './PatternThumb'
 import { LiveDrawing } from './LiveDrawing'
-import { useIsRect, useThumbFrame } from './RectTable'
+import { TableDisc, TableRect, useIsRect, useThumbFrame } from './RectTable'
 import { patternKey } from '../stores/useLibrary'
 import { IconButton } from './ui'
 import { Sheet, useAnySheetOpen } from './Sheet'
 import { SpeedControl } from './SpeedControl'
 import { FullscreenPlayer } from './FullscreenPlayer'
+import { TablePill } from './TablePill'
 import { radius, spacing, font } from '../theme'
 
 /** ms -> "M:SS", or "H:MM:SS" once it's an hour or more (a long between-patterns
@@ -282,46 +285,65 @@ export function MiniPlayer({ placement }: { placement: 'regular' | 'inline' | 'f
   )
 }
 
+// The active playlist's file list, read ONCE per playlist however many players
+// show it (the sheet and the unfolded pane): two reads of one file at a playlist
+// start would both queue on the board's single-threaded server.
+const usePlaylistFile = create<{ key: string | null; items: string[] | null }>(() => ({ key: null, items: null }))
+
+/** "Up next" + the queue for the pattern on show. */
+function useUpcoming(shown: NowPlaying | null): { upNextFile: string | undefined; upcoming: string[] } {
+  const base = useBoards((s) => s.getActiveBase())
+  const plName = useStatus((s) => s.status?.playlist?.name ?? null)
+  const key = base && plName ? `${base}\u001F${plName}` : null
+  const file = usePlaylistFile()
+  useEffect(() => {
+    if (usePlaylistFile.getState().key === key) return
+    usePlaylistFile.setState({ key, items: null })
+    if (!key || !base || !plName) return
+    loadPlaylist(base, `${plName}.txt`)
+      .then((items) => {
+        if (usePlaylistFile.getState().key === key) usePlaylistFile.setState({ items })
+      })
+      .catch(() => {})
+  }, [key])
+  if (!shown) return { upNextFile: undefined, upcoming: [] }
+
+  // Up-next comes straight from the firmware (playlist.next) — it resolves the
+  // real next pattern even under shuffle, where the order is internal to the
+  // board. (The old code used playlistItems[index+1], which always showed file
+  // line 2 while shuffling.) "" / null = unknown (last of a pass / single run)
+  // -> no "up next".
+  const st = shown.status
+  const upNextFile = st.playlist?.next ? patternKey(st.playlist.next) : undefined
+
+  // The full upcoming queue is only knowable in file order, which is truthful
+  // ONLY when not shuffling. When the firmware's next disagrees with the
+  // file-order next, the playlist is shuffled and the rest of the order isn't
+  // exposed — show just the one known next item rather than a wrong list.
+  const fileUpcoming = st.playlist && file.key === key && file.items ? file.items.slice(st.playlist.index + 1) : []
+  const shuffled = !!upNextFile && fileUpcoming.length > 0 && upNextFile !== fileUpcoming[0]
+  return { upNextFile, upcoming: shuffled ? [upNextFile] : fileUpcoming }
+}
+
 /** The expanded player (+ its queue as a sub-page). Rendered ONCE, from App.tsx. */
 export function NowPlayingSheet() {
   // A rectangular table's patterns sit on rectangles (wider: they're short).
   const rect = useIsRect()
-  const frame = useThumbFrame()
   const colors = useTheme((s) => s.colors)
   const scrollLocked = useScrollLock((s) => s.locked)
   const status = useStatus((s) => s.status)
-  const refresh = useStatus((s) => s.refresh)
-  const base = useBoards((s) => s.getActiveBase())
-  const { width: winWidth } = useWindowDimensions()
+  const winWidth = useScreenWidth()
   const expanded = usePlayerSheet((s) => s.expanded)
   const setExpanded = usePlayerSheet((s) => s.setExpanded)
   const anySheetOpen = useAnySheetOpen()
+  const split = !!useSplit() // the unfolded pane already shows the player: never pop the sheet over it
   const [page, setPage] = useState<'player' | 'queue'>('player')
-  const [playlistItems, setPlaylistItems] = useState<{ name: string; items: string[] } | null>(null)
-  const { act } = useBoardAction(350)
   const np = useNowPlaying()
   // Keep the last frame on screen while the sheet slides away after playback ends.
   const lastNp = useRef<NowPlaying | null>(null)
   if (np) lastNp.current = np
   const shown = np ?? lastNp.current
-
-  // Pull the active playlist's pattern list so we can show "up next" + a queue.
-  const plName = status?.playlist?.name ?? null
-  useEffect(() => {
-    let cancelled = false
-    if (!base || !plName) {
-      setPlaylistItems(null)
-      return
-    }
-    loadPlaylist(base, `${plName}.txt`)
-      .then((items) => {
-        if (!cancelled) setPlaylistItems({ name: plName, items })
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [base, plName])
+  const { upNextFile, upcoming } = useUpcoming(shown)
 
   // Maximize the player when a playlist starts. Tracked on the rising edge of
   // "a playlist is active"; prev starts null so opening the app onto an
@@ -353,12 +375,12 @@ export function NowPlayingSheet() {
   }, [playlistActive])
   useEffect(() => {
     if (!pendingExpand) return
-    if (expanded) setPendingExpand(false)
+    if (expanded || split) setPendingExpand(false)
     else if (!anySheetOpen && !full && !pendingFull) {
       setPendingExpand(false)
       setExpanded(true)
     }
-  }, [pendingExpand, anySheetOpen, expanded, setExpanded, full, pendingFull])
+  }, [pendingExpand, anySheetOpen, expanded, setExpanded, full, pendingFull, split])
 
   // Playback ended → close (and drop a pending auto-open).
   const active = !!np
@@ -377,22 +399,7 @@ export function NowPlayingSheet() {
 
   if (!shown) return null
 
-  // Up-next comes straight from the firmware (playlist.next) — it resolves the
-  // real next pattern even under shuffle, where the order is internal to the
-  // board. (The old code used playlistItems[index+1], which always showed file
-  // line 2 while shuffling.) "" / null = unknown (last of a pass / single run)
-  // -> no "up next".
   const st = shown.status
-  const upNextFile = st.playlist?.next ? patternKey(st.playlist.next) : undefined
-
-  // The full upcoming queue is only knowable in file order, which is truthful
-  // ONLY when not shuffling. When the firmware's next disagrees with the
-  // file-order next, the playlist is shuffled and the rest of the order isn't
-  // exposed — show just the one known next item rather than a wrong list.
-  const fileUpcoming =
-    st.playlist && playlistItems?.name === plName ? playlistItems.items.slice(st.playlist.index + 1) : []
-  const shuffled = !!upNextFile && fileUpcoming.length > 0 && upNextFile !== fileUpcoming[0]
-  const upcoming = shuffled ? [upNextFile] : fileUpcoming
 
   // Sized so disc + title + up-next + progress + controls + speed fit the sheet
   // without scrolling on a phone (capped, so an iPad sheet doesn't balloon it).
@@ -412,10 +419,6 @@ export function NowPlayingSheet() {
     reopenAfterFull.current = false
     setExpanded(true)
   }
-  const timeLine = shown.hasProgress
-    ? `${fmt(shown.elapsedMs)} · ${shown.pct}%${shown.remainingMs != null ? ` · -${fmt(shown.remainingMs)}` : ''}`
-    : `${shown.pct}%`
-
   const queue = page === 'queue'
   return (
     <>
@@ -437,92 +440,164 @@ export function NowPlayingSheet() {
       }
     >
       {queue ? (
-        <FlatList
-          data={upcoming}
-          keyExtractor={(it, i) => `${it}-${i}`}
-          contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.lg }}
-          ListEmptyComponent={
-            <Text style={{ color: colors.mutedForeground, textAlign: 'center', marginTop: 40 }}>No upcoming patterns.</Text>
-          }
-          renderItem={({ item, index }) => (
-            <View style={[styles.queueRow, { borderColor: colors.border, backgroundColor: colors.card }]}>
-              <Text style={{ color: colors.mutedForeground, minWidth: 24, textAlign: 'center', fontSize: font.size.sm }}>{index + 1}</Text>
-              <View style={[styles.queueThumb, frame(rect ? 52 : 36)]}>
-                <PatternThumb name={item} size={rect ? 52 : 36} />
-              </View>
-              <Text numberOfLines={2} style={{ flex: 1, color: colors.foreground }}>{prettyName(item)}</Text>
-            </View>
-          )}
-        />
+        <QueueList upcoming={upcoming} />
       ) : (
         <ScrollView
           showsVerticalScrollIndicator={false}
           scrollEnabled={!scrollLocked}
           contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl }}
         >
-          <View style={{ alignItems: 'center', marginVertical: spacing.md }}>
-            {/* The signature view: the pattern drawing itself as the table draws it, progress as the glowing rim.
-                On a rectangular table a tap (the badge says so) shows it full screen, sideways. */}
-            <Pressable
-              onPress={openFull}
-              disabled={!rect}
-              accessibilityRole={rect ? 'button' : undefined}
-              accessibilityLabel={rect ? 'Full screen' : undefined}
-            >
-              <LiveDrawing name={shown.displayFile} size={vizSize} pct={shown.pct} drawn={shown.drawn} ball={shown.ball} />
-              {rect ? (
-                <View style={[styles.fullBadge, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <MaterialIcons name="fullscreen" size={20} color={colors.foreground} />
-                </View>
-              ) : null}
-            </Pressable>
-          </View>
-
-          <Text numberOfLines={2} style={[styles.bigTitle, { color: colors.foreground }]}>{shown.name || 'Idle'}</Text>
-          {/* Between-patterns wait: the name/preview above is what's on the sand
-              now; make it unmistakable that we're waiting, not still drawing it. */}
-          {shown.pausing ? (
-            <View style={[styles.pausePill, { borderColor: colors.live }]}>
-              <MaterialIcons name="hourglass-top" size={14} color={colors.live} />
-              <Text style={{ color: colors.live, fontSize: font.size.sm, fontWeight: font.weight.medium }}>
-                Waiting for the next pattern
-              </Text>
-            </View>
-          ) : null}
-          {upNextFile ? (
-            <Pressable onPress={() => setPage('queue')} style={styles.upNextRow}>
-              <View style={[styles.upNextThumb, frame(rect ? 88 : 64), { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <PatternThumb name={upNextFile} size={rect ? 84 : 64} />
-              </View>
-              <Text numberOfLines={2} style={[styles.upNext, { color: colors.mutedForeground }]}>
-                Up next: {prettyName(upNextFile)}
-              </Text>
-            </Pressable>
-          ) : null}
-
-          <ProgressBar pct={shown.pct} elapsedMs={shown.hasProgress ? shown.elapsedMs : null} remainingMs={shown.remainingMs} />
-          <View style={styles.controls}>
-            <IconButton icon="stop" size={30} color={colors.foreground} label="Stop" onPress={() => act(() => board.stop(shown.base), 'Stopped', 'stop the table')} />
-            <PlayPause np={shown} act={act} size={60} />
-            {st.playlist ? (
-              <IconButton icon="skip-next" size={30} color={colors.foreground} label="Skip to next pattern" onPress={() => skip(shown, act)} />
-            ) : (
-              <View style={{ width: 38 }} />
-            )}
-          </View>
-
-          <View style={[styles.speedWrap, { borderTopColor: colors.border }]}>
-            <SpeedControl
-              percent={st.cartesian}
-              value={st.cartesian ? st.feedOverride : st.speed}
-              feedOverride={st.feedOverride}
-              onCommit={(v) => (st.cartesian ? board.setFeedPct : board.setFeedLive)(shown.base, v).then(() => setTimeout(refresh, 350)).catch(() => {})}
-            />
-          </View>
+          <PlayerBody shown={shown} size={vizSize} upNextFile={upNextFile} onUpNext={() => setPage('queue')} onFull={openFull} />
         </ScrollView>
       )}
     </Sheet>
-    <FullscreenPlayer title={full ? shown.name || 'Now playing' : null} onClose={closeFull} onDismissed={afterFull}>
+    <FullPlayer shown={shown} open={full} onClose={closeFull} onDismissed={afterFull} />
+    </>
+  )
+}
+
+/** The player itself, shared by the sheet and the unfolded pane: the drawing,
+ * name, up next, progress, transport and speed. */
+function PlayerBody({ shown, size, upNextFile, onUpNext, onFull, horizontal, compact, onRestHeight, eyebrow }: {
+  shown: NowPlaying
+  size: number
+  upNextFile: string | undefined
+  onUpNext: () => void
+  /** Rectangular tables: a tap on the drawing shows it full screen. */
+  onFull: () => void
+  /** The drawing beside the rest, not above it (the half-folded pane: wide and short). */
+  horizontal?: boolean
+  /** The pane's fit-the-page form: a one-line name, "up next" as one short row, a smaller play button. */
+  compact?: boolean
+  /** The height of everything but the drawing, so the pane can size the drawing to fit. */
+  onRestHeight?: (h: number) => void
+  /** A small line above the name (the pane's; the sheet shows it as its title). */
+  eyebrow?: string
+}): React.JSX.Element {
+  const rect = useIsRect()
+  const frame = useThumbFrame()
+  const colors = useTheme((s) => s.colors)
+  const refresh = useStatus((s) => s.refresh)
+  const scrollLocked = useScrollLock((s) => s.locked)
+  const { act } = useBoardAction(350)
+  const st = shown.status
+  const drawing = (
+      <View style={{ alignItems: 'center', marginVertical: spacing.md }}>
+        {/* The signature view: the pattern drawing itself as the table draws it, progress as the glowing rim.
+            On a rectangular table a tap (the badge says so) shows it full screen, sideways. */}
+        <Pressable
+          onPress={onFull}
+          disabled={!rect}
+          accessibilityRole={rect ? 'button' : undefined}
+          accessibilityLabel={rect ? 'Full screen' : undefined}
+        >
+          <LiveDrawing name={shown.displayFile} size={size} pct={shown.pct} drawn={shown.drawn} ball={shown.ball} />
+          {rect ? (
+            <View style={[styles.fullBadge, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <MaterialIcons name="fullscreen" size={20} color={colors.foreground} />
+            </View>
+          ) : null}
+        </Pressable>
+      </View>
+  )
+  const rest = (
+    <>
+      {eyebrow ? <Text numberOfLines={1} style={[styles.bodyEyebrow, { color: colors.mutedForeground }]}>{eyebrow}</Text> : null}
+      <Text numberOfLines={compact ? 1 : 2} style={[styles.bigTitle, { color: colors.foreground }]}>{shown.name || 'Idle'}</Text>
+      {/* Between-patterns wait: the name/preview above is what's on the sand
+          now; make it unmistakable that we're waiting, not still drawing it. */}
+      {shown.pausing ? (
+        <View style={[styles.pausePill, { borderColor: colors.live }]}>
+          <MaterialIcons name="hourglass-top" size={14} color={colors.live} />
+          <Text style={{ color: colors.live, fontSize: font.size.sm, fontWeight: font.weight.medium }}>
+            Waiting for the next pattern
+          </Text>
+        </View>
+      ) : null}
+      {upNextFile ? (
+        // In the pane it's one short row: the player has to fit its half without scrolling.
+        <Pressable onPress={onUpNext} style={[styles.upNextRow, compact ? styles.upNextInline : null]}>
+          <View style={[styles.upNextThumb, frame(compact ? (rect ? 52 : 36) : rect ? 88 : 64), { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <PatternThumb name={upNextFile} size={compact ? (rect ? 50 : 36) : rect ? 84 : 64} />
+          </View>
+          <Text numberOfLines={2} style={[styles.upNext, { color: colors.mutedForeground }]}>
+            Up next: {prettyName(upNextFile)}
+          </Text>
+        </Pressable>
+      ) : null}
+
+      <ProgressBar pct={shown.pct} elapsedMs={shown.hasProgress ? shown.elapsedMs : null} remainingMs={shown.remainingMs} />
+      <View style={styles.controls}>
+        <IconButton icon="stop" size={30} color={colors.foreground} label="Stop" onPress={() => act(() => board.stop(shown.base), 'Stopped', 'stop the table')} />
+        <PlayPause np={shown} act={act} size={compact ? 52 : 60} />
+        {st.playlist ? (
+          <IconButton icon="skip-next" size={30} color={colors.foreground} label="Skip to next pattern" onPress={() => skip(shown, act)} />
+        ) : (
+          <View style={{ width: 38 }} />
+        )}
+      </View>
+
+      <View style={[styles.speedWrap, compact ? styles.speedTight : null, { borderTopColor: colors.border }]}>
+        <SpeedControl
+          percent={st.cartesian}
+          value={st.cartesian ? st.feedOverride : st.speed}
+          feedOverride={st.feedOverride}
+          onCommit={(v) => (st.cartesian ? board.setFeedPct : board.setFeedLive)(shown.base, v).then(() => setTimeout(refresh, 350)).catch(() => {})}
+        />
+      </View>
+    </>
+  )
+  // Side by side: the drawing holds still at the top; only the details beside it
+  // scroll (centred against them, a long column pushed it down onto the fold).
+  return horizontal ? (
+    <View style={styles.bodyRow}>
+      {drawing}
+      {/* Spread over the column's full height (it still scrolls if a small window can't hold it). */}
+      <ScrollView style={{ flex: 1, alignSelf: 'stretch' }} showsVerticalScrollIndicator={false} scrollEnabled={!scrollLocked} contentContainerStyle={styles.sideColumn}>
+        {rest}
+      </ScrollView>
+    </View>
+  ) : (
+    <>
+      {drawing}
+      <View onLayout={onRestHeight ? (e) => onRestHeight(e.nativeEvent.layout.height) : undefined}>{rest}</View>
+    </>
+  )
+}
+
+function QueueList({ upcoming }: { upcoming: string[] }): React.JSX.Element {
+  const rect = useIsRect()
+  const frame = useThumbFrame()
+  const colors = useTheme((s) => s.colors)
+  return (
+    <FlatList
+      data={upcoming}
+      keyExtractor={(it, i) => `${it}-${i}`}
+      contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.lg }}
+      ListEmptyComponent={
+        <Text style={{ color: colors.mutedForeground, textAlign: 'center', marginTop: 40 }}>No upcoming patterns.</Text>
+      }
+      renderItem={({ item, index }) => (
+        <View style={[styles.queueRow, { borderColor: colors.border, backgroundColor: colors.card }]}>
+          <Text style={{ color: colors.mutedForeground, minWidth: 24, textAlign: 'center', fontSize: font.size.sm }}>{index + 1}</Text>
+          <View style={[styles.queueThumb, frame(rect ? 52 : 36)]}>
+            <PatternThumb name={item} size={rect ? 52 : 36} />
+          </View>
+          <Text numberOfLines={2} style={{ flex: 1, color: colors.foreground }}>{prettyName(item)}</Text>
+        </View>
+      )}
+    />
+  )
+}
+
+/** The live drawing full screen, sideways (rectangular tables). */
+function FullPlayer({ shown, open, onClose, onDismissed }: { shown: NowPlaying; open: boolean; onClose: () => void; onDismissed: () => void }): React.JSX.Element {
+  const colors = useTheme((s) => s.colors)
+  const timeLine = shown.hasProgress
+    ? `${fmt(shown.elapsedMs)} · ${shown.pct}%${shown.remainingMs != null ? ` · -${fmt(shown.remainingMs)}` : ''}`
+    : `${shown.pct}%`
+  return (
+    <FullscreenPlayer title={open ? shown.name || 'Now playing' : null} onClose={onClose} onDismissed={onDismissed}>
       {(w) => (
         <View style={{ width: w, alignItems: 'center', gap: spacing.sm }}>
           <LiveDrawing name={shown.displayFile} size={w} pct={shown.pct} drawn={shown.drawn} ball={shown.ball} />
@@ -530,7 +605,104 @@ export function NowPlayingSheet() {
         </View>
       )}
     </FullscreenPlayer>
-    </>
+  )
+}
+
+/**
+ * Unfolded (useSplit): the table's half of the window, mounted ONCE from App.tsx
+ * over the half Screen gives up. Always up while split, so nothing jumps as
+ * patterns start and stop: the player while something plays (between-patterns
+ * waits included), else the table at rest. The mini player and the sheet's
+ * auto-open stand down meanwhile — this is the same player, bigger.
+ */
+export function NowPlayingPane(): React.JSX.Element | null {
+  const split = useSplit()
+  return split ? <Pane split={split} /> : null // folded / phones: no player hooks at all
+}
+
+function Pane({ split }: { split: Split }): React.JSX.Element {
+  const np = useNowPlaying()
+  const { upNextFile, upcoming } = useUpcoming(np)
+  const colors = useTheme((s) => s.colors)
+  const insets = useSafeAreaInsets()
+  const [queue, setQueue] = useState(false)
+  const [full, setFull] = useState(false)
+  const [restH, setRestH] = useState(320) // measured: everything but the drawing (book mode); a guess till then
+  const playing = !!np
+  useEffect(() => {
+    if (!playing) setFull(false)
+  }, [playing])
+
+  const { pane, side } = split
+  const top = side === 'top' // half folded: the standing half, wide and short — drawing beside the rest
+  const underBar = top && pane.y < insets.top // it runs up under the status bar (iOS)
+  const playlist = np?.status.playlist ?? null
+  const showQueue = queue && !!playlist
+  // As big as the half allows: under the header (60 pt; 68 up under the status bar) and the
+  // drawing's 12 pt above and below, with the rest beside it — or with ~360 pt of it below.
+  const size = top
+    ? Math.max(120, Math.min(pane.height - (underBar ? 68 : 60) - spacing.md * 2, pane.width * 0.45))
+    : Math.max(160, Math.min(pane.width - spacing.xl * 2, pane.height - 360))
+  // iOS 26: the box runs to the window's bottom edge (content goes under the bars), so clear the home indicator.
+  const bottomPad = (NATIVE_ACCESSORY ? insets.bottom : 0) + spacing.md
+  // Book mode fits the page: the drawing gets the height left under the 60 pt header,
+  // its 12 pt margins and the rest of the player (square-sized: a rectangle is shorter).
+  const fitSize = Math.max(120, Math.min(pane.width - spacing.xl * 2, pane.height - 60 - spacing.md * 2 - restH - bottomPad))
+  return (
+    <View
+      style={[
+        styles.pane,
+        { left: pane.x, top: pane.y, width: pane.width, height: pane.height, backgroundColor: colors.background, borderColor: colors.border },
+        { [side === 'right' ? 'borderLeftWidth' : side === 'left' ? 'borderRightWidth' : 'borderBottomWidth']: StyleSheet.hairlineWidth },
+      ]}
+    >
+      {/* The table's half names the table: the pill (and its switcher) moves here from Screen while split.
+          Up under the status bar (laptop mode on iOS) it all stays top left: the status bar's items are top right. */}
+      <View style={[styles.paneHeader, underBar ? { paddingTop: spacing.lg } : null]}>
+        <TablePill />
+        {underBar ? null : <View style={{ flex: 1 }} />}
+        {playlist ? (
+          <IconButton icon={showQueue ? 'close' : 'queue-music'} size={24} color={colors.foreground} label={showQueue ? 'Hide queue' : 'Show queue'} onPress={() => setQueue(!showQueue)} />
+        ) : null}
+      </View>
+      {!np ? (
+        <IdleTable size={top ? Math.max(100, Math.min(size, pane.height - 200)) : Math.min(size, 320)} />
+      ) : showQueue ? (
+        <>
+          <Text numberOfLines={1} style={[styles.paneEyebrow, { color: colors.mutedForeground }]}>Queue · {playlist?.name}</Text>
+          <QueueList upcoming={upcoming} />
+        </>
+      ) : top ? (
+        <PlayerBody shown={np} size={size} upNextFile={upNextFile} onUpNext={() => setQueue(true)} onFull={() => setFull(true)} horizontal compact eyebrow={np.subtitle} />
+      ) : (
+        // Book mode: one page, no scrolling — the drawing takes what the rest leaves.
+        <View style={[styles.paneFit, { paddingBottom: bottomPad }]}>
+          <PlayerBody shown={np} size={fitSize} upNextFile={upNextFile} onUpNext={() => setQueue(true)} onFull={() => setFull(true)} compact onRestHeight={setRestH} eyebrow={np.subtitle} />
+        </View>
+      )}
+      {np ? <FullPlayer shown={np} open={full} onClose={() => setFull(false)} onDismissed={() => {}} /> : null}
+    </View>
+  )
+}
+
+/** The pane while nothing plays: the table from above, the ball where it rests. */
+function IdleTable({ size }: { size: number }): React.JSX.Element {
+  const status = useStatus((s) => s.status)
+  const colors = useTheme((s) => s.colors)
+  const rect = useIsRect()
+  const online = status?.connected ? status : null
+  return (
+    <View style={styles.idle}>
+      {rect ? (
+        <TableRect width={size} ball={online ? [online.x, online.y] : null} color={colors.foreground} />
+      ) : (
+        <TableDisc size={size} ball={online ? { theta: online.theta, rho: online.rho } : null} color={colors.foreground} />
+      )}
+      <Text style={[styles.bigTitle, { color: colors.foreground }]}>{online ? 'Nothing playing' : 'Table offline'}</Text>
+      <Text style={{ color: colors.mutedForeground, textAlign: 'center' }}>
+        {online ? 'Play a pattern from Browse or Playlists.' : 'Waiting for the table to come back.'}
+      </Text>
+    </View>
   )
 }
 
@@ -551,6 +723,16 @@ function ProgressBar({ pct, elapsedMs, remainingMs }: { pct: number; elapsedMs: 
 }
 
 const styles = StyleSheet.create({
+  pane: { position: 'absolute' },
+  bodyRow: { flex: 1, flexDirection: 'row', alignItems: 'flex-start', gap: spacing.lg, paddingHorizontal: spacing.lg },
+  paneFit: { flex: 1, justifyContent: 'center', paddingHorizontal: spacing.lg },
+  sideColumn: { flexGrow: 1, justifyContent: 'space-between', paddingVertical: spacing.sm },
+  upNextInline: { flexDirection: 'row', gap: spacing.sm },
+  speedTight: { marginTop: spacing.xs, paddingTop: spacing.sm },
+  bodyEyebrow: { fontSize: font.size.sm, fontWeight: font.weight.semibold, letterSpacing: 0.6, textTransform: 'uppercase', textAlign: 'center', marginBottom: spacing.xs },
+  paneHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.xs },
+  paneEyebrow: { fontSize: font.size.sm, fontWeight: font.weight.semibold, letterSpacing: 0.6, textTransform: 'uppercase', paddingHorizontal: spacing.lg, paddingTop: spacing.sm },
+  idle: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, padding: spacing.xl },
   barWrap: { marginHorizontal: spacing.sm, marginBottom: spacing.sm },
   bar: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.sm, paddingRight: spacing.md, borderRadius: radius.lg, borderWidth: 1 },
   capsule: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md },

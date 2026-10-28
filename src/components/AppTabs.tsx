@@ -10,7 +10,7 @@ import { ControlScreen } from '../screens/ControlScreen'
 import { LedScreen } from '../screens/LedScreen'
 import { SettingsStack } from '../screens/settings/SettingsStack'
 import { MiniPlayer } from './NowPlayingBar'
-import { NATIVE_ACCESSORY } from '../lib/layout'
+import { NATIVE_ACCESSORY, useSplit } from '../lib/layout'
 import { useTheme } from '../stores/useTheme'
 import { useStatus } from '../stores/useStatus'
 import { isActive } from '../api/status'
@@ -57,6 +57,7 @@ export interface AppTabsProps {
 export function AppTabs({ updateCount }: AppTabsProps): React.JSX.Element {
   const colors = useTheme((s) => s.colors)
   const playing = useStatus((s) => isActive(s.status)) // boolean: re-renders only on flips
+  const split = !!useSplit() // unfolded: NowPlayingPane shows the player, so no mini player
   const androidIcons = useAndroidIcons()
   return (
     <Tab.Navigator
@@ -71,7 +72,7 @@ export function AppTabs({ updateCount }: AppTabsProps): React.JSX.Element {
           // A count, not '': an empty badge draws nothing on iOS. Colour = the theme's notification red.
           tabBarBadge: route.name === 'Settings' && updateCount > 0 ? updateCount : undefined,
           // undefined (not a null-returning fn) removes the glass capsule when nothing plays.
-          bottomAccessory: NATIVE_ACCESSORY && playing ? ({ placement }) => <MiniPlayer placement={placement} /> : undefined,
+          bottomAccessory: NATIVE_ACCESSORY && playing && !split ? ({ placement }) => <MiniPlayer placement={placement} /> : undefined,
         }
       }}
     >

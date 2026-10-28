@@ -5,7 +5,7 @@
 // actually reads (WLED's slider meanings — see LED_EFFECTS), and the playing /
 // idle hooks. Effects are picked from a gallery sheet of rings, not a list of names.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { PanResponder, Pressable, ScrollView, SectionList, StyleSheet, Text, TextInput, View, useWindowDimensions, type ListViewToken, type ScrollViewInstance } from 'react-native'
+import { PanResponder, Pressable, ScrollView, SectionList, StyleSheet, Text, TextInput, View, type ListViewToken, type ScrollViewInstance } from 'react-native'
 import Svg, { Circle, Defs, G, Path, RadialGradient, Stop } from 'react-native-svg'
 import { MaterialIcons } from '@expo/vector-icons'
 import { useFocusEffect, useIsFocused, useNavigation } from '@react-navigation/native'
@@ -18,7 +18,7 @@ import { toast } from '../stores/useToast'
 import { userMessage } from '../lib/errors'
 import { paletteColor, ringDots, type RingLook } from '../lib/ledPreview'
 import type { SimParams } from '../lib/ledSim'
-import { thumbGrid, SCROLL_BOTTOM_PAD } from '../lib/layout'
+import { thumbGrid, SCROLL_BOTTOM_PAD, useScreenWidth } from '../lib/layout'
 import { Button, Card, CardTitle, IconButton, Segmented, Select, Slider } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { Sheet, SheetButton, useSheetWidth } from '../components/Sheet'
@@ -122,7 +122,7 @@ function useThrottledSend(ms: number) {
 export function LedScreen() {
   const colors = useTheme((s) => s.colors)
   const navigation = useNavigation<TabNav>()
-  const { width } = useWindowDimensions()
+  const width = useScreenWidth()
   const scrollLocked = useScrollLock((s) => s.locked)
   const focused = useIsFocused()
   const reduceMotion = useReduceMotion()

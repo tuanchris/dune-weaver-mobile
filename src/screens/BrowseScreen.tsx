@@ -25,7 +25,7 @@ import { Screen } from '../components/Screen'
 import { EmptyState } from '../components/EmptyState'
 import { prettyName, PATTERN_EXT } from '../lib/patternName'
 import { userMessage } from '../lib/errors'
-import { SCROLL_BOTTOM_PAD, thumbGrid } from '../lib/layout'
+import { SCROLL_BOTTOM_PAD, thumbGrid, useScreenWidth } from '../lib/layout'
 import { Sheet, useAnySheetOpen } from '../components/Sheet'
 import { FullscreenPlayer } from '../components/FullscreenPlayer'
 import { radius, spacing, font } from '../theme'
@@ -61,7 +61,8 @@ const FAVORITES = '__fav__'
 export function BrowseScreen() {
   const colors = useTheme((s) => s.colors)
   // Thumb size tracks the live window width (rotation / iPad split view safe).
-  const { width, height } = useWindowDimensions()
+  const width = useScreenWidth()
+  const { height } = useWindowDimensions()
   // A rectangular table plays G-code, a round one .thr: list only what this one
   // can draw, on frames of its shape.
   const rect = useIsRect()

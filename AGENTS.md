@@ -464,7 +464,7 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   same key keeps its path, a file the target keeps in a different folder is re-pointed by file
   name (case-insensitive, target's casing wins), and files the target lacks are DROPPED with a
   "skipped N" toast — no pattern push; an all-missing copy refuses instead of writing an empty list),
-  `Control` — a hero of the table FROM ABOVE (`TableDisc`: the sand disc with the ball at the live
+  `Control` — a hero of the table FROM ABOVE (`TableDisc`, in `RectTable.tsx` beside `TableRect`: the sand disc with the ball at the live
   θ/ρ, mapped like the pattern previews: θ = 0 points right; patina while moving, ember in Alarm) with
   the state word, a plain-words subline (pattern + %, "Ball at center", "Between patterns"…), θ in
   wrapped degrees + ρ in mono, and Home / Stop (+ Unlock in Alarm; Home drops to secondary while the
@@ -551,7 +551,7 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   the path's LENGTH across each 1 s poll and snaps on a new pattern. Whole pattern between
   patterns (`drawn` 1), and shown whole (no ball) while clearing or homing, when the progress
   is another file's. Still ONE ball, the drawing's tip (the owner removed a separate live-θ/ρ
-  dot). Patterns the app has no copy of fall back to `PatternThumb`), `PatternThumb`, `NowPlayingBar` (three parts in one file:
+  dot). Patterns the app has no copy of fall back to `PatternThumb`), `PatternThumb`, `NowPlayingBar` (four parts in one file:
   `MiniPlayer` = Pause/Resume + Skip only, tap to open (the floating one also swipes up) — **no Stop in the mini bar**
   (a one-tap stop was too easy to hit; the expanded player and Control have one). On iOS 26+
   (`NATIVE_ACCESSORY` in `lib/layout.ts`, mirroring react-native-screens' gate — set it `false` as
@@ -571,8 +571,17 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   is the `usePlayerSheet` store, and the auto-open on a playlist start waits for
   `!useAnySheetOpen()` and for full screen to be closed. On a rectangular table, tapping the
   drawing (a full-screen badge on its frame) shows the live drawing in `FullscreenPlayer`, sideways,
-  with the same close-sheet → open → reopen-on-dismiss handoff as Browse's preview), `Screen` (header = branding logo + table chip/switcher only — no theme or
-  restart buttons; screen title below), `AppTabs` (see the native-tabs gotcha), `Sheet` (see the
+  with the same close-sheet → open → reopen-on-dismiss handoff as Browse's preview. The sheet's body
+  is `PlayerBody` + `QueueList` + `FullPlayer`, shared with `NowPlayingPane`: the UNFOLDED layout
+  (see the iPhone Duo gotcha), mounted ONCE in App.tsx over the half of the window `Screen` gives
+  up, always up while split (the player while anything plays, else `IdleTable`: the table at rest),
+  with its own queue toggle. The pane never scrolls the player (owner's call): `PlayerBody
+  compact` (one-line name, "up next" as one short row, a smaller play button); book mode sizes
+  the drawing to the height its measured rest (`onRestHeight`) leaves; laptop mode puts the
+  drawing beside a column spread over the half's height. While split the mini player (accessory and fallback) hides and the
+  sheet never auto-opens. The playlist file behind "up next"/the queue is read ONCE for both
+  (`useUpcoming`, a module store keyed by base + playlist)), `Screen` (header = branding logo + table chip/switcher only — no theme or
+  restart buttons; screen title below; the pill is `TablePill.tsx`, shared with `NowPlayingPane`), `AppTabs` (see the native-tabs gotcha), `Sheet` (see the
   sheets gotcha), `ui.tsx` (`Button`/`Card`/`IconButton`/`Slider`/`Select`/`Segmented`/`Toggle` —
   the `Slider` is PanResponder-based, no native dep), `IdleGate` + `IdleGateBanner`
   (**the gate covers writes to the BOARD, and nothing else** — it wraps the GATED Settings pages
@@ -625,7 +634,7 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   while the previous jog finishes) until it points "East" (viewer's right), then homes to lock it in.
   Mirrors dw's Pattern Orientation Alignment dialog).
 - `src/lib/` — `thrGeometry.mjs`, `patternGeometry.ts`, `patternSource`/`pushPattern`/`importPattern`/`playlists`,
-  `layout.ts` (`thumbGrid`, `SCROLL_BOTTOM_PAD`, `NATIVE_ACCESSORY`).
+  `layout.ts` (`thumbGrid`, `useScreenWidth`, `useSplit`, `SCROLL_BOTTOM_PAD`, `NATIVE_ACCESSORY`).
 - `metro.config.js` adds `thr` to `assetExts`. `app.json` has `assetBundlePatterns` for `assets/thr` + `assets/previews`.
 
 ## Conventions / gotchas
@@ -650,11 +659,55 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   `notification` red (don't override it with ember). Inside a tab, `Screen` uses `SafeAreaView`
   from `react-native-screens/experimental` (NOT safe-area-context, whose insets exclude the tab bar
   and iPadOS 18's top bar) — **exactly ONE per Screen** (Android keeps a single insets listener).
+  It pads left/right too: on iPhone Duo the tab bar is an 84 pt RAIL down one side (folded, and
+  open in landscape; on the left in Split View's left window), so content is narrower than the
+  window — size tab-screen content by `useScreenWidth()` (`lib/layout.ts`, Screen's measured
+  content width), never `useWindowDimensions().width`.
   On iOS 26 its bottom edge is left unpadded so content scrolls under the glass bar + accessory;
   scroll content pads its bottom with `SCROLL_BOTTOM_PAD` (`lib/layout.ts`). Never toggle
   `headerShown` at runtime (throws). The Settings tab nests a native-stack (see `Settings` in the
   screens list); re-tapping the tab pops it to the list (`tabBarRepeatedPressBehavior` default /
   the JS tabs' tabPress), so any new nested navigator goes under BOTH tab files the same way.
+- **iPhone Duo** (foldable, iOS 27.1+; HIG "Designing for iPhone Duo", Expo's "Supporting iPhone
+  Duo" guide): full-screen use needs an iOS 27 SDK build (SDK 58 + Xcode 27.1; an Xcode 26 build
+  runs boxed in, clear of the status bar and camera). The NATIVE tab bar moves into the side rail
+  by itself — keep it native, never a JS bar. What the app does on top: `Screen`, both sheet
+  variants and the toast pad left/right safe areas; tab screens size by `useScreenWidth()`; grids
+  use even column counts. SPLIT (`useSplit()` in `lib/layout.ts`) the window divides at its
+  middle, exactly on the fold, and `NowPlayingPane` takes one half: (1) side by side when the
+  window is wider than tall and ≥ 600 pt high — the open Duo held like a book is 951 × 669; also
+  iPad landscape and big desktop windows — the pane on the half away from the tab rail; (2)
+  stacked (`side: 'top'`) when open UPRIGHT (669 × 951) AND half folded like a laptop — the table
+  on the standing half, the app on the flat one. Fully open upright doesn't split. Half fold is
+  read from `expo-hinge` (`status === 'partiallyOpen'`; the window keeps its size as the device
+  folds, so the hinge is the only signal) by ONE module-level listener into the layout store as a
+  boolean — the angle streams every degree, and every Sheet calls useSplit. `Screen` publishes its
+  safe box (`setScreenBox`) from the screens `SafeAreaView`'s OWN onLayout — it insets by MARGIN
+  on itself, not padding, so its children sit at 0,0 (measuring a child put the pane under the
+  status bar and on the rail's side) — and keeps `split.content`. While split the `TablePill`
+  (logo · table · switcher) heads the PANE instead of `Screen`, and half folded a tab's big title
+  hides unless it has an action or a back row (the flat half is short). Half folded the pane
+  runs above Screen's box top (which sits lower: the tab container's top region left a dead
+  strip): on iOS to the very TOP EDGE — the Duo's status bar keeps to the top right, so the pane's
+  header keeps the pill AND the queue toggle top left, under the bar's empty left end; on Android
+  (status bar icons on the left too) it stops under the status bar. Side by side it keeps the box
+  top (on iPad that region is the tab bar). Side by side the halves MEET at the fold (no
+  gap — owner's call). Laptop mode keeps a clear band round the crease, which bends whatever
+  sits on it: `LID_GUTTER` (28 pt, tuned on the device) above it, `FOLD_GUTTER` (20 pt, a
+  guessed calibration knob) below. Laptop mode's
+  pane header sits `spacing.lg` from the top edge (also tuned on the device). While split EVERY sheet is the JS one held to `split.content` (a native
+  pageSheet spans both halves): the pane stays uncovered and undimmed, and a tap on it closes the
+  sheet like the scrim. A sheet's kind is fixed per presentation (`nativeRef`), never switched
+  while up or sliding out. `expo-hinge` is a native module: adding it needs a new dev build; on
+  web (desktop, which lists it too) and older builds it reports no hinge. `orientation: portrait` stays — on iOS 27 a lock is only a PREFERENCE
+  wherever the app can be resized (the Duo's displays, Split View), so every screen must hold up
+  in a landscape-shaped window (FullscreenPlayer already turns by the window, not the device).
+  Known gaps, by choice (`expo-hinge` gives the fold's state, not its frame — `react-native-reserved-regions` /
+  Expo UI's `ArrangementView` would be the tools): the split assumes the fold is at the window's
+  middle (it is on the Duo; reserved regions would give its exact frame); alerts and other
+  system UI are the system's to place; `Screen`'s own header stays a horizontal row (it isn't a
+  native toolbar, so it never joins the rail). Test in Xcode's Device Hub on the "iPhone Duo"
+  simulator (iOS 27.1 runtime): folded, open portrait/landscape, partially folded, Split View.
 - **Android R8 is OFF** (`expo-build-properties` `android.enableMinifyInReleaseBuilds: false`):
   SDK 58 turned it on by default; it stays off until a release build has been checked with it
   (reflection-based modules like `react-native-zeroconf` can need keep rules).
@@ -699,9 +752,10 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   (`<color>22` fill) is `foreground`; the tint colour stays on the icon/border only. On/off
   settings use `ui.tsx`'s `Toggle` (sand track) at NATIVE size (don't scale it), NEVER a bare
   `Switch` (the stock iOS green fights the palette). Thumb grids come from `thumbGrid(width)` in
-  `lib/layout.ts` (~140 pt per column, min 3): screens pass `useWindowDimensions` width (NOT
-  module-scope `Dimensions.get` — iPad split view resizes the window), grids in a sheet pass
-  `useSheetWidth()`. Tab-screen scroll content pads its bottom with `SCROLL_BOTTOM_PAD`.
+  `lib/layout.ts` (~140 pt per column, min 3; past the minimum the count is EVEN, so iPhone Duo's
+  fold falls between columns): screens pass `useScreenWidth()` (NOT `useWindowDimensions` width,
+  which includes the Duo's rail, nor module-scope `Dimensions.get` — the window resizes), grids
+  in a sheet pass `useSheetWidth()` (measured inside the sheet's safe area). Tab-screen scroll content pads its bottom with `SCROLL_BOTTOM_PAD`.
   **Dynamic Type**: any container that holds text uses `minHeight` (plus `paddingVertical` where
   needed), never a fixed `height`; names/titles that can wrap get `numberOfLines={2}` (grid-tile
   captions, base URLs, the header table chip, one-word screen titles and both mini-player forms

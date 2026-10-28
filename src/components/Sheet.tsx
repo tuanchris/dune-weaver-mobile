@@ -14,6 +14,7 @@ import { ActivityIndicator, Animated, KeyboardAvoidingView, Modal, PanResponder,
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { create } from 'zustand'
 import { useTheme } from '../stores/useTheme'
+import { useSplit } from '../lib/layout'
 import { MaterialIcons } from '@expo/vector-icons'
 import { font, radius, spacing } from '../theme'
 
@@ -54,7 +55,15 @@ export function useSheetWidth(): number {
 export function Sheet({ visible, onClose, dismissible = true, variant = 'fit', title, leading, trailing, onBack, children }: SheetProps) {
   const colors = useTheme((s) => s.colors)
   const { height: winH } = useWindowDimensions()
-  const nativePage = variant === 'page' && Platform.OS === 'ios'
+  // Split (unfolded / half folded, useSplit): every sheet is the JS one, held to the
+  // app's half — a native pageSheet spans both halves and would cover the table.
+  // Chosen per presentation: a sheet never changes kind while up or sliding out.
+  const split = useSplit()
+  const [mounted, setMounted] = useState(false) // the JS sheet's Modal (never set for a native one)
+  const wantNative = variant === 'page' && Platform.OS === 'ios' && !split
+  const nativeRef = useRef(wantNative)
+  if (!visible && !mounted) nativeRef.current = wantNative
+  const nativePage = nativeRef.current
   const [width, setWidth] = useState<number | null>(null)
 
   const registered = useRef(false)
@@ -76,7 +85,6 @@ export function Sheet({ visible, onClose, dismissible = true, variant = 'fit', t
   }, [visible])
 
   // ---- JS sheet: mount → spring in; close → slide out → unmount ----
-  const [mounted, setMounted] = useState(visible)
   const y = useRef(new Animated.Value(winH)).current
   const sheetH = useRef(0)
   const springBack = () => Animated.spring(y, { toValue: 0, bounciness: 0, speed: 16, useNativeDriver: NATIVE_DRIVER }).start()
@@ -137,6 +145,7 @@ export function Sheet({ visible, onClose, dismissible = true, variant = 'fit', t
     </View>
   ) : null
 
+  const area = split?.content ?? null
   if (nativePage) {
     return (
       <Modal
@@ -150,16 +159,15 @@ export function Sheet({ visible, onClose, dismissible = true, variant = 'fit', t
         onDismiss={() => { if (!visibleRef.current) setRegistered(false) }}
         backdropColor={colors.background}
       >
-        {/* Native SafeAreaView: measures the sheet's own window, not the root's. */}
-        <SafeAreaView
-          edges={['bottom']}
-          onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
-          style={[styles.page, { backgroundColor: colors.background }]}
-        >
-          <SheetWidth.Provider value={width}>
-            {header}
-            <View style={{ flex: 1 }}>{children}</View>
-          </SheetWidth.Provider>
+        {/* Native SafeAreaView: measures the sheet's own window, not the root's.
+            Left/right: iPhone Duo's rail. Width is measured inside the insets. */}
+        <SafeAreaView edges={['bottom', 'left', 'right']} style={[styles.page, { backgroundColor: colors.background }]}>
+          <View style={{ flex: 1 }} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
+            <SheetWidth.Provider value={width}>
+              {header}
+              <View style={{ flex: 1 }}>{children}</View>
+            </SheetWidth.Provider>
+          </View>
         </SafeAreaView>
       </Modal>
     )
@@ -167,33 +175,40 @@ export function Sheet({ visible, onClose, dismissible = true, variant = 'fit', t
 
   return (
     <Modal visible={mounted} transparent animationType="none" statusBarTranslucent navigationBarTranslucent onRequestClose={onBack ?? onClose}>
-      <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: SCRIM, opacity: scrim }]}>
-        {/* Sibling BEHIND the sheet — wrapping the content in it would steal its scroll. */}
-        <Pressable style={{ flex: 1 }} onPress={onClose} />
-      </Animated.View>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.anchor} pointerEvents="box-none">
-        <Animated.View
-          onLayout={(e) => {
-            sheetH.current = e.nativeEvent.layout.height
-            setWidth(e.nativeEvent.layout.width)
-          }}
-          style={[
-            styles.sheet,
-            variant === 'page' ? { height: '92%' } : { maxHeight: '90%' },
-            { backgroundColor: colors.background, borderColor: colors.border, transform: [{ translateY: y }] },
-          ]}
-        >
-          <SheetWidth.Provider value={width}>
-            {/* The ONLY drag zone: content scroll, Sliders and the ColorWheel never fight it. */}
-            <View {...pan.panHandlers}>
-              <View style={[styles.grabber, { backgroundColor: colors.border }]} />
-              {header}
-            </View>
-            <View style={variant === 'page' ? { flex: 1 } : { flexShrink: 1 }}>{children}</View>
-            <SafeAreaView edges={['bottom']} />
-          </SheetWidth.Provider>
+      {/* Split: the table's half stays uncovered and undimmed; a tap there closes, like the scrim. */}
+      {area ? <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" /> : null}
+      <View style={area ? { position: 'absolute', left: area.x, top: area.y, width: area.width, height: area.height } : StyleSheet.absoluteFill} pointerEvents="box-none">
+        <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: SCRIM, opacity: scrim }]}>
+          {/* Sibling BEHIND the sheet — wrapping the content in it would steal its scroll. */}
+          <Pressable style={{ flex: 1 }} onPress={onClose} />
         </Animated.View>
-      </KeyboardAvoidingView>
+        {/* Clear of side insets (iPhone Duo's status bar + camera rail); taps there reach the scrim. */}
+        <SafeAreaView edges={['left', 'right']} style={{ flex: 1 }} pointerEvents="box-none">
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.anchor} pointerEvents="box-none">
+            <Animated.View
+              onLayout={(e) => {
+                sheetH.current = e.nativeEvent.layout.height
+                setWidth(e.nativeEvent.layout.width)
+              }}
+              style={[
+                styles.sheet,
+                variant === 'page' ? { height: '92%' } : { maxHeight: '90%' },
+                { backgroundColor: colors.background, borderColor: colors.border, transform: [{ translateY: y }] },
+              ]}
+            >
+              <SheetWidth.Provider value={width}>
+                {/* The ONLY drag zone: content scroll, Sliders and the ColorWheel never fight it. */}
+                <View {...pan.panHandlers}>
+                  <View style={[styles.grabber, { backgroundColor: colors.border }]} />
+                  {header}
+                </View>
+                <View style={variant === 'page' ? { flex: 1 } : { flexShrink: 1 }}>{children}</View>
+                <SafeAreaView edges={['bottom']} />
+              </SheetWidth.Provider>
+            </Animated.View>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
+      </View>
     </Modal>
   )
 }

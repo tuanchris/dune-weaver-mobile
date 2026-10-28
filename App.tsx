@@ -8,7 +8,7 @@ import { BricolageGrotesque_600SemiBold, BricolageGrotesque_700Bold } from '@exp
 import { IBMPlexMono_400Regular, IBMPlexMono_500Medium } from '@expo-google-fonts/ibm-plex-mono'
 
 import { AppTabs } from './src/components/AppTabs'
-import { NowPlayingSheet } from './src/components/NowPlayingBar'
+import { NowPlayingPane, NowPlayingSheet } from './src/components/NowPlayingBar'
 import { Toaster } from './src/components/Toaster'
 import { Onboarding } from './src/components/Onboarding'
 import { PreviewGenerator } from './src/components/PreviewGenerator'
@@ -130,6 +130,8 @@ export default function App() {
       ) : (
         <NavigationContainer theme={navTheme}>
           <AppTabs updateCount={updateCount} />
+          {/* Unfolded iPhone Duo (and other roomy windows): the table's half, over the tabs' content. */}
+          <NowPlayingPane />
           {/* The expanded player sheet, mounted once (the mini player lives in the tabs). */}
           <NowPlayingSheet />
         </NavigationContainer>

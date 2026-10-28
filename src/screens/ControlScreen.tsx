@@ -1,7 +1,6 @@
 import React from 'react'
-import { Alert, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
-import Svg, { Circle, Path } from 'react-native-svg'
 import { board, CLEAR_MODES, type ClearMode } from '../api/board'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
@@ -10,8 +9,8 @@ import { usePreviews } from '../stores/usePreviews'
 import { useTheme } from '../stores/useTheme'
 import { bareName, useLibrary } from '../stores/useLibrary'
 import { assertNotSyncing } from '../lib/sd'
-import { SCROLL_BOTTOM_PAD } from '../lib/layout'
-import { buildPath, toScreen, type Point } from '../lib/patternGeometry'
+import { SCROLL_BOTTOM_PAD, useScreenWidth } from '../lib/layout'
+import { type Point } from '../lib/patternGeometry'
 import { prettyName } from '../lib/patternName'
 import { stopAndSettle, stopFirstWarning } from '../lib/stopFirst'
 import { useBoardAction } from '../lib/useBoardAction'
@@ -19,7 +18,7 @@ import { Button, Card, CardTitle } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { SpeedControl } from '../components/SpeedControl'
 import { EmptyState } from '../components/EmptyState'
-import { TableRect, useIsRect, useThumbFrame, useTravel } from '../components/RectTable'
+import { TableDisc, TableRect, useIsRect, useThumbFrame, useTravel } from '../components/RectTable'
 import { PatternThumb } from '../components/PatternThumb'
 import { isGcode } from '../lib/gcode'
 import { radius, spacing, font } from '../theme'
@@ -67,7 +66,7 @@ const rectClearLabel = (file: string): string => {
 
 export function ControlScreen(): React.JSX.Element {
   const colors = useTheme((s) => s.colors)
-  const { width } = useWindowDimensions()
+  const width = useScreenWidth()
   const base = useBoards((s) => s.getActiveBase())
   const status = useStatus((s) => s.status)
   const refreshStatus = useStatus((s) => s.refresh)
@@ -287,33 +286,6 @@ export function ControlScreen(): React.JSX.Element {
         </Card>
       </ScrollView>
     </Screen>
-  )
-}
-
-/**
- * The table from above: the sand disc and the ball where it is. θ/ρ in the .thr
- * frame (θ = 0 points right), mapped like the pattern previews so the ball and a
- * drawing line up.
- */
-function TableDisc({ size, ball, color, path }: { size: number; ball: { theta: number; rho: number } | null; color: string; path?: Point[] }): React.JSX.Element {
-  const colors = useTheme((s) => s.colors)
-  const c = size / 2
-  const r = Math.max(2.5, size * 0.03)
-  const rho = ball ? Math.max(-1, Math.min(1, ball.rho)) : 0
-  // Inset by the ball and the rim stroke so ρ = 1 sits just inside the rim.
-  const pad = (r + 2.5) / c
-  const [x, y] = ball ? toScreen([rho * Math.cos(ball.theta), rho * Math.sin(ball.theta)], size, pad) : [c, c]
-  return (
-    <Svg width={size} height={size}>
-      <Circle cx={c} cy={c} r={c - 1} fill={colors.cardElevated} stroke={colors.border} strokeWidth={1.5} />
-      {path ? <Path d={buildPath(path, size, { pad })} fill="none" stroke={colors.mutedForeground} strokeWidth={1.25} strokeLinejoin="round" /> : null}
-      {ball ? (
-        <>
-          <Circle cx={x} cy={y} r={r * 2.2} fill={color} opacity={0.18} />
-          <Circle cx={x} cy={y} r={r} fill={color} />
-        </>
-      ) : null}
-    </Svg>
   )
 }
 

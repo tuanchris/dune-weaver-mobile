@@ -17,7 +17,7 @@ export function Toaster() {
   const icon = type === 'error' ? 'error-outline' : type === 'success' ? 'check-circle-outline' : 'info-outline'
 
   const content = (
-    <View pointerEvents="none" style={[styles.wrap, { top: insets.top + spacing.sm }]}>
+    <View pointerEvents="none" style={[styles.wrap, { top: insets.top + spacing.sm, left: insets.left, right: insets.right }]}>
       <View style={[styles.toast, { backgroundColor: colors.cardElevated, borderColor: accent }]}>
         <MaterialIcons name={icon as any} size={18} color={accent} />
         <Text style={[styles.text, { color: colors.foreground }]} numberOfLines={4}>
@@ -34,7 +34,7 @@ export function Toaster() {
 }
 
 const styles = StyleSheet.create({
-  wrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center', zIndex: 1000, paddingHorizontal: spacing.lg },
+  wrap: { position: 'absolute', alignItems: 'center', zIndex: 1000, paddingHorizontal: spacing.lg },
   toast: {
     flexDirection: 'row',
     alignItems: 'center',
