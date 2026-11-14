@@ -30,6 +30,7 @@ export const APP_CHANGELOG: AppReleaseNote[] = [
       '• Tap a pattern in Browse to watch it draw before you send it',
       '• 114 more LED effects and 68 palettes, ported from WLED, on firmware that has them',
       '• Settings › Table size sets a round table’s size, so text and Pattern Hub versions fit it',
+      '• Made for iPhone Duo: unfolded, your table and what’s playing sit beside the app',
     ].join('\n'),
   },
   {
