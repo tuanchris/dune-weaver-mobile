@@ -44,6 +44,7 @@ interface Persisted {
   hubTags?: Record<string, string[]>
   hubPreviews?: Record<string, string>
   hubVersions?: Record<string, HubFile[]>
+  createHintSeen?: boolean
 }
 
 interface PrefsStore {
@@ -110,12 +111,16 @@ interface PrefsStore {
    * takes (patternHub's forTable rule). Saved from each catalog read, like hubTags. */
   hubVersions: Record<string, HubFile[]>
   setHubCatalogData: (tags: Record<string, string[]>, previews: Record<string, string>, versions: Record<string, HubFile[]>) => void
+  /** Browse's one-time callout on its "+" (Create from text, once it ships: CREATE_TEXT) was seen: the
+   * "+" was tapped or the callout closed. True until prefs load, so it never flashes. */
+  createHintSeen: boolean
+  markCreateHintSeen: () => void
   hydrate: () => Promise<void>
 }
 
 export const usePrefs = create<PrefsStore>((set, get) => {
   const save = () => {
-    const { clearMode, playlistPrefs, favorites, favSynced, previewNagDismissedCount, showPrereleaseFirmware, hubAuto, hubSeen, hubShown, hubTags, hubPreviews, hubVersions } = get()
+    const { clearMode, playlistPrefs, favorites, favSynced, previewNagDismissedCount, showPrereleaseFirmware, hubAuto, hubSeen, hubShown, hubTags, hubPreviews, hubVersions, createHintSeen } = get()
     AsyncStorage.setItem(
       KEY,
       JSON.stringify({
@@ -131,6 +136,7 @@ export const usePrefs = create<PrefsStore>((set, get) => {
         hubTags,
         hubPreviews,
         hubVersions,
+        createHintSeen,
       } satisfies Persisted),
     ).catch(() => {})
   }
@@ -147,6 +153,12 @@ export const usePrefs = create<PrefsStore>((set, get) => {
     hubTags: {},
     hubPreviews: {},
     hubVersions: {},
+    createHintSeen: true,
+    markCreateHintSeen: () => {
+      if (get().createHintSeen) return
+      set({ createHintSeen: true })
+      save()
+    },
     setClearMode: (clearMode) => {
       set({ clearMode })
       save()
@@ -214,8 +226,9 @@ export const usePrefs = create<PrefsStore>((set, get) => {
             hubTags: data.hubTags ?? {},
             hubPreviews: data.hubPreviews ?? {},
             hubVersions: data.hubVersions ?? {},
+            createHintSeen: data.createHintSeen ?? false,
           })
-        }
+        } else set({ createHintSeen: false })
       } catch {
         // keep defaults
       }

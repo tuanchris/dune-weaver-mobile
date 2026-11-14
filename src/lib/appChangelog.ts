@@ -25,11 +25,10 @@ export const APP_CHANGELOG: AppReleaseNote[] = [
     notes: [
       '• Pattern Hub: browse the duneweaver.com pattern library in Browse. Dune Weaver plan owners sign in with their duneweaver.com account to sync patterns to the phone and the table, and new patterns get a red badge',
       '• Thumbnails and the preview player show patterns in sand, with the ball, the way your table draws them',
-      '• Create from text: write words and symbols on your table in one continuous line, in a choice of fonts',
       '• Rectangular tables play G-code patterns, such as Sandify’s, with a starter set built in',
       '• Tap a pattern in Browse to watch it draw before you send it',
       '• 114 more LED effects and 68 palettes, ported from WLED, on firmware that has them',
-      '• Settings › Table size sets a round table’s size, so text and Pattern Hub versions fit it',
+      '• Settings › Table size sets a round table’s size, so sand previews and Pattern Hub versions fit it',
       '• Made for iPhone Duo: unfolded, your table and what’s playing sit beside the app',
     ].join('\n'),
   },

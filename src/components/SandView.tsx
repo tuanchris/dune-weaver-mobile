@@ -63,6 +63,8 @@ async function prepare(table: SandTable): Promise<string> {
 interface Props {
   /** A pattern the app holds (bundled or imported). */
   name: string
+  /** Its .thr text instead, for a pattern not saved yet (Create's sand preview). */
+  thr?: string
   table: SandTable
   size: number
   onState?: (s: SandState) => void
@@ -76,7 +78,7 @@ interface Props {
   onError: (message: string) => void
 }
 
-export const SandView = forwardRef<SandHandle, Props>(function SandView({ name, table, size, onState, still, onStill, onError }, ref) {
+export const SandView = forwardRef<SandHandle, Props>(function SandView({ name, thr: given, table, size, onState, still, onStill, onError }, ref) {
   const { sandLight, sandLift, sandLiftBlend } = useTheme((s) => s.colors)
   // WebView<object>: its default props type, WebViewProps & undefined, is never under this TS.
   const web = useRef<WebView<object>>(null)
@@ -98,9 +100,12 @@ export const SandView = forwardRef<SandHandle, Props>(function SandView({ name, 
   useEffect(() => {
     let live = true
     ;(async () => {
-      const local = await useLibrary.getState().resolveThr(name)
-      if (!local) throw new Error('This pattern isn’t on the phone.')
-      const thr = await new File(local.uri).text()
+      let thr = given
+      if (thr == null) {
+        const local = await useLibrary.getState().resolveThr(name)
+        if (!local) throw new Error('This pattern isn’t on the phone.')
+        thr = await new File(local.uri).text()
+      }
       const dir = await prepare(table)
       if (live) setSetup({ dir, thr })
     })().catch((e: unknown) => live && onError(e instanceof Error ? e.message : String(e)))
@@ -108,7 +113,7 @@ export const SandView = forwardRef<SandHandle, Props>(function SandView({ name, 
       live = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per pattern and table
-  }, [name, table])
+  }, [name, given, table])
 
   if (!setup) return <View style={{ width: size, height: size }} />
   return (

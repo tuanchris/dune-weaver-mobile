@@ -4,6 +4,9 @@
 //  - 'fit':  content-height JS sheet on every platform, with a REAL draggable
 //    grabber. For short choosers and anything whose content fights UIKit's
 //    sheet pan (ColorWheel).
+//  - 'full': the whole screen (inside the safe areas; split, the app's half), JS on
+//    every platform, no grabber and no swipe: its header's buttons close it. For a
+//    workspace that wants every point (Create).
 // Rules: ONE sheet presented at a time (iOS silently refuses to present a
 // second Modal, even while the first animates out) — nested flows are in-sheet
 // sub-pages via `onBack`. A parent that may refuse `onClose` MUST pass
@@ -27,7 +30,7 @@ export interface SheetProps {
   onClose: () => void
   /** false = no gesture may finish a close by itself (dirty/busy); onClose still fires so the parent can ask. Default true. */
   dismissible?: boolean
-  variant?: 'page' | 'fit'
+  variant?: 'page' | 'fit' | 'full'
   title?: string
   leading?: React.ReactNode
   /** Defaults to a ✕ close button when `title` is set. */
@@ -172,6 +175,27 @@ export function Sheet({ visible, onClose, dismissible = true, variant = 'fit', t
             </SheetWidth.Provider>
           </View>
         </SafeAreaView>
+      </Modal>
+    )
+  }
+
+  if (variant === 'full') {
+    return (
+      <Modal visible={mounted} transparent animationType="none" statusBarTranslucent navigationBarTranslucent onRequestClose={onBack ?? onClose}>
+        <View style={area ? { position: 'absolute', left: area.x, top: area.y, width: area.width, height: area.height } : StyleSheet.absoluteFill}>
+          <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: colors.background, transform: [{ translateY: y }] }]}>
+            <SafeAreaView edges={area ? ['bottom'] : ['top', 'bottom', 'left', 'right']} style={{ flex: 1 }}>
+              <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+                <View style={{ flex: 1 }} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
+                  <SheetWidth.Provider value={width}>
+                    {header}
+                    <View style={{ flex: 1 }}>{children}</View>
+                  </SheetWidth.Provider>
+                </View>
+              </KeyboardAvoidingView>
+            </SafeAreaView>
+          </Animated.View>
+        </View>
       </Modal>
     )
   }

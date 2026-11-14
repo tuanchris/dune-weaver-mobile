@@ -20,7 +20,7 @@ import { PatternThumb } from '../components/PatternThumb'
 import { PatternPlayer } from '../components/PatternPlayer'
 import { PolarPattern } from '../components/PolarPattern'
 import { useIsRect, useThumbFrame, useTravel } from '../components/RectTable'
-import { TextGenerator } from '../components/TextGenerator'
+import { CREATE_TEXT, TextGenerator } from '../components/TextGenerator'
 import { hubTableFor, roundSize } from '../lib/tableSize'
 import { isGcode } from '../lib/gcode'
 import { MissingPreviewsBanner } from '../components/MissingPreviewsBanner'
@@ -112,8 +112,13 @@ export function BrowseScreen() {
   const [deleting, setDeleting] = useState(false)
   const [importing, setImporting] = useState(false)
   // The "+" menu (Create from text / Import from file), dropped down under it; its top is under the search row.
+  // Without Create (CREATE_TEXT) the "+" imports straight away.
   const [addOpen, setAddOpen] = useState(false)
   const [addTop, setAddTop] = useState(0)
+  // Once after the update that brought Create from text: a callout under the "+".
+  const hintSeen = usePrefs((s) => s.createHintSeen)
+  const createHint = CREATE_TEXT && !hintSeen
+  const markCreateHintSeen = usePrefs((s) => s.markCreateHintSeen)
   const [importPreview, setImportPreview] = useState<ImportedThr | null>(null)
   // Library | Pattern Hub. The hub is .thr only, so round tables only; hidden on
   // desktop and until the website launches it (admins see it early). Its tab
@@ -527,12 +532,20 @@ export function BrowseScreen() {
             />
           </Pressable>
           <Pressable
-            onPress={() => setAddOpen(true)}
+            onPress={() => {
+              if (!CREATE_TEXT) return doImport()
+              markCreateHintSeen()
+              setAddOpen(true)
+            }}
             disabled={importing}
             accessibilityRole="button"
-            accessibilityLabel="Add patterns"
-            accessibilityState={{ expanded: addOpen }}
-            style={({ pressed }) => [styles.control, styles.iconBtn, { backgroundColor: colors.card, borderColor: colors.border, opacity: importing ? 0.5 : pressed ? 0.7 : 1 }]}
+            accessibilityLabel={CREATE_TEXT ? 'Add patterns' : 'Import a pattern'}
+            accessibilityState={CREATE_TEXT ? { expanded: addOpen } : undefined}
+            style={({ pressed }) => [
+              styles.control,
+              styles.iconBtn,
+              { backgroundColor: colors.card, borderColor: createHint ? colors.primary : colors.border, borderWidth: createHint ? 2 : 1, opacity: importing ? 0.5 : pressed ? 0.7 : 1 },
+            ]}
           >
             {importing ? (
               <ActivityIndicator size="small" color={colors.foreground} />
@@ -671,6 +684,29 @@ export function BrowseScreen() {
               ))}
             </View>
           </>
+        ) : null}
+        {createHint && !addOpen ? (
+          <View style={[styles.control, styles.hint, { top: addTop, backgroundColor: colors.primary }]}>
+            <View style={[styles.hintCaret, { borderBottomColor: colors.primary }]} />
+            <Pressable
+              onPress={() => {
+                markCreateHintSeen()
+                setAddOpen(true)
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="New: create a pattern from text. Opens the add menu."
+              style={({ pressed }) => [styles.hintBody, pressed && { opacity: 0.8 }]}
+            >
+              <MaterialIcons name="text-fields" size={22} color={colors.primaryForeground} />
+              <View style={styles.flexShrink}>
+                <Text style={[styles.hintTitle, { color: colors.primaryForeground }]}>New: write on your table</Text>
+                <Text style={[styles.hintText, { color: colors.primaryForeground }]}>Tap + to make a pattern from words and emoji.</Text>
+              </View>
+            </Pressable>
+            <Pressable onPress={markCreateHintSeen} accessibilityRole="button" accessibilityLabel="Dismiss" hitSlop={8} style={styles.hintClose}>
+              <MaterialIcons name="close" size={20} color={colors.primaryForeground} />
+            </Pressable>
+          </View>
         ) : null}
       </View>
 
@@ -818,19 +854,21 @@ export function BrowseScreen() {
           </ScrollView>
         )}
       </Sheet>
-      <TextGenerator
-        visible={genOpen}
-        rect={rect}
-        travel={travel}
-        size={size}
-        taken={taken}
-        onClose={() => setGenOpen(false)}
-        onSaved={(name) => {
-          setGenOpen(false)
-          setSavedName(name)
-          toast.success(`Saved ${prettyName(name)} to your library`)
-        }}
-      />
+      {CREATE_TEXT ? (
+        <TextGenerator
+          visible={genOpen}
+          rect={rect}
+          travel={travel}
+          size={size}
+          taken={taken}
+          onClose={() => setGenOpen(false)}
+          onSaved={(name) => {
+            setGenOpen(false)
+            setSavedName(name)
+            toast.success(`Saved ${prettyName(name)} to your library`)
+          }}
+        />
+      ) : null}
       <FullscreenPlayer title={fullscreen ? prettyName(fullscreen) : null} onClose={closeFullscreen} onDismissed={reopenSheet}>
         {(w) => (fullscreen ? <PatternPlayer key={fullscreen} name={fullscreen} autoplay frameWidth={w} caption={false} /> : null)}
       </FullscreenPlayer>
@@ -851,6 +889,14 @@ const styles = StyleSheet.create({
   sortRow: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
   addMenu: { position: 'absolute', right: spacing.md, minWidth: 220, borderRadius: radius.lg, borderWidth: 1, paddingVertical: spacing.xs, shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
   addItem: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 48, paddingHorizontal: spacing.md },
+  // The "+" callout hangs from the "+" (the search row's last 44 pt button) by its caret.
+  hint: { position: 'absolute', right: spacing.md, left: spacing.xl, flexDirection: 'row', alignItems: 'center', borderRadius: radius.lg, marginTop: spacing.sm, shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
+  hintCaret: { position: 'absolute', top: -8, right: 14, width: 0, height: 0, borderLeftWidth: 8, borderRightWidth: 8, borderBottomWidth: 8, borderLeftColor: 'transparent', borderRightColor: 'transparent' },
+  hintBody: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 56, paddingVertical: spacing.sm, paddingLeft: spacing.md },
+  hintTitle: { fontSize: font.size.md, fontWeight: font.weight.semibold },
+  hintText: { fontSize: font.size.sm },
+  hintClose: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  flexShrink: { flexShrink: 1 },
   addLabel: { flexShrink: 1, fontSize: font.size.md, fontWeight: font.weight.medium },
   iconBtn: { alignItems: 'center', justifyContent: 'center', borderRadius: radius.pill, borderWidth: 1, width: 44, height: 44 },
   tile: { alignItems: 'center', gap: spacing.xs, marginBottom: spacing.md },

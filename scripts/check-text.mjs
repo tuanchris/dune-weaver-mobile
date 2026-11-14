@@ -24,7 +24,11 @@ let n = 0
 
 const LAYOUTS = [
   ...['edge', 'beside'].flatMap((join) => ['same', 'fill'].flatMap((rowSize) => [1, 0.3].map((size) => ({ style: 'lines', join, rowSize, size })))),
-  ...['solid', 'outline'].flatMap((letters) => [0, 0.4, 1].map((rake) => ({ style: 'inlay', letters, rake, rowSize: 'fill' }))),
+  ...['spiral', 'lanes'].flatMap((host) => ['solid', 'outline'].flatMap((letters) => [0, 0.4, 1].map((rake) => ({ style: 'inlay', host, letters, rake, rowSize: 'fill' })))),
+  // Several text blocks, each its own font, size and place.
+  { style: 'inlay', rake: 0.4, texts: [{ text: 'Top', font: 'serif', size: 0.4, place: { x: -0.3, y: 0.5, rot: 15 } }, { text: 'Bottom \u2665', size: 0.45, place: { x: 0.2, y: -0.5, rot: -20 } }] },
+  // The text moved and turned (kept on the table), on both backgrounds.
+  ...['spiral', 'lanes'].map((host) => ({ style: 'inlay', host, letters: 'solid', rake: 0.5, size: 0.5, place: { x: 0.7, y: -0.6, rot: 35 } })),
   { style: 'inlay', letters: 'solid', rake: 0.3, symbols: [{ ch: '\u2b50', x: 0.5, y: -0.7, size: 0.2, rot: 30 }, { ch: '\u2665', x: -0.8, y: 0.3, size: 0.3, rot: -120 }] },
 ]
 
@@ -59,9 +63,14 @@ for (const font of T.FONT_IDS) {
     const L = T.layoutText({ text, font, frame, ...layout })
     assert.ok(L && L.path.length > 1 && L.capHeight > 0, `${what}: nothing drawn`)
     const inside = frame.round ? ([x, y]) => Math.hypot(x, y) <= 1 + EPS : ([x, y]) => Math.abs(x) <= frame.W / 2 + EPS && Math.abs(y) <= frame.H / 2 + EPS
-    const onEdge = frame.round ? ([x, y]) => Math.abs(Math.hypot(x, y) - 1) < 1e-6 : ([x]) => Math.abs(Math.abs(x) - frame.W / 2) < 1e-6
+    const onEdge = frame.round ? ([x, y]) => Math.abs(Math.hypot(x, y) - 1) < 1e-6 : ([x, y]) => Math.abs(Math.abs(x) - frame.W / 2) < 1e-6 || Math.abs(Math.abs(y) - frame.H / 2) < 1e-6
     assert.ok(L.path.every((p) => p.every(Number.isFinite) && inside(p)), `${what}: leaves the table`)
-    assert.ok(onEdge(L.path[0]) && onEdge(L.path[L.path.length - 1]), `${what}: doesn't start and end at the edge`)
+    if (layout.style === 'inlay' && layout.host !== 'lanes') {
+      // The spiral: from the centre (a rectangle's core) out; to the edge when it rakes the whole table.
+      const core = frame.round ? 0 : Math.abs(frame.W - frame.H) / 2
+      assert.ok(Math.abs(Math.hypot(...L.path[0]) - core) < 1e-6, `${what}: the spiral doesn't start at the centre`)
+      if (layout.rake >= 1) assert.ok(onEdge(L.path[L.path.length - 1]), `${what}: the spiral doesn't end at the edge`)
+    } else assert.ok(onEdge(L.path[0]) && onEdge(L.path[L.path.length - 1]), `${what}: doesn't start and end at the edge`)
     if (frame.round) {
       const pts = parseThr(T.toThr(L.path))
       for (let i = 1; i < pts.length; i++) {
@@ -88,9 +97,9 @@ for (const font of T.FONT_IDS) {
 }
 
 // Inlay: once a letter is drawn, the host's later lanes keep half a ball clear of it (sand-weaver's rule).
-for (const [font, letters, rake, frame] of [['geometric', 'solid', 0, FRAMES[0]], ['serif', 'outline', 1, FRAMES[0]], ['sandskrit', 'solid', 0.3, FRAMES[2]], ['brush', 'solid', 1, FRAMES[3]], ['slab', 'solid', 0.5, FRAMES[1]]]) {
+for (const host of ['spiral', 'lanes']) for (const [font, letters, rake, frame] of [['geometric', 'solid', 0, FRAMES[0]], ['serif', 'outline', 1, FRAMES[0]], ['sandskrit', 'solid', 0.3, FRAMES[2]], ['brush', 'solid', 1, FRAMES[3]], ['slab', 'solid', 0.5, FRAMES[1]]]) {
   const symbols = [{ ch: '\ud83d\ude0a', x: 0.3, y: -0.7, size: 0.25, rot: 45 }, { ch: '\u2b50', x: -0.6, y: 0.6, size: 0.15, rot: 200 }]
-  const L = T.layoutText({ text: 'Hello \u2665\nDune Weaver', font, frame, style: 'inlay', letters, rake, symbols })
+  const L = T.layoutText({ text: 'Hello \u2665\nDune Weaver', font, frame, style: 'inlay', letters, rake, host, symbols })
   const zone = 0.5 * T.ballOf(frame)
   const inVisit = new Uint8Array(L.path.length)
   // A visit leaves the lane at its vertex and comes back to it: only what lies between is the letter.
@@ -104,7 +113,7 @@ for (const [font, letters, rake, frame] of [['geometric', 'solid', 0, FRAMES[0]]
   for (const v of L.visits) {
     for (let i = v.to; i + 1 < L.path.length; i++) {
       if (inVisit[i] || inVisit[i + 1]) continue
-      assert.ok(v.outline.every((q) => toSegment(q, L.path[i], L.path[i + 1]) >= zone * 0.95), `${font} ${letters} rake ${rake}: a lane passes a letter drawn before it`)
+      assert.ok(v.outline.every((q) => toSegment(q, L.path[i], L.path[i + 1]) >= zone * 0.95), `${host} ${font} ${letters} rake ${rake}: a lane passes a letter drawn before it`)
     }
   }
   n++

@@ -28,6 +28,28 @@ export { SYMBOLS }
 export const SYMBOL_IDS = Object.keys(SYMBOLS)
 
 export const MAX_LINES = 8
+/** A letter's fill: sand-weaver's contour fill with no smoothing (see rowOf). */
+const LETTER_FILL = { smooth: 0 }
+/**
+ * The size a symbol reads well at, in balls across its larger side: below it its features
+ * are narrower than the ball and blur (sand sim, DW Pro and Mini Pro, 2026-11-14). Bold
+ * shapes read at 10, shapes with some detail at 14, faces, animals and busy pictures at 20.
+ * It's advice (a warning), not a limit: the owner found it too big as a minimum. The hard
+ * floor is MIN_SYMBOL_BALLS for every symbol.
+ */
+const MIN_SYMBOL_BALLS = 6
+const SYMBOL_BALLS = { bold: 10, some: 14, detailed: 20 }
+const BOLD = ['Heart', 'Star', 'Moon', 'Lightning', 'Cloud', 'Music']
+const DETAILED = ['Smile', 'Tears of joy', 'Heart eyes', 'Sunglasses', 'Wink', 'Thumbs up', 'Cat', 'Dog', 'Bear', 'Panda', 'Fox', 'Turtle', 'Unicorn', 'Pumpkin', 'House', 'Globe', 'Dove', 'Crown', 'Rocket', 'Sunflower', 'Daisy', 'Blossom', 'Pine tree', 'Palm tree', 'Mushroom', 'Ghost', 'Fish']
+export function symbolBalls(ch) {
+  const label = SYMBOLS[ch]?.label
+  return SYMBOL_BALLS[BOLD.includes(label) ? 'bold' : DETAILED.includes(label) ? 'detailed' : 'some']
+}
+const ballsToSize = (frame, balls) => (balls * ballOf(frame)) / (frame.round ? 2 : Math.min(frame.W, frame.H))
+/** A placed symbol's smallest size on this table (its larger side's share of the table's smaller side): 6 balls. */
+export const minSymbolSize = (frame) => ballsToSize(frame, MIN_SYMBOL_BALLS)
+/** The size it reads well at on this table (symbolBalls); smaller, its details blur. */
+export const goodSymbolSize = (frame, ch) => ballsToSize(frame, symbolBalls(ch))
 export const MAX_CHARS = 160
 /** The text block keeps this share of the table (the joining lines still reach the edge). */
 const MARGIN = 0.9
@@ -176,7 +198,9 @@ function rowOf(fontId, row, missing) {
       if (w) {
         const at = w.map(([px, py]) => [x + px, py])
         pts.push([at[0][0], 0], ...at, [at[0][0], 0])
-        for (const region of g[1]) units.push({ kind: 'region', rings: region.map((r) => ringOf(r).map(([px, py]) => [x + px, py])) })
+        // Letters: the EXACT contour (smooth 0: rings parallel to the stroke, crisp corners; the
+        // smoothed one wobbled inside letters in the sim, 2026-11-14). Symbols: the smoothed one.
+        for (const region of g[1]) units.push({ kind: 'region', contour: true, fill: SYMBOLS[ch] ? undefined : LETTER_FILL, rings: region.map((r) => ringOf(r).map(([px, py]) => [x + px, py])) })
       }
     } else {
       const at = []
@@ -222,6 +246,36 @@ export function keepOnTable(frame, sym) {
     else hi = t
   }
   return { ...sym, x: sym.x * lo, y: sym.y * lo, size }
+}
+
+/**
+ * The text block placed on the table: `pts` (its outline, centred, unturned, in frame
+ * units) turned by `rot`, centred at x, y (−1..1 of the half width / height), moved towards
+ * the centre until it lies a ball inside the edge. Turning can't push a block off a disc
+ * (it fits centred), but can off a rectangle: then `k` < 1 shrinks it.
+ */
+export function keepTextOnTable(frame, pts, { x = 0, y = 0, rot = 0 } = {}) {
+  const half = frame.round ? [1, 1] : [frame.W / 2, frame.H / 2]
+  const inset = ballOf(frame)
+  const turn = turned(rot)
+  const at = pts.map(turn)
+  const fits = (t, k) =>
+    at.every(([px, py]) => {
+      const X = x * t * half[0] + px * k
+      const Y = y * t * half[1] + py * k
+      return frame.round ? Math.hypot(X, Y) <= 1 - inset : Math.abs(X) <= half[0] - inset && Math.abs(Y) <= half[1] - inset
+    })
+  let k = 1
+  while (k > 0.05 && !fits(0, k)) k *= 0.97
+  if (fits(1, k)) return { x, y, rot, k }
+  let lo = 0
+  let hi = 1
+  for (let i = 0; i < 20; i++) {
+    const t = (lo + hi) / 2
+    if (fits(t, k)) lo = t
+    else hi = t
+  }
+  return { x: x * lo, y: y * lo, rot, k }
 }
 
 /** A symbol's turn: degrees clockwise as seen on the table (y up). */
@@ -310,67 +364,110 @@ function rowScales(rows, frame, spacing) {
  * join (lines): 'edge' (every joining line runs edge to edge, rows joined along the edge)
  *     | 'beside' (rows joined beside the text; only the first and last reach the edge).
  * letters (inlay, outline fonts): 'solid' (filled across the host's lanes) | 'outline'.
- * rake (inlay): 0 (a band across the table just round the text) .. 1 (the whole table).
+ * rake (inlay): 0 (just round the text and symbols) .. 1 (the whole table).
+ * host (inlay): 'spiral' (one line out from the centre; the default) | 'lanes' (straight, at 45°).
+ * zone (inlay): a letter is drawn after the host's last pass within this many balls of it (default 1).
+ * texts (inlay): [{ text, font, size, rowSize, place }] several text blocks, each its own; else
+ *   text / font / size / rowSize / place make the one block.
+ * place (inlay): { x, y, rot } where the text block goes (its centre, −1..1 of the half width /
+ *   height) and its turn (degrees clockwise), kept on the table (keepTextOnTable). Lines ignore it.
  * symbols (inlay): [{ ch, x, y, size, rot }] placed freely: x, y −1..1 of the half width / height
  *   (right, up), size = its larger side's share of the table's smaller side (a disc's diameter),
  *   rot = degrees clockwise as seen on the table.
  * Returns null when there's nothing to draw.
  */
-export function layoutText({ text, font: fontId = 'sandskrit', frame, size = 1, spacing = 1.7, rowSize = 'same', style = 'lines', join = 'edge', letters = 'solid', rake = 0, symbols = [] }) {
+/**
+ * One text block, inlaid: its letters as units turned and moved to `place` (kept on the
+ * table), its joining line's points there (a lanes host's band follows them) and its
+ * outline centred and unturned (Create's canvas moves that). Null when it writes nothing.
+ */
+function inlayBlock({ text, font: fontId = 'sandskrit', size = 1, rowSize = 'same', place }, frame, spacing, letters, missing) {
+  if (!FONTS[fontId]) fontId = 'sandskrit'
+  // A blank row keeps its place: it's a row of nothing, a capital high.
+  const rows = textRows(text ?? '').map((r) => rowOf(fontId, r, missing))
+  if (!rows.some((r) => r.width > 0 && r.pts.length > 2)) return null
+  const k = rowSize === 'fill' ? rowScales(rows.map((r) => (r.width > 0 ? r : { ...r, width: 1 })), frame, spacing) : rows.map(() => 1)
+  const em = stack(rows, k, spacing).filter((r) => r.row.width > 0)
+  const s = fitScale(em, frame, 'edge') * Math.min(1, Math.max(0.05, size))
+  // The letters in the frame, centred as the joining line's points are (stack).
+  const local = []
+  const joins = []
+  for (const r of em) {
+    const at = ([x, y]) => [(x - r.row.width / 2) * r.k * s, (r.y + y * r.k) * s]
+    for (const u of r.row.units) {
+      if (u.kind === 'stroke') local.push({ kind: 'stroke', line: u.line.map(at) })
+      else if (letters === 'outline') for (const ring of u.rings) local.push({ kind: 'ring', ring: ring.map(at) })
+      else local.push({ kind: 'region', contour: u.contour, fill: u.fill, rings: u.rings.map((ring) => ring.map(at)) })
+    }
+    for (const [x, y] of r.pts) joins.push([x * s, y * s])
+  }
+  const textPts = local.flatMap((u) => (u.kind === 'stroke' ? u.line : u.kind === 'ring' ? u.ring : u.rings[0]))
+  const fit = keepTextOnTable(frame, textPts.length ? textPts : joins, place)
+  const half = frame.round ? [1, 1] : [frame.W / 2, frame.H / 2]
+  const turn = turned(fit.rot)
+  const move = (p) => {
+    const [px, py] = turn(p)
+    return [fit.x * half[0] + px * fit.k, fit.y * half[1] + py * fit.k]
+  }
+  const units = local.map((u) =>
+    u.kind === 'stroke' ? { ...u, line: u.line.map(move) } : u.kind === 'ring' ? { ...u, ring: u.ring.map(move) } : { ...u, rot: fit.rot, rings: u.rings.map((ring) => ring.map(move)) },
+  )
+  return { units, joins: joins.map(move), textPts, capHeight: s * Math.min(...em.map((r) => r.k)) * fit.k, rows: em.length }
+}
+
+export function layoutText({ text, font: fontId = 'sandskrit', frame, size = 1, spacing = 1.7, rowSize = 'same', style = 'lines', join = 'edge', letters = 'solid', rake = 0, host = 'spiral', zone, place, texts, symbols = [] }) {
   if (!FONTS[fontId]) fontId = 'sandskrit'
   const missing = new Set()
-  // A blank row keeps its place: it's a row of nothing, a capital high.
-  const rows = textRows(text).map((r) => rowOf(fontId, r, missing))
   const inlay = style === 'inlay'
-  const placed = inlay ? symbols.filter((sym) => SYMBOLS[sym.ch]).map((sym) => keepOnTable(frame, sym)) : []
-  const hasText = rows.some((r) => r.width > 0 && r.pts.length > 2)
-  if (!hasText && !placed.length) return null
-  const k = !hasText ? [] : rowSize === 'fill' ? rowScales(rows.map((r) => (r.width > 0 ? r : { ...r, width: 1 })), frame, spacing) : rows.map(() => 1)
-  const em = hasText ? stack(rows, k, spacing).filter((r) => r.row.width > 0) : []
-  const s = hasText ? fitScale(em, frame, inlay ? 'edge' : join) * Math.min(1, Math.max(0.05, size)) : 0
-  const capHeight = hasText ? s * Math.min(...em.map((r) => r.k)) : Infinity
 
   if (inlay) {
-    // The letters in the frame, as the joining line's points are placed (stack).
-    const units = []
+    // Every text block (one, or `texts`), then the free symbols, centred where they were put.
+    const blocks = (texts ?? [{ text, font: fontId, size, rowSize, place }]).map((b) => inlayBlock(b, frame, spacing, letters, missing)).filter(Boolean)
+    const placed = symbols.filter((sym) => SYMBOLS[sym.ch]).map((sym) => keepOnTable(frame, sym))
+    if (!blocks.length && !placed.length) return null
+    const units = blocks.flatMap((b) => b.units)
     let top = -Infinity
     let bottom = Infinity
-    for (const r of em) {
-      const place = ([x, y]) => [(x - r.row.width / 2) * r.k * s, (r.y + y * r.k) * s]
-      for (const u of r.row.units) {
-        if (u.kind === 'stroke') units.push({ kind: 'stroke', line: u.line.map(place) })
-        else if (letters === 'outline') for (const ring of u.rings) units.push({ kind: 'ring', ring: ring.map(place) })
-        else units.push({ kind: 'region', rings: u.rings.map((ring) => ring.map(place)) })
-      }
-      for (const p of r.pts) {
-        top = Math.max(top, p[1] * s)
-        bottom = Math.min(bottom, p[1] * s)
-      }
+    for (const b of blocks) for (const [, y] of b.joins) {
+      top = Math.max(top, y)
+      bottom = Math.min(bottom, y)
     }
-    // Free symbols, centred where they were put.
     const half = frame.round ? [1, 1] : [frame.W / 2, frame.H / 2]
     const side = frame.round ? 2 : Math.min(frame.W, frame.H)
     for (const sym of placed) {
       const at = [sym.x * half[0], sym.y * half[1]]
       const scale = sym.size * side
       const turn = turned(sym.rot)
-      const place = (p) => {
+      const put = (p) => {
         const [x, y] = turn(p)
         return [at[0] + x * scale, at[1] + y * scale]
       }
       for (const region of SYMBOLS[sym.ch].regions) {
-        const rings = region.map((r) => ringOf(r).map(place))
+        const rings = region.map((r) => ringOf(r).map(put))
         if (letters === 'outline') for (const ring of rings) units.push({ kind: 'ring', ring })
-        else units.push({ kind: 'region', rings })
+        else units.push({ kind: 'region', contour: true, rot: sym.rot ?? 0, rings })
         for (const [, y] of rings[0]) {
           top = Math.max(top, y)
           bottom = Math.min(bottom, y)
         }
       }
     }
-    const { path, visits } = inlayPath({ units, frame, ball: ballOf(frame), top, bottom, rake })
-    return { path, rows: em.length, missing: [...missing], capHeight, visits }
+    const capHeight = blocks.length ? Math.min(...blocks.map((b) => b.capHeight)) : Infinity
+    const rows = blocks.reduce((n, b) => n + b.rows, 0)
+    const textPts = blocks[0]?.textPts ?? []
+    // The design alone (Create's canvas): no host, no fills, no path.
+    if (host === 'none') return { path: [], rows, missing: [...missing], capHeight, textPts, shapes: units.map((u) => (u.kind === 'stroke' ? { line: u.line } : { rings: u.kind === 'ring' ? [u.ring] : u.rings })) }
+    const { path, visits } = inlayPath({ units, frame, ball: ballOf(frame), top, bottom, rake, host, zone })
+    return { path, rows, missing: [...missing], capHeight, visits, textPts }
   }
+
+  // A blank row keeps its place: it's a row of nothing, a capital high.
+  const rows = textRows(text).map((r) => rowOf(fontId, r, missing))
+  if (!rows.some((r) => r.width > 0 && r.pts.length > 2)) return null
+  const k = rowSize === 'fill' ? rowScales(rows.map((r) => (r.width > 0 ? r : { ...r, width: 1 })), frame, spacing) : rows.map(() => 1)
+  const em = stack(rows, k, spacing).filter((r) => r.row.width > 0)
+  const s = fitScale(em, frame, join) * Math.min(1, Math.max(0.05, size))
+  const capHeight = s * Math.min(...em.map((r) => r.k))
 
   const edgeX = (y) => (frame.round ? Math.sqrt(Math.max(0, 1 - y * y)) : frame.W / 2)
   const path = []
@@ -428,7 +525,9 @@ export function thrSteps(path) {
   for (let i = 1; i < path.length; i++) {
     const a = path[i - 1]
     const b = path[i]
-    const max = Math.min(0.03, Math.max(0.002, Math.sqrt(8 * nearCentre(a, b) * BOW)))
+    const near = nearCentre(a, b)
+    // Through the very centre a step swings θ by up to half a turn: shorter steps there.
+    const max = Math.min(0.03, Math.max(near < 0.002 ? 0.0005 : 0.002, Math.sqrt(8 * near * BOW)))
     const n = Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / max)
     for (let k = 1; k <= n; k++) out.push([a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n])
   }
@@ -446,7 +545,10 @@ export function toThr(path) {
   for (const [x, y] of thrSteps(path)) {
     const rho = Math.min(1, Math.hypot(x, y))
     let theta = Math.atan2(-y, x)
-    if (last !== null) theta = last + ((((theta - last) % (2 * Math.PI)) + 3 * Math.PI) % (2 * Math.PI)) - Math.PI
+    // At the centre θ means nothing (the ball doesn't move as it turns): keep the last one,
+    // or a path straight through the centre would swing θ half a turn in one step.
+    if (last !== null && rho < 1e-4) theta = last
+    else if (last !== null) theta = last + ((((theta - last) % (2 * Math.PI)) + 3 * Math.PI) % (2 * Math.PI)) - Math.PI
     last = theta
     lines.push(`${theta.toFixed(5)} ${rho.toFixed(5)}`)
   }

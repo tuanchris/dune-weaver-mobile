@@ -1,6 +1,5 @@
 • Pattern Hub: browse duneweaver.com's patterns and sync them to your phone and table
 • Thumbnails and previews show patterns in sand, with the ball
-• Create from text: write words and symbols on your table
 • Rectangular tables play G-code patterns
 • Watch a pattern draw before you send it
 • 114 more LED effects and 68 palettes

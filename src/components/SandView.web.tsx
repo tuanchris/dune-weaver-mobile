@@ -9,4 +9,4 @@ export const SAND_KEY = ''
 export { sandTable, type SandTable }
 export interface SandState { f: number; playing: boolean; phase: 'loading' | 'clearing' | 'simulating' | 'ready' }
 export interface SandHandle { play(): void; pause(): void; seek(f: number): void; speed(x: number): void }
-export const SandView = (_props: { name: string; table: SandTable; size: number; onState?: (s: SandState) => void; still?: number; onStill?: (dataUrl: string) => void; onError: (message: string) => void; ref?: React.Ref<SandHandle> }): null => null
+export const SandView = (_props: { name: string; thr?: string; table: SandTable; size: number; onState?: (s: SandState) => void; still?: number; onStill?: (dataUrl: string) => void; onError: (message: string) => void; ref?: React.Ref<SandHandle> }): null => null

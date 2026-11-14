@@ -1,24 +1,33 @@
 // Inlay style: sand-weaver's inlays (experiments/region-program/inlays.js) for text.
-// A host (a band across the table round the text, or the whole table) is raked in
-// straight lanes; each letter is drawn inside that fill right after the host's last
+// A host rakes the sand round the letters: a spiral out from the centre (the default),
+// or straight lanes; each letter is drawn inside that fill right after the host's last
 // pass within `ZONE` of it, so nothing passes it once drawn and the ball's moves
-// between letters lie under the host's lanes. Letters are units:
-//   region: a filled letter part (outline + holes): its own lanes across the host's,
-//           joined along its own rims, then its outline once round (crisp edge);
+// between letters lie under the host's later passes. Letters are units:
+//   region: a filled part (outline + holes): a letter's own lanes across the host's,
+//           joined along its own rims, then its outline once round (crisp edge); a
+//           symbol's lanes follow its shape (contour/, sand-weaver's contour fill);
 //   ring:   one outline (or hole) traced twice round from its door (sand-weaver rule 51);
 //   stroke: a single-line word, out to one end along its line and back to the other.
-// The host is a band across the table round the text, from BAND balls beyond it
-// (`rake` 0) through that share of the open sand above and below it, to the whole table (`rake` 1).
+// Lanes: a band across the table round the text, from BAND balls beyond it (`rake` 0)
+// through that share of the open sand above and below it, to the whole table (`rake` 1).
+// Spiral: a disc BAND balls beyond the furthest unit (`rake` 0) out to the edge (`rake` 1).
 // Units are in the frame's units (unit disc, or mm), as seen on the table (y up).
 
 /** Lanes this many balls apart (sand-weaver's fills: 0.25–0.5). */
 const PITCH = 0.3
-/** A letter is drawn after the host's last pass within this many balls of it. */
-const ZONE = 0.5
+/**
+ * A letter is drawn after the host's last pass within this many balls of it. At half a
+ * ball the passes after it plow its far side (the sim, 2026-11-14: every letter's lower
+ * right worn on the lanes host); at one ball the edge stays crisp, and the move in and
+ * out is still short.
+ */
+const ZONE = 1
 /** A band reaches this many balls beyond the text (a stamp label's 1.2). */
 const BAND = 1.2
 /** The host's lanes run at 45°, the letters' across them. */
 const ANGLE = Math.PI / 4
+
+import { generateContourFill } from './contour/contourFill.mjs'
 
 const lerp = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1])
@@ -115,8 +124,86 @@ function nearest(line, p, closed) {
   return best
 }
 
+/**
+ * A symbol part filled with lanes that follow its shape (sand-weaver's contour fill:
+ * level lines of a smoothed distance from its outline and holes, drawn as spirals from
+ * the deepest, the outline last). Kept per shape and pitch in the part's OWN frame (its
+ * outline's centre, unturned by `rot`), so typing, moving or turning never refills it;
+ * only a new size does.
+ */
+const contours = new Map()
+function contourCandidates(table, pitch, ball, rot = 0, fill) {
+  // Into the part's own frame, and the fill back out of it.
+  const pts = table[0]
+  const c = [pts.reduce((s, p) => s + p[0], 0) / pts.length, pts.reduce((s, p) => s + p[1], 0) / pts.length]
+  const a = (rot * Math.PI) / 180
+  const cos = Math.cos(a)
+  const sin = Math.sin(a)
+  // A turn clockwise as seen on the table (y up): out = turn(p), in = unturn(p).
+  const unturn = ([x, y]) => [(x - c[0]) * cos - (y - c[1]) * sin, (x - c[0]) * sin + (y - c[1]) * cos]
+  const turn = ([x, y]) => [c[0] + x * cos + y * sin, c[1] - x * sin + y * cos]
+  const rings = table.map((r) => r.map(unturn))
+  const found = contourLocal(rings, pitch, ball, fill)
+  return found?.map((f) => ({ path: f.path.map(turn), entry: turn(f.entry), exit: turn(f.exit) }))
+}
+function contourLocal(rings, pitch, ball, fill) {
+  const clean = (ring) => {
+    const r = ring.filter((p, i) => !i || dist(p, ring[i - 1]) > 1e-12)
+    if (r.length > 1 && dist(r[0], r[r.length - 1]) < 1e-12) r.pop()
+    return r
+  }
+  const key = `${pitch}|${JSON.stringify(fill ?? {})}|${rings.map((r) => r.map(([x, y]) => `${x.toFixed(4)},${y.toFixed(4)}`).join(';')).join('|')}`
+  if (!contours.has(key)) {
+    let found = null
+    try {
+      const region = { polygon: clean(rings[0]), holes: rings.slice(1).map(clean).filter((r) => r.length >= 3), ...(fill ? { fill } : {}) }
+      // table 2 makes sand-weaver's ball (diameter = 2·ball/table) this frame's ball.
+      found = generateContourFill(region, { pitch, spacing: pitch / ball, step: ball / 4, table: 2, ball }, {}).candidates
+    } catch {
+      found = null // degenerate (a sliver): the straight lanes instead
+    }
+    if (contours.size > 300) contours.delete(contours.keys().next().value)
+    contours.set(key, found)
+  }
+  return contours.get(key)
+}
+
+/** Along a closed ring from a to b (points on it), the shorter way round. */
+function alongRing(ring, a, b) {
+  const p = nearest(ring, a, true)
+  const q = nearest(ring, b, true)
+  const forward = [p.q]
+  for (let i = p.i; i !== q.i; i = (i + 1) % ring.length) forward.push(ring[(i + 1) % ring.length])
+  forward.push(q.q)
+  const backward = [p.q]
+  for (let i = p.i; i !== q.i; i = (i - 1 + ring.length) % ring.length) backward.push(ring[i])
+  backward.push(q.q)
+  const len = (path) => path.reduce((s, pt, i) => (i ? s + dist(path[i - 1], pt) : 0), 0)
+  return len(forward) <= len(backward) ? forward : backward
+}
+
 /** The visit, from host vertex v back to it: in to the unit's door, its drawing, out again. */
 function visit(unit, v, pitch) {
+  if (unit.kind === 'region' && unit.contour) {
+    const found = contourCandidates(unit.rings, pitch, pitch / PITCH, unit.rot, unit.fill)
+    if (found?.length) {
+      // In at the outline's point nearest v (a short step, like the straight fill's door),
+      // along the outline to its point nearest the fill's start and straight in to it: a
+      // straight line from the door crossed out of concave letters (a u) and over finished
+      // ones. The fill's last lap retraces the whole outline, so the way in disappears under
+      // it. Then the fill, and along the outline (still on top) to the point nearest v and out.
+      const outline = unit.rings[0]
+      const door = nearest(outline, v, true).q
+      const len = (path) => path.reduce((s, pt, i, all) => (i ? s + dist(all[i - 1], pt) : 0), 0)
+      const wayIn = (c) => alongRing(outline, door, nearest(outline, c.entry, true).q)
+      const cost = (c) => {
+        const w = wayIn(c)
+        return len(w) + dist(w[w.length - 1], c.entry) + len(alongRing(outline, c.exit, v))
+      }
+      const best = found.reduce((a, c) => (cost(c) < cost(a) ? c : a))
+      return [v, ...wayIn(best), ...best.path, ...alongRing(outline, best.exit, v), v]
+    }
+  }
   if (unit.kind === 'region') {
     // The door is a vertex of the outline (the fill's routes start there).
     const ring = unit.rings[0]
@@ -160,9 +247,10 @@ function dense(pts, step, closed) {
  * Starts and ends on the table's edge (the host's first and last lanes are its corners).
  * Returns { path, visits: [{ from, to, outline }] } (each letter's visit, as path indices).
  */
-export function inlayPath({ units, frame, ball, top, bottom, rake = 0 }) {
+export function inlayPath({ units, frame, ball, top, bottom, rake = 0, host = 'spiral', zone: zoneBalls = ZONE }) {
   const pitch = PITCH * ball
-  const zone = ZONE * ball
+  const zone = zoneBalls * ball
+  if (host === 'spiral') return spiralInlay({ units, frame, ball, pitch, zone, rake })
   const d = [Math.cos(ANGLE), Math.sin(ANGLE)]
   const n = [Math.sin(ANGLE), -Math.cos(ANGLE)] // the sweep: across the lanes, top left to bottom right
   const band = rake < 1
@@ -278,4 +366,124 @@ export function inlayPath({ units, frame, ball, top, bottom, rake = 0 }) {
   }
   if (tail) path.push(tail)
   return { path, visits }
+}
+
+const outlineOf = (unit) => (unit.kind === 'region' ? unit.rings[0] : unit.kind === 'ring' ? unit.ring : unit.line)
+
+/**
+ * The spiral host: one line from the centre outwards, `pitch` apart, out to the table's
+ * edge (rake 1) or, below that, BAND balls beyond the furthest unit plus `rake` of the
+ * rest. On a rectangle it's a rectangular spiral: a core along the long side, each side
+ * stepping out a pitch a turn, so it meets both edges at once. Each unit is visited from
+ * the host's LAST point within `zone` of it, so nothing passes it once it's drawn; every
+ * later turn is further out. Starts at the centre.
+ */
+function spiralInlay({ units, frame, ball, pitch, zone, rake }) {
+  const round = frame.round
+  const wide = round || frame.W >= frame.H
+  const core = round ? 0 : Math.abs(frame.W - frame.H) / 2
+  const full = round ? 1 : Math.min(frame.W, frame.H) / 2
+  // How far out a point is in the spiral's terms: radius, or distance from the rectangle's core.
+  const offset = ([x, y]) => (round ? Math.hypot(x, y) : wide ? Math.max(Math.abs(x) - core, Math.abs(y)) : Math.max(Math.abs(x), Math.abs(y) - core))
+  const outlines = units.map(outlineOf)
+  let cover = 0
+  for (const o of outlines) for (const p of o) cover = Math.max(cover, offset(p))
+  cover = Math.min(full, cover + BAND * ball)
+  const R = Math.min(full, cover + Math.max(0, Math.min(1, rake)) * (full - cover))
+  // The path keeps the spiral's corners; the zone test runs on points zone/2 apart along it.
+  const bend = 0.02
+  const step = zone / 2
+
+  const corners = []
+  if (round) {
+    const end = (2 * Math.PI * R) / pitch
+    for (let t = 0; ; ) {
+      const r = (pitch * t) / (2 * Math.PI)
+      corners.push([r * Math.cos(t), r * Math.sin(t)])
+      if (t >= end) break
+      t = Math.min(end, t + bend / Math.max(r, bend))
+    }
+  } else {
+    // Sides in turn (right, top, left, bottom), each a quarter pitch further out than the one before.
+    const r = (i) => Math.min(R, (i * pitch) / 4)
+    const xy = wide ? (p) => p : ([a, b]) => [b, a]
+    corners.push(xy([core, 0]))
+    for (let i = 1; ; i += 4) {
+      corners.push(xy([core + r(i - 1), r(i)]), xy([-core - r(i + 1), r(i)]), xy([-core - r(i + 1), -r(i + 2)]), xy([core + r(i + 3), -r(i + 2)]))
+      if (r(i + 3) >= R) break
+    }
+  }
+  // Samples along the corners' segments: [segment, point].
+  const host = []
+  for (let k = 0; k + 1 < corners.length; k++) {
+    const n = Math.max(1, Math.ceil(dist(corners[k], corners[k + 1]) / step))
+    for (let j = 0; j < n; j++) host.push([k, lerp(corners[k], corners[k + 1], j / n)])
+  }
+  host.push([corners.length - 1, corners[corners.length - 1]])
+
+  // The last host point within `zone` of each unit (a grid of zone-sized cells over the units).
+  const K = 1 << 16
+  const cellOf = (v) => Math.floor(v / zone) + K / 2
+  const grid = new Map()
+  const near = outlines.map((o, u) => dense(o, zone / 2, units[u].kind !== 'stroke'))
+  near.forEach((pts, u) => {
+    for (const [x, y] of pts) {
+      const key = cellOf(x) * K + cellOf(y)
+      if (!grid.has(key)) grid.set(key, [])
+      grid.get(key).push(x, y, u)
+    }
+  })
+  const last = units.map(() => -1)
+  host.forEach(([, [x, y]], i) => {
+    const cx = cellOf(x)
+    const cy = cellOf(y)
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+      const list = grid.get((cx + dx) * K + cy + dy)
+      if (list) for (let j = 0; j < list.length; j += 3) if (Math.hypot(list[j] - x, list[j + 1] - y) <= zone) last[list[j + 2]] = i
+    }
+  })
+  // The visit starts where the host LEAVES the zone: between that last point and the next.
+  const gap = (p, u) => Math.min(...near[u].map((q) => dist(p, q)))
+  const at = new Map()
+  last.forEach((i, u) => {
+    // Never within the zone (a unit beyond the host): from the host's nearest point.
+    if (i < 0) i = nearestIndex(host.map(([, p]) => p), outlines[u][0])
+    let t = 0
+    const a = host[i][1]
+    const b = host[i + 1]?.[1]
+    if (b && gap(a, u) <= zone) {
+      let lo = 0
+      let hi = 1
+      for (let k = 0; k < 14; k++) {
+        const m = (lo + hi) / 2
+        if (gap(lerp(a, b, m), u) <= zone) lo = m
+        else hi = m
+      }
+      t = hi
+    }
+    if (!at.has(i)) at.set(i, [])
+    at.get(i).push({ u, t, p: b ? lerp(a, b, t) : a })
+  })
+
+  const path = []
+  const visits = []
+  host.forEach(([k, p], i) => {
+    const corner = i === 0 || host[i - 1][0] !== k
+    if (corner) path.push(corners[k])
+    const here = at.get(i)
+    if (!here) return
+    if (!corner) path.push(p)
+    for (const { u, p: v } of here.sort((x, y) => x.t - y.t)) {
+      const from = path.length
+      path.push(...visit(units[u], v, pitch))
+      visits.push({ from, to: path.length - 1, outline: outlines[u] })
+    }
+  })
+  return { path, visits }
+}
+
+function nearestIndex(pts, p) {
+  let best = 0
+  for (let i = 1; i < pts.length; i++) if (dist(pts[i], p) < dist(pts[best], p)) best = i
+  return best
 }

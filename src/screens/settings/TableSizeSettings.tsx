@@ -5,6 +5,7 @@ import { useBoards } from '../../stores/useBoards'
 import { useTheme } from '../../stores/useTheme'
 import { MODELS, modelOf, roundSize } from '../../lib/tableSize'
 import { Card } from '../../components/ui'
+import { CREATE_TEXT } from '../../components/TextGenerator'
 import { SettingsPage } from './SettingsPage'
 import { font, radius, spacing } from '../../theme'
 
@@ -67,9 +68,9 @@ export function TableSizeSettings(): React.JSX.Element {
     <SettingsPage title="Table size" table>
       <Card style={styles.card}>
         <Text style={[styles.body, { color: colors.foreground }]}>
-          Create sizes text for the table: how closely it rakes, the gap it keeps round finished letters, and when letters get too small to read. The
-          Pattern Hub picks the version of each pattern made for it: a DW Gold, or any size between a Mini Pro and a Pro, takes the DW Mini Pro ones
-          unless you switch them in the hub.
+          {CREATE_TEXT ? 'Create sizes text for the table: how closely it rakes, the gap it keeps round finished letters, and when letters get too small to read. ' : ''}
+          Sand previews are simulated on a table this size, and the Pattern Hub picks the version of each pattern made for it: a DW Gold, or any size
+          between a Mini Pro and a Pro, takes the DW Pro ones unless you switch them in the hub.
         </Text>
         <Text style={[styles.hint, { color: colors.mutedForeground }]}>{said}</Text>
         <Row label="From the table" detail={`${fromTable.label}: ${fromTable.diameter} mm of sand, ${fromTable.ball} mm ball`} on={!active.size && !custom} onPress={() => choose(null)} />

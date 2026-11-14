@@ -9,7 +9,7 @@
 // ≈6 s a render with 3 at once on this Mac's GPU. Incremental: a render is kept
 // while the engine's KEY (assets/sand/index.js) is unchanged, so re-run it after
 // `npm run gen-sand` (a new engine, clear or ball) or when files are added:
-//   npm run gen-sand-previews -- --in <dir> --out <dir> [--tables <stem → tables json>] [--jobs 3] [--only <substring>]
+//   npm run gen-sand-previews -- --in <dir> --out <dir> [--tables <stem → tables json>] [--jobs 3] [--only <substring>] [--px 512]
 // Without --tables every file renders on all three tables.
 // Needs Chrome and playwright-core (resolved here, else from ../dune-weaver-viewer).
 import fs from 'node:fs'
@@ -29,8 +29,8 @@ const OUT = arg('--out')
 if (!IN || !OUT) throw new Error('Usage: npm run gen-sand-previews -- --in <dir of .thr> --out <dir> [--tables <json>] [--jobs 3]')
 const WANT = arg('--tables') ? JSON.parse(fs.readFileSync(arg('--tables'), 'utf8')) : null
 const TABLES = ['DWP', 'DWG', 'DWMP']
-const OUT_PX = 512 // the bundled ink previews' size
-const RENDER_PX = 1024 // shaded at twice that, then scaled down
+const OUT_PX = Number(arg('--px', 512)) // the bundled ink previews' size (--px for a closer look)
+const RENDER_PX = Math.max(1024, OUT_PX) // shaded at (at least) twice that, then scaled down
 
 const requireFrom = (dir) => createRequire(path.join(dir, 'package.json'))
 let chromium

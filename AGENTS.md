@@ -451,7 +451,12 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   write through to whichever one is active. Browse's pull-to-refresh says so instead of silently
   doing nothing.
 - **Create (text generator)**: Browse's "+" menu › **Create from text** opens `TextGenerator`
-  (`components/TextGenerator.tsx`): words written on the table in ONE continuous line. The
+  (`components/TextGenerator.tsx`): words written on the table in ONE continuous line.
+  **HELD BACK from 1.4.0** (owner's call, 2026-11-14): `CREATE_TEXT` (exported by
+  `TextGenerator.tsx`) is `false`, so Browse's "+" imports straight away (no menu), the one-time
+  callout never shows (its `createHintSeen` stays unset, so it shows once the feature ships), and
+  Settings › Table size leaves Create out of its copy. To ship it: set it `true` and add its line
+  back to the release notes (`APP_CHANGELOG`, both fastlane notes). The
   engine is `src/lib/sandText/` (plain JS, no deps; `index.mjs` layout + exporters, `inlay.mjs`).
   **Fonts** (one strip of tiles, each drawing "Abc"; single-line first, a divider, then outline):
   - Single-line (`fonts.mjs`, baked once from their sources, edit glyphs there; a glyph is
@@ -478,7 +483,16 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
     clockwise) a symbol is an inlay unit
     like a letter; `keepOnTable` moves it in (and if it's bigger than the table, shrinks it) until
     its outline is a ball inside the edge, so the raking's turns along the edge keep half a ball
-    clear of it. The engine applies it, and so does the canvas while a symbol moves.
+    clear of it. The engine applies it, and so does the canvas while a symbol moves. A symbol's
+    size is measured in BALLS across its larger side, so it follows the table: it READS WELL from
+    `goodSymbolSize` / `symbolBalls` (10 for bold shapes, 14 for some detail, 20 for faces,
+    animals and busy pictures; tiers set from sim renders of all 51, 2026-11-14) and may go down
+    to `minSymbolSize` = 6 balls (the owner found the tiers too big as a hard minimum, so they're
+    advice: below its tier the inspector and the status line say its details blur). New symbols
+    start at max(22%, the floor). The TEXT block moves too
+    (Inlaid only; `place: { x, y, rot }`, its centre and turn; `keepTextOnTable` moves it in
+    until it lies a ball inside the edge, and on a rectangle shrinks a turned block that can't
+    fit). On lines it stays centred: its rows run to the edge.
   A character no font has is left out and named in the status line. Accents are dropped (NFKD)
   and typographic quotes/dashes made plain (iOS types ’). Up to 8 rows (`MAX_LINES`), 160
   characters. **Layout**: the block fits 90% of the table (round: every letter inside 0.9 R;
@@ -492,24 +506,48 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
     character). Next row = Along the edge (every row's line runs edge to edge, the ball moves
     along the rim or frame edge to the next row) or Beside the text (a short line beside the
     wider row; only the first and last lines reach the edge).
-  - **Inlaid** (sand-weaver's inlays, `experiments/region-program/inlays.js`, ported for
-    straight lanes): a host — a band across the table round the text, from 1.2 balls beyond it
-    (Raked area 0%) through that share of the open sand above and below it to the whole table
-    (100%) — is raked in straight lanes 0.3 ball apart at 45°, swept from top left to
-    bottom right, joined along the host's edge (which traces the band's edges). Each letter is a
-    unit drawn right after the host's LAST lane within half a ball of it, at the point that lane
-    leaves that zone: a step in, the letter, the same step out. Nothing passes it afterwards, and
-    every move between letters lies under later lanes. Units: an outline font's part, Solid =
+  - **Inlaid** (sand-weaver's inlays, `experiments/region-program/inlays.js`): a host rakes the
+    sand round the letters, 0.3 ball apart. Background = **Spiral** (the default since
+    2026-11-14): one line out from the centre (a rectangle's: a rectangular spiral from a core
+    along its long side, each side a pitch further out a turn, meeting both edges at once), out to
+    a disc 1.2 balls beyond the furthest letter or symbol (Raked area 0%) through that share of
+    the rest to the table's edge (100%). **Lanes**: straight lanes at 45° over a band across the
+    table round the text (same 0%–100%), swept from top left to bottom right, joined along the
+    host's edge. Each letter is a unit drawn right after the host's LAST pass within `ZONE` (1
+    ball) of it, at the point the host leaves that zone: a step in, the letter, the same step out.
+    Nothing passes it afterwards, and every move between letters lies under later passes. ZONE was
+    half a ball until the sim showed the passes after a letter plowing its far side (every
+    letter's lower right worn on the lanes host: the "right side cut off"); at one ball the edge
+    stays crisp, with a clean halo, and the step in and out is still short. Units: an outline font's part, Solid =
     its own lanes across the host's (lanes clipped to the outline and holes, joined along their
     rims — a lane's ends lie on the outline and the gap between two pieces is bounded by one rim —
     then the outline once round), or Outline = each ring traced twice round from its door
     (sand-weaver rule 51); a single-line font's WORD, out to one end along its line and back to
     the other (its joining line stays under the word: Sandskrit's E and L use it as their
-    bottom bar). Lengths: a band ≈ 35–100 m, the whole table ≈ 130 m of lanes plus the letters
+    bottom bar). A SYMBOL's part (placed or typed) is filled by sand-weaver's contour fill
+    (`sandText/contour/`, vendored: lanes are level lines of a smoothed distance from its outline
+    and holes, drawn as spirals from the deepest, the outline last), so the lanes follow the
+    shape (a rainbow's bands are arcs); straight lanes across a symbol read as noise (sim,
+    2026-11-14). LETTERS too (the owner's call, 2026-11-14: "concentric alongside the stroke"), with
+    NO smoothing (`LETTER_FILL = { smooth: 0 }`: rings parallel to the stroke, crisp corners, an
+    engraved inline look; the smoothed field wobbled inside letters and the straight hatch was
+    rejected — sim comparisons of both on three texts, 2026-11-14); the straight-lane `fillRegion`
+    stays only as the fallback for a part too thin to fill. The ball steps in at the outline's
+    point nearest the host, runs ALONG the outline to its point nearest the fill's start and steps
+    straight in (a straight line to the start crossed out of concave letters and over finished
+    ones: the fill's last lap retraces the outline, burying the way in), and after the outline's
+    lap runs along it to the point nearest the host before stepping out. Each symbol's fill is
+    cached by shape and pitch (~100–170 ms the first time in Node), so typing never refills one.
+    Detailed symbols (animals, the globe, the crown) are busy at the default 22% size; bigger
+    reads better. Every symbol stays Noto Emoji's own drawing (a mirrored full-arch rainbow was
+    tried and dropped, 2026-11-14: it no longer looked like the emoji); the picker, the chips and
+    the inspector show that line art (`SymbolIcon`), never the system's emoji, so what's picked is
+    what's drawn on every platform. Lengths: a band ≈ 35–100 m, the whole table ≈ 130 m of lanes plus the letters
     (on 700 mm). Known weak spot: a small counter (Brush script's o) gets busy, the fill going
     round it on every lane.
-  Either style starts and ends AT THE EDGE (ρ 1 on a round table), so an adaptive clear before
-  it runs from the centre. Frames are as seen on the table: x right, y up. **Table size**
+  Lines and the Lanes background start and end AT THE EDGE (ρ 1 on a round table), so an
+  adaptive clear before them runs from the centre; the Spiral starts AT THE CENTRE and, raking
+  the whole table, ends at the edge. Frames are as seen on the table: x right, y up. **Table size**
   (`ballOf`): a rectangle's travel is real mm, its ball 10 mm. A ROUND table's size comes from
   `src/lib/tableSize.ts` (`roundSize(board)`): set by hand in Settings › Table size
   (`Board.size`), else its MODEL's — the config name the table reports (`$/name` via
@@ -526,29 +564,52 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   screen) — sand-weaver's DW Pro calibration (its sim view is reflected; it delivers π − θ) shows
   that this is how the table draws it from above. `.thr` steps are cut so none bows more than
   0.0005 R off its line (`thrSteps`: a step of length L at distance r from the centre bows about
-  L²/8r; 0.002–0.03 R), so long lanes stay a few points; G-code is `G1 X Y` mm from the travel's
+  L²/8r; 0.002–0.03 R, and 0.0005 R where a step passes within 0.002 R of the centre, where θ
+  swings fast; at ρ < 0.0001 θ keeps its last value, since there it means nothing), so long
+  lanes stay a few points; G-code is `G1 X Y` mm from the travel's
   lower-left corner, opening `G1 F5000` (FluidNC refuses a move before a feed). Letter size,
   from sand-weaver's DW Pro sim (700 mm, 10 mm ball): 38 mm capitals read, 26 mm blur, so the
-  status line warns under 3.2 balls (32 mm). The sheet is one `page` sheet: the drawing PINNED on top (about
-  a third of the sheet's measured height — half folded the sheet is half the window; an inlay's
-  host drawn thin and faint, the letters in ink; points thinned by distance, never by stride,
-  which would drop letters among long lanes) with the status line, then Font (the strip, first), Text, Name (placeholder:
-  the suggested name — the first row, else the first symbol's label), Symbols (Inlaid only: the
-  placed ones as chips, Add symbol, Arrange), Layout (Size, Rows), Style (On lines: Next row;
-  Inlaid: Raked area slider, Letters and symbols = Solid / Outline). DEFAULTS: Inlaid, Raked area
-  100% (the whole table), Solid, Geometric, "Dune" / "Weaver". The font strip puts the outline
-  fonts first (Geometric leading: `ORDER` in index.mjs), a divider, then the single-line ones. The
-  sheet is the JS one on iOS too (`Sheet native={false}`): a native pageSheet follows any vertical
-  drag inside it and cancels the touch, which made dragging symbols finicky. In-sheet pages:
-  **Add a symbol** (a grid of the emoji, up to 40 placed; a pick lands on Arrange, selected, at the
-  first free spot of eight)
-  and **Arrange** (`SymbolCanvas.tsx`): a large drawing of the table, the text faint (laid out
-  alone, so it holds still) and the symbols filled (even-odd: their holes open); one finger on a
-  symbol drags it, two fingers pinch and twist it, the selected one's corner handle resizes it
-  and the knob above it turns it (snapping within 5° of a quarter turn), a tap on the sand lets
-  go; the selected one's Size and Turn sliders and Remove below. A gesture moves only the
-  canvas (its own copy of the symbols, PanResponder refs, the scroll locked); the pattern redraws
-  on release. Layout takes ≤ 45 ms for 160 characters under `node
+  status line warns under 3.2 balls (32 mm). The sheet is ONE editor page (canvas first, since
+  2026-11-14), FULL SCREEN (`Sheet variant="full"`): the CANVAS PINNED on top (`SymbolCanvas.tsx`,
+  as wide as the screen but at most 45% of the measured height, so the controls keep the rest —
+  the iPhone Duo's short outer display left them no room at 60%; on a WIDE window (wider than
+  1.15× its height: iPad, an open Duo held sideways, desktop) the canvas sits LEFT and the
+  controls RIGHT) shows the DESIGN, not the pattern: every
+  text's letters (`host: 'none'` layouts, centred, as filled shapes) and every symbol, filled
+  even-odd, moved directly. Nothing there lays out the pattern: the host spiral and the symbols'
+  contour fills took up to a second a change on the phone (the owner: "lagging resizing and
+  moving emojis… let user free move stuff first, we'll render after"), so the pattern is laid out
+  only by PREVIEW and SAVE. A DRAG moves a text or a symbol straight away, controls hidden
+  (they'd be in the way; one finger snaps to the centre lines within 8 pt, a guide shows); two
+  fingers pinch and twist it. A TAP shows its controls (dashed box; corner handle resizes, the knob
+  above turns, snapping within 5° of a quarter turn; the ✕ at the top-left corner removes a symbol,
+  or a text when there are others), ANOTHER TAP hides them (the owner's call, 2026-11-14: easier to
+  move things around); a pick from the strip shows them; a tap on the sand selects nothing. A gesture moves only the canvas (its own copy of the state, PanResponder refs, the scroll
+  locked) and hands the result over on release. Under it the status line (errors, small letters,
+  else what a gesture does), Preview, then a STRIP of what's on the table as chips: Pattern (tune
+  icon), each text (its first row), each symbol, + (the Add page: Add text, then the emoji grid).
+  Every edit works from the strip and sliders too (HIG: gestures need another way). SEVERAL TEXTS
+  (up to 8; Inlaid; `layoutText({ texts })`, each its own text, font, size, rows and place; On
+  lines draws only the first, its rows running edge to edge). The inspector below shows the
+  selection: a TEXT (the first is selected on opening: what people come to write) = its field,
+  the font strip (outline fonts first, Geometric leading: `ORDER` in index.mjs, a divider, then
+  the single-line ones), Size (30–100%), Turn (Inlaid), Rows, Centre (Inlaid), Remove (when there
+  are others); a SYMBOL = Size (from its per-table minimum, said under it in % and mm), Turn,
+  Centre, Remove; PATTERN = Style (On lines: Next row; Inlaid: Background = Spiral /
+  Lanes, Raked area slider, Letters and symbols = Solid / Outline) and the table size it's laid
+  out for, then Name (placeholder: the suggested name — the first row, else the first symbol's
+  label). DEFAULTS: Inlaid, Spiral, Raked area 100% (the whole table), Solid, Geometric,
+  "Dune" / "Weaver", centred. PREVIEW (in-sheet page) lays the pattern out a beat after it opens
+  and shows Path (the ball's path: letters in ink, the raking faint) or, on a round table,
+  SAND: the sand engine (`SandView` given the unsaved `.thr` text as `thr`, instead of a library
+  name) after the table's clear, Play / Pause and Finished sand. Save lays it out again. Each
+  symbol's contour fill is cached in the part's OWN frame (its outline's centre, unturned by its
+  `rot`), so moving or turning one never refills it (18 ms vs 224 ms); only a new size does. The sheet is the JS one on iOS too (`Sheet native={false}`): a
+  native pageSheet follows any vertical drag inside it and cancels the touch. The one in-sheet
+  page is **Add a symbol** (a grid of the emoji, up to 40 placed; a pick returns to the editor
+  with it selected, at the first free spot of eight). Browse's "+" gets a one-time callout
+  ("New: write on your table", `usePrefs.createHintSeen`, false after an update or a fresh
+  install, true until prefs load so it never flashes) that the "+" or its close clears. Layout takes ≤ 45 ms for 160 characters under `node
   --jitless`, so it redraws on every keystroke. Cancel/Save in the header; a dirty sheet isn't
   swipe-dismissible and asks Keep editing / Discard (/ Save); setters hand back the same recipe
   when nothing changed. Rectangular tables need the table's size (`useTravel`; Create toasts
@@ -560,8 +621,9 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   sheet (Play sends then draws). The sheet remembers the last recipe per table kind for the
   session. `npm run check-text` runs every font on both table shapes and every layout in both
   styles, every symbol placed and typed, and placed symbols at the edge: on the table, starting and ending at the edge, no `.thr` step bowing off its line,
-  continuous θ, G-code inside the travel, rows reading the way the app draws them, and (inlay)
-  no host lane within half a ball of a letter drawn before it (a negative control — letters
+  continuous θ, G-code inside the travel, rows reading the way the app draws them, the spiral
+  starting at the centre (and ending at the edge when it rakes the whole table), and (inlay, both
+  backgrounds) no host pass within half a ball of a letter drawn before it (a negative control — letters
   spliced where the lane enters their zone — fails it). The earlier Sandify generator (shapes,
   effects, layers; vendored engine) was removed on 2026-11-10; its files are in
   `/Volumes/SSD/projects/_archive/dune-weaver-mobile-sandify-2026-11-10.tgz`.
@@ -750,7 +812,7 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   version the active table takes (`forTable`'s rule via `usePrefs.hubVersions`, saved on each
   catalog read): a Pro-sized table never lists `owl-mini-pro.thr`, a Mini Pro never `owl.thr`,
   a Gold its pick — even when the phone or the card holds both (owner's call, 2026-11-11; the
-  hidden file still counts for Create's name clashes). Search row = search · Show (filter + sort) · "+" (a pull-down drawn in the view, not a Modal, so the generator's sheet can open straight after: Create from text · Import from file) — plain,
+  hidden file still counts for Create's name clashes). Search row = search · Show (filter + sort) · "+" (a pull-down drawn in the view, not a Modal, so the generator's sheet can open straight after: Create from text · Import from file; while `CREATE_TEXT` is off it imports straight away) — plain,
   not sand: sand there means a filter is on. The detail sheet: the pattern on its frame (disc or the table's rectangle). TAPPING it
   (only when the app holds a copy; no play badge on it, the owner's call: nothing covers the pattern) opens the
   sheet's `preview` sub-page (a page, not a second sheet — one at a time) with a PLAYBACK
@@ -1107,7 +1169,7 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   (the other Modals are full screen: `FwUpdateSplash`, a blocker, and `FullscreenPlayer` (its
   content is a render prop), which Browse and the player open only once no sheet is up). `variant="page"` = a native
   iOS `pageSheet` (non-transparent, `backdropColor` = theme background, system swipe-to-dismiss, no
-  grabber), a tall JS sheet on Android/web — for editors, pickers, logs; `native={false}` keeps it the JS one on iOS too, for content with its own drags (Create's Arrange canvas: a pageSheet follows vertical drags and cancels the touch). `variant="fit"` = a
+  grabber), a tall JS sheet on Android/web — for editors, pickers, logs; `native={false}` keeps it the JS one on iOS too, for content with its own drags (a pageSheet follows vertical drags and cancels the touch). `variant="full"` = the whole screen inside the safe areas (split: the app's half), JS everywhere, no grabber and no swipe (its header buttons close it): for a workspace (Create). `variant="fit"` = a
   content-height JS sheet everywhere (max 560 wide, centered) with a REAL draggable grabber (the
   grabber + header are the only drag zone, so scrolls, Sliders and the ColorWheel never fight it)
   — for short choosers and content that would fight UIKit's sheet pan. Never draw a fake grabber.
