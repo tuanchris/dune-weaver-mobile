@@ -25,12 +25,20 @@ export interface ImportResult {
  * geometry for fast on-screen preview only. Throws on an invalid file.
  */
 async function processThr(uri: string, rawName: string, rect: boolean): Promise<ImportedThr> {
+  return savePatternText(rawName, await new File(uri).text(), rect)
+}
+
+/**
+ * Save pattern text into the library's folder as `rawName` (the extension is
+ * added when missing): a picked file, or one the pattern generator made.
+ * Returns what `addImported` needs. Throws when the text isn't a valid pattern.
+ */
+export function savePatternText(rawName: string, text: string, rect: boolean): ImportedThr {
   // A rectangular table plays G-code; a round one plays .thr. Each kind is
   // validated by content, so the other kind (or anything else) fails here.
   let name = bareName(rawName || 'pattern')
   if (rect ? !isGcode(name) : !/\.thr$/i.test(name)) name = `${name}${rect ? '.gcode' : '.thr'}`
 
-  const text = await new File(uri).text()
   const xy = (rect ? parseGcode(text) : thrToXY(text)) as Point[]
   if (xy.length === 0) throw new Error(`not a valid ${rect ? 'G-code' : '.thr'} file`)
 

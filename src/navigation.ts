@@ -16,7 +16,10 @@ export type SettingsStackParamList = {
   Wifi: undefined
   Password: undefined
   Firmware: undefined
+  // A round table's size: about the table, stored on this phone (not gated).
+  TableSize: undefined
   // On this phone.
+  Account: undefined
   Patterns: undefined
   Branding: undefined
   Diagnostics: undefined
@@ -25,7 +28,8 @@ export type SettingsStackParamList = {
 
 /** The bottom-tab routes (wired in AppTabs.tsx / AppTabs.web.tsx). */
 export type TabParamList = {
-  Browse: undefined
+  // { tab: 'hub' } opens the Pattern Hub tab (Settings › duneweaver.com).
+  Browse: { tab?: 'hub' } | undefined
   Playlists: undefined
   Control: undefined
   LEDs: undefined

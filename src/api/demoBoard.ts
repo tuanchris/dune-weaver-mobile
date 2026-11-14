@@ -7,6 +7,7 @@
 
 import { PREVIEW } from '../../assets/pattern-manifest'
 import type { RawStatus, RawTime } from './status'
+import { LED_PALETTE_LIST } from '../lib/ledPalettes'
 import type { ClearMode, LedSliderReset, WifiMode, WifiScanResult, WifiStatus, WifiWriteResult } from './board'
 
 /** Sentinel base for the demo table. Real bases are http(s) URLs, so this never
@@ -58,6 +59,7 @@ function defaultSettings(): Record<string, string> {
   return {
     'LED/Effect': 'rainbow',
     'LED/Palette': 'party',
+    'LED/Palettes': String(LED_PALETTE_LIST.length),
     'LED/Color': 'FFB060',
     'LED/Color2': '0040FF',
     'LED/Brightness': '160',
@@ -239,6 +241,8 @@ export const demoBoard = {
   // ---- Reads ----
   status: async (_base: string, _t?: number): Promise<RawStatus> => { await wait(60); return buildStatus() },
   patterns: async (): Promise<string[]> => { await wait(80); return ON_TABLE },
+  // A round DW Pro, so Create sizes its patterns for one (lib/tableSize.ts).
+  configName: async (): Promise<string> => 'Dune Weaver Pro ThetaRho',
   playlists: async (): Promise<string[]> => { await wait(80); return Object.keys(PLAYLISTS) },
   settings: async (): Promise<Record<string, string>> => { await wait(80); return { ...S.settings } },
   time: async (): Promise<RawTime> => { await wait(40); return nowTime() },

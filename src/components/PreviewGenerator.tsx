@@ -37,7 +37,7 @@ function previewExists(uri: string | undefined): boolean {
 }
 
 /** Keep filenames flat/safe (names may contain spaces/parens). */
-function safeName(name: string): string {
+export function safeName(name: string): string {
   return name.replace(/[^\w.-]+/g, '_')
 }
 
@@ -66,7 +66,12 @@ function writeImageFile(dir: Directory, fileName: string, b64: string): string {
  * document storage, and return its uri. Cleans up the temp PNG. Round patterns
  * keep WEBP (like dw's bundled previews); G-code saves PNG, like its bundled ones.
  */
-async function saveCapture(name: string, pngB64: string, out: { width: number; height: number; png: boolean }): Promise<string> {
+export async function saveCapture(
+  name: string,
+  pngB64: string,
+  out: { width: number; height: number; png: boolean },
+  dir = new Directory(Paths.document, 'previews'),
+): Promise<string> {
   const tmpDir = new Directory(Paths.cache, 'dw-preview-tmp')
   const pngFile = `${safeName(name)}.png`
   // Reuse writeImageFile for the temp PNG (also rejects an empty capture early).
@@ -79,8 +84,7 @@ async function saveCapture(name: string, pngB64: string, out: { width: number; h
     const saved = await rendered.saveAsync(
       out.png ? { format: SaveFormat.PNG, base64: true } : { format: SaveFormat.WEBP, compress: 0.85, base64: true }
     )
-    const previews = new Directory(Paths.document, 'previews')
-    return writeImageFile(previews, `${safeName(name)}.${out.png ? 'png' : 'webp'}`, saved.base64 ?? '')
+    return writeImageFile(dir, `${safeName(name)}.${out.png ? 'png' : 'webp'}`, saved.base64 ?? '')
   } finally {
     try {
       if (tmp.exists) tmp.delete()

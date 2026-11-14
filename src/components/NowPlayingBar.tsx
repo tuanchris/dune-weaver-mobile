@@ -64,8 +64,9 @@ interface NowPlaying {
   pausing: boolean
   pct: number
   /** How much of the pattern on show the table has drawn, 0..1, for the drawing
-   * to follow: all of it between patterns, null (show it whole) while clearing
-   * or homing, when the table's progress is about another file's moves. */
+   * to follow: all of it between patterns, null (show it whole) while homing or
+   * with no file running. A clear follows like any pattern: the firmware reports
+   * the clear file itself and that file's own progress (SandApi's /sand_status). */
   drawn: number | null
   /** Where the ball is, polled: mm on a rectangular table, the unit disc on a round one. */
   ball: [number, number]
@@ -158,7 +159,7 @@ function useNowPlaying(): NowPlaying | null {
     : status.isPaused ? 'Paused'
     : status.state
 
-  const drawn = pausing ? 1 : status.isClearing || status.isHoming ? null : status.fraction
+  const drawn = pausing ? 1 : status.isHoming || !currentFile ? null : status.fraction
 
   const ball: [number, number] = status.cartesian
     ? [status.x, status.y]

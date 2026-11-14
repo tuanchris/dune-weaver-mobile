@@ -6,6 +6,8 @@ import { fetch as binaryFetch } from 'expo/fetch' // WinterCG fetch: typed-array
 import type { RawStatus, RawTime } from './status'
 import { demoBoard, isDemoBase } from './demoBoard'
 import { log } from '../stores/useAppLog'
+import { LED_PALETTE_LIST, type LedPalette } from '../lib/ledPalettes'
+import { WLED_FX } from '../lib/wledfx/catalog'
 
 /** Diagnostics trail for failed requests. The 1s status poll is excluded —
  * useStatus logs its connect/disconnect TRANSITIONS instead, so an offline
@@ -88,14 +90,17 @@ export const CLEAR_DESC: Record<ClearMode, string> = {
 
 // ---- LED catalog (mirrors the firmware's Leds.cpp enum tables) ----
 // `uses` drives the LED UI: show the Color / Color2 / Palette controls only for
-// effects that actually read them ("auto-hue" effects take a palette, a couple
-// are fixed-color and take nothing).
+// effects that actually read them. The auto-hue effects take a palette on every
+// firmware; with WLED's palettes (firmware reporting LED/Palettes) a palette also
+// replaces the first color of the color effects, as in WLED. A few take nothing.
 
 /** What inputs an effect reads, so the UI can hide irrelevant controls. */
 export interface LedInputs {
   color?: boolean
   color2?: boolean
-  palette?: boolean
+  /** Reads $LED/Palette: true = on every firmware; 'wled' = only on firmware with
+   *  WLED's palettes (older firmware draws its own colors and ignores it). */
+  palette?: true | 'wled'
   /** ball effect: rotation direction (cw/ccw) and start alignment (0..359°). */
   direction?: boolean
   align?: boolean
@@ -111,50 +116,64 @@ export interface LedEffectDef {
   name: string
   label: string
   uses: LedInputs
+  /** A ported WLED effect (lib/wledfx): only on firmware with WLED's palettes and
+   *  effects (LED/Palettes in /sand_settings). Absent = one of our own. */
+  wled?: true
+  /** Speed/intensity that picking it resets to; absent = LED_DEFAULT_SPEED / _INTENSITY. */
+  defaults?: { speed: number; intensity: number }
 }
 
-/** All LED effects, in the firmware's order. */
-export const LED_EFFECTS: LedEffectDef[] = [
+/** Our own LED effects, in the firmware's order (ids 0..38). */
+const OWN_EFFECTS: LedEffectDef[] = [
   { name: 'off', label: 'Off', uses: { speed: false } },
   { name: 'static', label: 'Static', uses: { color: true, speed: false } },
   { name: 'rainbow', label: 'Rainbow', uses: { palette: true, intensity: 'Size' } },
-  { name: 'breathe', label: 'Breathe', uses: { color: true } },
+  { name: 'breathe', label: 'Breathe', uses: { palette: 'wled', color: true } },
   { name: 'colorloop', label: 'Color loop', uses: { palette: true, intensity: 'Saturation' } },
-  { name: 'theater', label: 'Theater', uses: { color: true, intensity: 'Gap size' } },
-  { name: 'scan', label: 'Scan', uses: { color: true, intensity: '# of dots' } },
-  { name: 'running', label: 'Running', uses: { color: true, intensity: 'Wave width' } },
-  { name: 'sine', label: 'Sine', uses: { color: true, intensity: 'Scale' } },
-  { name: 'gradient', label: 'Gradient', uses: { color: true, color2: true, intensity: 'Spread' } },
+  { name: 'theater', label: 'Theater', uses: { palette: 'wled', color: true, intensity: 'Gap size' } },
+  { name: 'scan', label: 'Scan', uses: { palette: 'wled', color: true, intensity: '# of dots' } },
+  { name: 'running', label: 'Running', uses: { palette: 'wled', color: true, intensity: 'Wave width' } },
+  { name: 'sine', label: 'Sine', uses: { palette: 'wled', color: true, intensity: 'Scale' } },
+  { name: 'gradient', label: 'Gradient', uses: { palette: 'wled', color: true, color2: true, intensity: 'Spread' } },
   { name: 'sinelon', label: 'Sinelon', uses: { palette: true, intensity: 'Trail' } },
   { name: 'twinkle', label: 'Twinkle', uses: { palette: true, intensity: 'Intensity' } },
-  { name: 'sparkle', label: 'Sparkle', uses: { color: true } },
-  { name: 'fire', label: 'Fire', uses: { palette: true, speed: 'Cooling', intensity: 'Spark rate' } },
-  { name: 'candle', label: 'Candle', uses: { color: true, intensity: 'Intensity' } },
-  { name: 'meteor', label: 'Meteor', uses: { color: true, intensity: 'Trail' } },
-  { name: 'bouncing', label: 'Bouncing', uses: { color: true, speed: 'Gravity', intensity: '# of balls' } },
-  { name: 'wipe', label: 'Wipe', uses: { color: true, color2: true, intensity: 'Intensity' } },
-  { name: 'dualscan', label: 'Dual scan', uses: { color: true, color2: true, intensity: '# of dots' } },
+  { name: 'sparkle', label: 'Sparkle', uses: { palette: 'wled', color: true } },
+  { name: 'fire', label: 'Fire', uses: { palette: 'wled', speed: 'Cooling', intensity: 'Spark rate' } },
+  { name: 'candle', label: 'Candle', uses: { palette: 'wled', color: true, intensity: 'Intensity' } },
+  { name: 'meteor', label: 'Meteor', uses: { palette: 'wled', color: true, intensity: 'Trail' } },
+  { name: 'bouncing', label: 'Bouncing', uses: { palette: 'wled', color: true, speed: 'Gravity', intensity: '# of balls' } },
+  { name: 'wipe', label: 'Wipe', uses: { palette: 'wled', color: true, color2: true, intensity: 'Intensity' } },
+  { name: 'dualscan', label: 'Dual scan', uses: { palette: 'wled', color: true, color2: true, intensity: '# of dots' } },
   { name: 'juggle', label: 'Juggle', uses: { palette: true, intensity: 'Trail' } },
   { name: 'multicomet', label: 'Multi-comet', uses: { palette: true, intensity: 'Fade' } },
   { name: 'glitter', label: 'Glitter', uses: { palette: true, intensity: 'Intensity' } },
-  { name: 'dissolve', label: 'Dissolve', uses: { color: true, color2: true, speed: 'Repeat speed', intensity: 'Dissolve speed' } },
+  { name: 'dissolve', label: 'Dissolve', uses: { palette: 'wled', color: true, color2: true, speed: 'Repeat speed', intensity: 'Dissolve speed' } },
   { name: 'ripple', label: 'Ripple', uses: { palette: true, intensity: 'Wave #' } },
-  { name: 'drip', label: 'Drip', uses: { color: true, speed: 'Gravity', intensity: '# of drips' } },
-  { name: 'lightning', label: 'Lightning', uses: { intensity: 'Intensity' } },
+  { name: 'drip', label: 'Drip', uses: { palette: 'wled', color: true, speed: 'Gravity', intensity: '# of drips' } },
+  { name: 'lightning', label: 'Lightning', uses: { palette: 'wled', intensity: 'Intensity' } },
   { name: 'fireworks', label: 'Fireworks', uses: { palette: true, speed: false, intensity: 'Frequency' } },
   { name: 'plasma', label: 'Plasma', uses: { palette: true, intensity: 'Intensity' } },
-  { name: 'heartbeat', label: 'Heartbeat', uses: { color: true, intensity: 'Intensity' } },
-  { name: 'strobe', label: 'Strobe', uses: { color: true } },
+  { name: 'heartbeat', label: 'Heartbeat', uses: { palette: 'wled', color: true, intensity: 'Intensity' } },
+  { name: 'strobe', label: 'Strobe', uses: { palette: 'wled', color: true } },
   { name: 'police', label: 'Police', uses: {} },
-  { name: 'chase', label: 'Chase', uses: { color: true, color2: true, intensity: 'Width' } },
-  { name: 'railway', label: 'Railway', uses: { color: true, color2: true, intensity: 'Smoothness' } },
-  { name: 'pacifica', label: 'Pacifica', uses: { intensity: 'Angle' } },
-  { name: 'aurora', label: 'Aurora', uses: { intensity: 'Intensity' } },
+  { name: 'chase', label: 'Chase', uses: { palette: 'wled', color: true, color2: true, intensity: 'Width' } },
+  { name: 'railway', label: 'Railway', uses: { palette: 'wled', color: true, color2: true, intensity: 'Smoothness' } },
+  { name: 'pacifica', label: 'Pacifica', uses: { palette: 'wled', intensity: 'Angle' } },
+  { name: 'aurora', label: 'Aurora', uses: { palette: 'wled', intensity: 'Intensity' } },
   { name: 'pride', label: 'Pride', uses: {} },
   { name: 'colorwaves', label: 'Color waves', uses: { palette: true, intensity: 'Hue' } },
   { name: 'bpm', label: 'BPM', uses: { palette: true } },
   { name: 'ball', label: 'Ball', uses: { color: true, direction: true, align: true } },
 ]
+
+/** Every LED effect: ours, then the ported WLED ones (lib/wledfx/catalog.ts, generated). */
+export const LED_EFFECTS: LedEffectDef[] = [
+  ...OWN_EFFECTS,
+  ...WLED_FX.map((d): LedEffectDef => ({ name: d.name, label: d.label, uses: d.uses, defaults: d.defaults, wled: true })),
+]
+
+/** The effects a table has: the WLED ones only on firmware that reports LED/Palettes. */
+export const ledEffectsFor = (wled: boolean): LedEffectDef[] => (wled ? LED_EFFECTS : OWN_EFFECTS)
 
 /** The firmware's $LED/Speed and $LED/Intensity defaults: each effect's designed
  *  look. Picking an effect resets the two sliders to these, like WLED. */
@@ -164,13 +183,24 @@ export interface LedSliderReset {
   speed: number
   intensity?: number
 }
+/** The slider values picking `name` resets to (WLED's per-effect defaults for its effects). */
+export function ledEffectDefaults(name: string): { speed: number; intensity: number } {
+  return LED_EFFECTS.find((e) => e.name === name)?.defaults ?? { speed: LED_DEFAULT_SPEED, intensity: LED_DEFAULT_INTENSITY }
+}
 
-/** Palettes that recolor the auto-hue effects ($LED/Palette=). */
-export const LED_PALETTES = ['rainbow', 'ocean', 'lava', 'forest', 'party', 'cloud', 'heat', 'sunset'] as const
+/** $LED/Palette values a table offers, in firmware id order: its LED/Palettes
+ *  count (WLED's set), else the original eight — whose id 0 was named 'rainbow'
+ *  ('default' since; new firmware still accepts the old name). */
+export function ledPalettes(count: number | null): LedPalette[] {
+  if (count == null) return LED_PALETTE_LIST.slice(0, 8).map((p, i) => (i === 0 ? { ...p, name: 'rainbow', label: 'Rainbow' } : p))
+  return LED_PALETTE_LIST.slice(0, count)
+}
 
-/** Look up an effect's input requirements by name (defaults to none). */
-export function ledEffectInputs(name: string): LedInputs {
-  return LED_EFFECTS.find((e) => e.name === name)?.uses ?? {}
+/** An effect's input requirements by name (defaults to none), for a table with
+ *  (`wledPalettes`) or without WLED's palettes. */
+export function ledEffectInputs(name: string, wledPalettes: boolean): LedInputs {
+  const uses = LED_EFFECTS.find((e) => e.name === name)?.uses ?? {}
+  return uses.palette === 'wled' && !wledPalettes ? { ...uses, palette: undefined } : uses
 }
 
 /** Normalize a hex color to bare RRGGBB (no leading '#'), as the firmware wants. */
@@ -661,25 +691,21 @@ const realBoard = {
   /** Rectangular tables: jog to machine mm (the firmware clamps to its travel). */
   moveToXY: (base: string, x: number, y: number) => hit(base, `/sand_goto?x=${x.toFixed(1)}&y=${y.toFixed(1)}`),
   /** A rectangular table's size in mm — its configured X/Y travel, the same
-   * envelope the firmware's soft limits and goto clamp use. `$/` reads answer
-   * in the body ("$/axes/x/max_travel_mm=735.000"), but 503 while moving. */
+   * envelope the firmware's soft limits and goto clamp use. */
   travel: async (base: string): Promise<[number, number]> => {
     const read = async (axis: 'x' | 'y') => {
-      // Not getText: its per-segment path encoding would mangle the query.
-      const { signal, cancel } = withTimeout(5000)
-      let text: string
-      try {
-        const res = await fetch(`${base}/command?plain=${encodeURIComponent(`$/axes/${axis}/max_travel_mm`)}`, { signal, headers: keyHeaders(base) })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        text = await res.text()
-      } finally {
-        cancel()
-      }
-      const n = Number(/=\s*([\d.]+)/.exec(text)?.[1])
+      const text = await readConfig(base, `$/axes/${axis}/max_travel_mm`)
+      const n = Number(/^\s*([\d.]+)/.exec(text)?.[1])
       if (!(n > 0)) throw new Error(`no ${axis} travel in "${text.trim()}"`)
       return n
     }
     return [await read('x'), await read('y')]
+  },
+  /** The table's config name ("Dune Weaver Gold ThetaRho"): which model a round table is (lib/tableSize.ts). */
+  configName: async (base: string): Promise<string> => {
+    const name = (await readConfig(base, '$/name')).trim()
+    if (!name) throw new Error('no config name')
+    return name
   },
   /** Rotate the arm to an absolute angle (radians, continuous — same frame as
    * status.theta), parking the ball at the perimeter. Powers the crash-homing
@@ -924,6 +950,22 @@ function release(base: string): void {
     // Drop idle gates so the map can't grow unbounded as boards come and go
     // (DHCP relocations mint new base strings).
     if (g.inflight <= 0 && g.waiters.length === 0) gates.delete(base)
+  }
+}
+
+/** A config value (`$/…`): the firmware answers in the body ("$/name=Dune Weaver Pro ThetaRho"), but 503 while moving. */
+async function readConfig(base: string, path: string): Promise<string> {
+  // Not getText: its per-segment path encoding would mangle the query.
+  const { signal, cancel } = withTimeout(5000)
+  try {
+    const res = await fetch(`${base}/command?plain=${encodeURIComponent(path)}`, { signal, headers: keyHeaders(base) })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const text = await res.text()
+    const at = text.indexOf('=')
+    if (at < 0) throw new Error(`no value in "${text.trim()}"`)
+    return text.slice(at + 1).split(/\r?\n/)[0]
+  } finally {
+    cancel()
   }
 }
 

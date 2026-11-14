@@ -40,3 +40,6 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
+
+# store metadata and its secrets (ASC API key, reviewer passwords): never in a build archive
+fastlane/

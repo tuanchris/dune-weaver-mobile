@@ -22,7 +22,8 @@ const rectToScreen = (size, w, h) => {
   return (x, y) => [ox + x * s, oy + (size[1] - y) * s]
 }
 class File { constructor(u) { this.u = u } async text() { return fs.readFileSync(this.u, 'utf8') } }
-const useLibrary = { getState: () => ({ resolveThr: async (n) => ({ uri: '${ROOT}/assets/' + (isGcode(n) ? 'gcode/' : 'thr/') + n }) }) }
+const useLibrary = { getState: () => ({ patterns: [], resolveThr: async (n) => ({ uri: '${ROOT}/assets/' + (isGcode(n) ? 'gcode/' : 'thr/') + n }) }) }
+const bareName = (n) => n.split('/').pop()
 `
 const src = stubs + fs.readFileSync(path.join(ROOT, 'src/lib/playbackPath.ts'), 'utf8').replace(/^import .*$/gm, '')
 const out = path.join(ROOT, 'node_modules/.cache/check-playback-path.mjs')

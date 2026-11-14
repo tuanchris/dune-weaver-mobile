@@ -1,7 +1,7 @@
 # Expo HAS CHANGED
 
 Read the exact versioned docs at https://docs.expo.dev/versions/v58.0.0/ before writing any code.
-Expo SDK **58.0.20** (React Native 0.88, iOS 27 SDK: the UIScene life cycle, so builds need Xcode 27+). The app is managed Expo; `expo-file-system` uses the **new `File`/`Directory`/`Paths` class API** (not the legacy functional API) — and since SDK 58 `File.write()` is ASYNC, so the app uses `writeSync()` (as does the desktop shim).
+Expo SDK **58.0.23** (React Native 0.88.1, iOS 27 SDK: the UIScene life cycle, so builds need Xcode 27+). The app is managed Expo; `expo-file-system` uses the **new `File`/`Directory`/`Paths` class API** (not the legacy functional API) — and since SDK 58 `File.write()` is ASYNC, so the app uses `writeSync()` (as does the desktop shim).
 
 ---
 
@@ -235,10 +235,172 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
 - **Previews**: bundled patterns render their image (`PatternThumb` → `<Image>`); imported/unbundled
   render **live SVG** from geometry (`PolarPattern`, geometry derived on demand by `useLibrary.ensureXY`)
   until `PreviewGenerator` has rendered theirs (once, on import: a webp for `.thr`, a png at the
-  bundled previews' size, inset and stroke for G-code).
+  bundled previews' size, inset and stroke for G-code). Those are the INK previews; on a round
+  table a thumbnail shows SAND first when it has one (see "Sand previews").
 - **Import**: `expo-document-picker` → parse/validate → decimate → save to `Paths.document/thr/` →
   `useLibrary.addImported`. See `src/lib/importPattern.ts`.
-- **Push to table**: read the decimated `.thr` (bundled asset via `expo-asset`, or imported file) and
+- **Pattern Hub** (`src/lib/patternHub.ts` + `components/HubPane.tsx`, round tables only — the hub
+  is `.thr`; hidden on desktop): duneweaver.com/patterns (dune-weaver-website, `lib/pattern-hub*.ts`)
+  keeps `catalog.json` (`{version: 2, launched, patterns:[{id, title, author, license, preview,
+  bytes, …}]}`) and every preview webp in a PUBLIC bucket (paths relative to it, CORS `*`, no auth),
+  so everyone sees the catalog. The `.thr` files are PRIVATE: **downloads are for Dune Weaver plan
+  owners only**. Each file is `hubFetch('/api/patterns/<id>/download', {method:'POST'})` → `{url}`
+  (a ~10 min signed URL, asked for just before that file so none expires mid-sync) → `expo/fetch`.
+  A 403 `code:'not_a_buyer'` throws `NotMemberError` and sets the account to `notMember`; that or
+  `SignedOutError` ENDS the run (`result.error`): what already downloaded stays, there's no "N
+  didn't download" toast, and the hub tab's panel shows the matching state. **Launch gate**: the website
+  writes `launched` (its `PATTERN_HUB_PUBLIC`) into the catalog, and Browse's Pattern Hub tab needs
+  `useHubVisible()` = `launched || admin`, never on web — so the app can ship before the site
+  launches the hub. `launched` comes from ONE successful catalog read per app session (module
+  cache; a failed read counts as false and is retried on the next foreground).
+  **Sign-in** (`src/lib/hubAuth.ts`): OAuth authorization code + PKCE S256 (`lib/pkce.mjs`) against
+  the website's public client `duneweaver-app`, redirect `duneweaver://oauth` (`app.json`
+  `"scheme": "duneweaver"`), in the system sign-in window (`expo-web-browser`
+  `openAuthSessionAsync`); site = `EXPO_PUBLIC_DW_SITE ?? 'https://duneweaver.com'` (point it at a
+  preview deploy to test). SecureStore keys, `AFTER_FIRST_UNLOCK`: `dw.hub.pending` (`{verifier,
+  state, at}`, honored for 15 min, so an EMAIL LINK that opens the app from cold still finishes —
+  `useHubAuthLinks` (App.tsx) catches the `duneweaver://oauth` deep link; no pending, a different
+  `state` or an old one is refused with a toast, never exchanged) and `dw.hub.refresh` (the
+  rotating refresh token; the ~1 h access token lives only in memory). Refresh is SINGLE-FLIGHT
+  (one shared promise): the site revokes the whole grant when an old refresh token is replayed,
+  so two refreshes at once would sign the user out. Only `invalid_grant`, no refresh token, or a
+  401 after a refresh signs out — a network error never does (table-only Wi-Fi). `useHubAccount`
+  = `unknown | signedOut | member | notMember` + email + admin + `checkedAt`, read from `GET
+  /api/patterns/me` on each focus of the account page and each switch to Browse's Pattern Hub tab. Every change
+  is saved to AsyncStorage `dw.hub.account` and restored at launch, so an offline launch still
+  shows who is signed in. `checkAccount` (launch + every foreground, `useHubAuthLinks`) re-reads
+  /me ONLY when the account is `unknown` or a week old (`RECHECK_MS`): with no access token in
+  memory every /me ROTATES the refresh token, and a reply lost after the site rotated (app killed,
+  Wi-Fi switched to the table's hotspot) leaves a superseded token the site answers with
+  `invalid_grant`, i.e. a sign-out. The weekly read also keeps the 365-day grant alive for
+  someone who never opens the hub. The keychain still decides: no refresh token = `signedOut`.
+  **`unknown` with a stored token is SIGNED IN** (/me not answered yet, or failing right after
+  the code exchange — `refreshAccount` turns `signedOut` into `unknown` when a token exists), so
+  nothing offers Sign in for it (a second sign-in would orphan the stored grant): the Settings
+  row shows the email or "Signed in", the account page "Signed in. Can’t reach duneweaver.com
+  right now.", the hub tab "Checking your duneweaver.com account…" then that line + Try again.
+  Settings › On this
+  phone › **duneweaver.com** (`settings/AccountSettings.tsx`, row hidden on web): Sign in, or the
+  email + plan status, **Open Pattern Hub** (`navigate('Browse', { tab: 'hub' })`; Browse reads
+  the `tab` param and clears it; shown when the hub is visible on a round table), Sign out
+  (best-effort revoke) and Delete account (opens `${SITE}/account/delete`), then for a plan owner
+  (same visibility as Open Pattern Hub) a Pattern Hub card with the auto-download toggle. A finished sign-in
+  toasts "Signed in as <email>". The hub tab's panel: signed out → "Sign in with your
+  duneweaver.com account to sync Pattern Hub patterns." + Sign in; not a member → "Pattern Hub
+  downloads are for Dune Weaver plan owners." + "Use the duneweaver.com account your plan is
+  under." (a Hide My Email Apple sign-in matches no order; this is the user's only hint) + the
+  email + Use another account (sign out, then sign in); member → the sync buttons. **No purchase
+  wording and no shop links anywhere in the app** (App Store 3.1.1 / 3.1.3). Desktop hides the hub
+  and the account row (no secure store, no redirect handling; its metro config shims
+  `expo-secure-store`/`expo-web-browser`/`expo-crypto`). `npm run check-hub-auth` checks PKCE,
+  the refresh/sign-out rules and the saved-account / weekly re-check rules offline. Browse has two
+  tabs, a `Segmented` **Library | Pattern Hub** under its title (only where the hub is visible;
+  otherwise Browse is just the library). The hub tab mounts on its first visit and then stays
+  mounted, hidden with `display: none`, so a sync keeps its progress and Stop across a switch to
+  Library. It is: a search row (search + Tags), a PANEL (the account states above, or for a
+  plan owner the scope summary + Sync to phone / Sync to table side by side, then progress + Stop
+  while running) and the
+  catalog as a grid, newest first with the starter set LAST (as the website's hub does: it ships
+  with every table and is bundled here; `license === 'dune-weaver-starter'`). Only the search row
+  is fixed (like the Library tab); the panel is the grid's first header item and scrolls away, so
+  browsing gets the whole screen. It PINS above the grid (never at the bottom: on iOS 26 a tab
+  screen's bottom is under the glass tab bar and the mini player) only while something is picked
+  or a sync runs; the two spots line up, so the tiles don't jump when it moves. The grid: a
+  tile's glyph marks what's still MISSING, like the Library's phone glyph (cloud = only on the
+  hub, phone = on this phone but not the table, none = on the table; never a check, which would
+  read as the pick badge). Tap to pick (the panel's **Deselect** drops the picks; never "Clear",
+  which is a sand word here), nothing picked = all. TOUCH AND HOLD a tile for its details, a `fit`
+  sheet laid out like a Library pattern's: the disc, "by <author>", the description (few have
+  one), the tags as chips (a tap filters the grid by that tag and closes the sheet), where it is
+  · size · license (`CC-BY-NC-4.0` shown as "CC BY-NC 4.0"; the starter set as "Dune Weaver
+  starter set") and Select / Deselect. A search or tag with no results says so and offers
+  **Show all patterns**. **Sync to phone** downloads into the library like an import (`.thr` verbatim to
+  `Paths.document/thr`, the hub's webp to `Paths.document/previews` as `previewUri`, so
+  PreviewGenerator has nothing to render). **Sync to table** does that for whatever's missing, then
+  `pushToTable`s every pick the table lacks (bare-name match, so a copy in a subfolder counts), one
+  file at a time behind a size/time confirm — gated on `isJobLocked` + preview sync, keep-awake held,
+  Stop checked between files, the first send error ends the run. Both stages show "n of N · title"
+  and a size-weighted bar, plus a time-left estimate per stage (elapsed over fraction done, shown
+  after 3 s, time away from the app not counted). A sync runs only while the app is open: iOS
+  suspends it seconds after it leaves the screen (a sync on through a locked phone would need
+  native background transfers), and the progress panel asks people to stay on the page while it runs. So it PAUSES: a file that failed after the app left is retried
+  once the app is active again (`resumable` in `patternHub.ts`), and the sync carries on. File names follow the WEBSITE's rules so everything dedupes: the starter
+  set maps back to the bundled file (`starterId(file)` = the seed script's id), community patterns
+  get `downloadFilename(title)` — keep `slug`/`starterId` in step with the website's
+  `cardFilenames` (`lib/pattern-hub-types.ts`), which the installer's SD card Pattern Manager uses to
+  load the hub onto a card under the same names. The website now gives each file its name ONCE
+  and keeps it (catalog `file`, its `hub_meta/file_names`), so a title edit or a newer pattern with
+  the same title never renames a file; the app uses `file` and keeps the rule for older catalogs.
+  **Updates** (a sand-weaver re-import, an admin replacing a version; owner's call 2026-11-12:
+  changes reach the phone, the table and its playlists): each catalog file has a `rev` (start of
+  its fingerprint). A hub download records it (`LibraryPattern.hubRev`; one from before revs whose
+  size equals the catalog's `bytes` gets it on the next catalog read) and a push records it per
+  table (`Board.hubSent`, set in `pushToTable`; a table that listed the file before revs gets the
+  phone's OLD rev as the phone's copy is replaced). `staleHubFiles` = copies whose rev differs.
+  The phone's are downloaded again by `useHubAutoSync` for every plan owner, auto-download on or
+  off ("Updated N patterns"). The table's wait for the user (no card I/O the user didn't start):
+  the hub tab counts an older copy as missing (update glyph on the tile, "Updated on the Pattern
+  Hub" in its details) so Sync to table sends it, and Browse's Play sends it first (no "Replace?"
+  ask). Either way it goes over the old file under the SAME name, so every playlist naming it
+  plays the new drawing — playlists list files, nothing in them changes. Replacing an import drops
+  its cached geometry, and the Fast player's path cache keys on the import's id. Preview URLs
+  carry `?r=<rev>` (the bucket ignores it) so cached ink and sand images refresh; the hub's
+  renderer re-renders on a rev change.
+  **Versions per table size**: a hub pattern can come in a version for each of the hub's sizes
+  (website `HUB_TABLES`: `pro` = DW Pro, `mini-pro` = DW Mini Pro, simplified with bolder lines;
+  sand-weaver makes both). The catalog's top-level `preview`/`bytes` are the MAIN file, `table`
+  says what it's made for (absent = any table) and `versions: [{table, preview, points, bytes}]`
+  lists the others. A version's file name is the main one with `-<table>` before `.thr`
+  (`owl.thr` → `owl-mini-pro.thr`; `<id>-<table>.thr` when taken), so each version is its own
+  file on the phone and the table and a Gold can hold a mix; keep it in step with the website's
+  card names. `POST …/download?table=<t>` sends that version (the main file when there's none). `EXPO_PUBLIC_DW_HUB` (the bucket
+  root, trailing slash) points the catalog and previews at a test copy, as `EXPO_PUBLIC_DW_SITE` does the site.
+  Which version a table takes is `hubTable(board)` (`lib/tableSize.ts`, by `roundSize`): Pro-sized
+  (≥ 600 mm) the Pro one, Mini Pro-sized (≤ 300 mm) the Mini Pro one; IN BETWEEN (a DW Gold,
+  custom sizes) the owner chooses — the Pro one by default (owner's call, 2026-11-13), switched for every pattern by
+  the hub tab's "Versions for this table" control (a card in the grid's header, shown only there
+  and only when some pattern has two versions; switching drops the per-pattern picks), or for
+  one pattern in its details sheet (mix and match; `Board.hub = {table, picks}`, per table,
+  `useBoards.setHubTable`). A pattern with one version shows it everywhere. `forTable` resolves
+  the catalog for the active table (the grid, the sync, the auto-download); the details sheet
+  says "made for a DW Pro" when the shown version names a size. Hub tags are saved under every
+  version's name. The SD card Pattern Manager still loads main files only (website follow-up).
+  The search covers title, author and description; Tags is a `fit` sheet (the catalog's
+  `tags`, by count; a sand filter button when one is on, like Browse's Show); with nothing picked
+  the buttons act on what's SHOWN. **Hub tags stay in the app**: every catalog read
+  (`fetchHubCatalog`) saves `usePrefs.hubTags`, `tagKey(file name)` (folders dropped,
+  lowercased) → tags, and NOTHING is written to a table. Because the bundled set, hub downloads
+  and the card's copies share the hub's file names, the tags apply to all of them; Browse's Show
+  filter and the playlist picker filter by them (see Favorites / Playlists). `readCatalogOnce`
+  (the once-per-session read) runs from Browse and the playlist picker everywhere, desktop
+  included. **Auto-download** (`usePrefs.hubAuto`, off by default; "Download new patterns" in
+  Settings › duneweaver.com, shown only to a plan owner where the hub is visible, since it's set
+  once and the grid comes first; it runs only for a plan owner; `setHubAutoDownload`):
+  `useHubAutoSync` (App.tsx) fetches the catalog at launch and on
+  foreground (hourly at most, after the library hydrates) and downloads every id not in
+  `usePrefs.hubSeen`. Switching it on reads the catalog and marks it all as seen (~30 MB of community
+  patterns; Sync all covers those), and an id joins `hubSeen` once it's on the phone, so a failed
+  download retries and a deleted one stays deleted. PHONE ONLY: it never sends to the table (the
+  owner's rule from preview sync: no card I/O the user didn't start). `syncHub` runs one sync at a
+  time (a promise queue), so a manual sync waits for the auto one and skips what it downloaded.
+  **New patterns get a red mark** (owner's call, 2026-11-11): `useNewHubPatterns()` = the session's
+  catalog read, this table's version, not on the phone, not in `usePrefs.hubSeen` (the auto-download's
+  list) nor `usePrefs.hubShown` (already announced); only where Browse shows the hub (round table)
+  and for plan owners. While it's non-empty: a COUNT badge on the Browse tab (`tabBarBadge`, both
+  `AppTabs` files, the nav theme's notification red like Settings' update badge; an empty badge
+  draws nothing on iOS) and a red dot on the "Pattern Hub" segment (`Segmented` option `dot`). No
+  banner on top (owner: the red dot is enough). Opening the hub tab adds them to `hubShown`: both
+  clear and return only when more are published. `hubShown` is kept apart from `hubSeen` so looking
+  never stops an auto-download. (A first-time owner with auto-download off is told about every hub
+  pattern not on the phone once.) In the panel, the sync button that can run is the prominent one:
+  Sync to table, or Sync to phone while the table can't take a sync (`tableReason`).
+  **Upload** is a link to `duneweaver.com/patterns/upload` at the END of the grid
+  ("Share your own pattern"; contributing comes after browsing): the site's `POST /api/patterns` needs
+  a Firebase ID token (email link / Google / password sign-in), the same plan, plus license, credit
+  and photos — and the app's tokens open only `/api/patterns/me` and the download route. The site's
+  hub pages 404 for non-admins until `PATTERN_HUB_PUBLIC` (website `lib/pattern-hub-types.ts`).
+- **Push to table**: holds an `expo-keep-awake` lock for the transfer (an auto-locked phone suspends
+  the app mid-upload; the firmware OTA, `runFirmwareUpdate`, holds one too). Read the decimated `.thr` (bundled asset via `expo-asset`, or imported file) and
   `board.uploadFile` to `/patterns/<name>`. See `src/lib/pushPattern.ts`.
 - **On-card catalog stays in step**: `src/lib/tableManifest.ts` — after a push/delete, best-effort
   read-modify-write of `/patterns/index.json` (the firmware serves it VERBATIM from `/sand_patterns`
@@ -271,9 +433,10 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   each card. **iOS container gotcha**: `usePreviews` persists preview image refs as bare FILENAMES and
   rebuilds the absolute `file://` uri under the current document dir on hydrate (`resolvePreviewUri`).
   iOS rotates the app-container UUID on every app UPDATE, so a persisted absolute Documents uri goes
-  dead after an update (the key survives → count looks right, but `<Image>` loads blank). NOTE: the
-  same latent bug still lives in `useLibrary` (imported patterns' `thrUri`/`previewUri`) and the brand
-  logo — `thrUri` breakage silently breaks PUSHING imported patterns after an update.
+  dead after an update (the key survives → count looks right, but `<Image>` loads blank).
+  `useLibrary` stores absolute `thrUri`/`previewUri` but `rebase`s a dead one on hydrate (same
+  filename under today's `Paths.document/thr|previews`) — without it, PUSHING an imported or hub
+  pattern failed after every update. The brand logo still has the latent bug.
   **Sync ↔ motion are mutually exclusive** (shared single-threaded SD): sync only starts when the
   table is idle and, while shards stream, sets `usePreviews.syncing` — motion-START actions (run
   pattern/playlist, home, clear, move to center/edge, skip) disable + refuse via `assertNotSyncing()`
@@ -287,6 +450,196 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   toggle back and forth costs no re-import and no refetch; `addTablePattern`/`removeTablePattern`
   write through to whichever one is active. Browse's pull-to-refresh says so instead of silently
   doing nothing.
+- **Create (text generator)**: Browse's "+" menu › **Create from text** opens `TextGenerator`
+  (`components/TextGenerator.tsx`): words written on the table in ONE continuous line. The
+  engine is `src/lib/sandText/` (plain JS, no deps; `index.mjs` layout + exporters, `inlay.mjs`).
+  **Fonts** (one strip of tiles, each drawing "Abc"; single-line first, a divider, then outline):
+  - Single-line (`fonts.mjs`, baked once from their sources, edit glyphs there; a glyph is
+    `[advance, x0, y0, …]` in em, capital height 1, y up, joining line y 0): **Sandskrit**
+    (SandSkrit by UnintelligibleMaker, github.com/xplo2be-alt/Sandskrit-Image-Pattern, MIT; its 82
+    characters; its `!` had the dot on top, so it's Sans's), **Sans** and **Script** (Sandify's
+    Raysol fonts; Script joins a lower-case letter after b/o/v/w in its raised form, `joinAfter`),
+    **Capitals** (Sandify's Monospace grid font, lower case drawn as upper). A character one lacks
+    borrows Sandskrit's.
+  - Outline (`outlineFonts.mjs`, baked once from Sandify's bundled TTFs with opentype.js: ASCII
+    32–126, curves flattened, simplified to 0.003 em; a glyph is `[advance, regions]`, a region
+    `[outline, ...holes]`): Serif (EB Garamond Bold), Brush script (Lobster), Geometric
+    (Montserrat Bold), Slab (Holtwood One SC), Marker (Permanent Marker), Rounded (Bubblegum
+    Sans), Handwriting (Caveat Bold), Heavy (Roboto Black). RENAMED on purpose: they're
+    converted copies and Lobster/Bubblegum reserve their names under the OFL; the originals,
+    copyrights and the OFL/Apache texts are in Settings › About (`notices.mjs`).
+  - **Symbols** (`symbols.mjs`, baked once from Noto Emoji — OFL, Sandify's bundled copy — with
+    opentype.js: 51 popular emoji chosen to read as bold line art in sand, ♥ being U+2665's solid
+    heart; each centred, its larger side 1, regions like an outline glyph). TYPED in the text (any
+    font, either style) a symbol draws like an outline letter, 1.2 em, on the joining line; every
+    coloured heart (❤️ 💙 🧡 …) is ♥, and emoji presentation selectors, joiners and skin tones are
+    dropped. PLACED (Inlaid only, up to 40: `symbols: [{ ch, x, y, size, rot }]`, x/y −1..1 of the
+    half width / height, size its larger side's share of the table's smaller side, rot degrees
+    clockwise) a symbol is an inlay unit
+    like a letter; `keepOnTable` moves it in (and if it's bigger than the table, shrinks it) until
+    its outline is a ball inside the edge, so the raking's turns along the edge keep half a ball
+    clear of it. The engine applies it, and so does the canvas while a symbol moves.
+  A character no font has is left out and named in the status line. Accents are dropped (NFKD)
+  and typographic quotes/dashes made plain (iOS types ’). Up to 8 rows (`MAX_LINES`), 160
+  characters. **Layout**: the block fits 90% of the table (round: every letter inside 0.9 R;
+  rectangle: 90% of each side), then Size (30–100%); Rows = Same size, or Fill each row (each
+  row as wide as its place on the table allows, at most twice the smallest; iterated on row
+  boxes, then fitted on the letters). **Style**:
+  - **On lines** (SandSkrit's and Sandify's way): every letter starts and ends on a JOINING
+    LINE under its row; rows run back and forth. An outline letter is reached by a tick from the
+    line to its outline's point nearest the line and traced round; its other rings (holes, an
+    i's dot) are bridged in from the nearest ring already reached (`glyphWalk`, cached per
+    character). Next row = Along the edge (every row's line runs edge to edge, the ball moves
+    along the rim or frame edge to the next row) or Beside the text (a short line beside the
+    wider row; only the first and last lines reach the edge).
+  - **Inlaid** (sand-weaver's inlays, `experiments/region-program/inlays.js`, ported for
+    straight lanes): a host — a band across the table round the text, from 1.2 balls beyond it
+    (Raked area 0%) through that share of the open sand above and below it to the whole table
+    (100%) — is raked in straight lanes 0.3 ball apart at 45°, swept from top left to
+    bottom right, joined along the host's edge (which traces the band's edges). Each letter is a
+    unit drawn right after the host's LAST lane within half a ball of it, at the point that lane
+    leaves that zone: a step in, the letter, the same step out. Nothing passes it afterwards, and
+    every move between letters lies under later lanes. Units: an outline font's part, Solid =
+    its own lanes across the host's (lanes clipped to the outline and holes, joined along their
+    rims — a lane's ends lie on the outline and the gap between two pieces is bounded by one rim —
+    then the outline once round), or Outline = each ring traced twice round from its door
+    (sand-weaver rule 51); a single-line font's WORD, out to one end along its line and back to
+    the other (its joining line stays under the word: Sandskrit's E and L use it as their
+    bottom bar). Lengths: a band ≈ 35–100 m, the whole table ≈ 130 m of lanes plus the letters
+    (on 700 mm). Known weak spot: a small counter (Brush script's o) gets busy, the fill going
+    round it on every lane.
+  Either style starts and ends AT THE EDGE (ρ 1 on a round table), so an adaptive clear before
+  it runs from the centre. Frames are as seen on the table: x right, y up. **Table size**
+  (`ballOf`): a rectangle's travel is real mm, its ball 10 mm. A ROUND table's size comes from
+  `src/lib/tableSize.ts` (`roundSize(board)`): set by hand in Settings › Table size
+  (`Board.size`), else its MODEL's — the config name the table reports (`$/name` via
+  `board.configName`, read by `useStatus`'s `learnTable` like a rectangle's travel: once per
+  session and after a restart, while idle; saved as `Board.model`, e.g. "Dune Weaver Pro
+  (Pulley) ThetaRho", "Dune Weaver Gold ThetaRho"; matched Mini Pro, then Gold, then Pro) —
+  else a DW Pro's. Sizes (sand diameter / ball, mm, the owner's; balls 2026-11-11): Pro 700/10, Gold
+  395/8, Mini Pro 250/8 (the sand preview's engine uses the same balls, the viewer's `TABLES`). The firmware's `rho_mm` is motor mm (20 on every model) and says
+  nothing about size. The same size picks which Pattern Hub version a table gets (`hubTable`, see the
+  Pattern Hub bullet). The ball's share of the table sets the lanes' pitch, the band's margin,
+  the inlay clearance and the small-letters warning, so a Mini Pro is raked proportionally
+  coarser than a Pro; Create says which size it used, under Rows. **Orientation**:
+  `.thr` θ = atan2(−y, x), i.e. as the app draws a `.thr` (x = ρcosθ right, y = ρsinθ DOWN the
+  screen) — sand-weaver's DW Pro calibration (its sim view is reflected; it delivers π − θ) shows
+  that this is how the table draws it from above. `.thr` steps are cut so none bows more than
+  0.0005 R off its line (`thrSteps`: a step of length L at distance r from the centre bows about
+  L²/8r; 0.002–0.03 R), so long lanes stay a few points; G-code is `G1 X Y` mm from the travel's
+  lower-left corner, opening `G1 F5000` (FluidNC refuses a move before a feed). Letter size,
+  from sand-weaver's DW Pro sim (700 mm, 10 mm ball): 38 mm capitals read, 26 mm blur, so the
+  status line warns under 3.2 balls (32 mm). The sheet is one `page` sheet: the drawing PINNED on top (about
+  a third of the sheet's measured height — half folded the sheet is half the window; an inlay's
+  host drawn thin and faint, the letters in ink; points thinned by distance, never by stride,
+  which would drop letters among long lanes) with the status line, then Font (the strip, first), Text, Name (placeholder:
+  the suggested name — the first row, else the first symbol's label), Symbols (Inlaid only: the
+  placed ones as chips, Add symbol, Arrange), Layout (Size, Rows), Style (On lines: Next row;
+  Inlaid: Raked area slider, Letters and symbols = Solid / Outline). DEFAULTS: Inlaid, Raked area
+  100% (the whole table), Solid, Geometric, "Dune" / "Weaver". The font strip puts the outline
+  fonts first (Geometric leading: `ORDER` in index.mjs), a divider, then the single-line ones. The
+  sheet is the JS one on iOS too (`Sheet native={false}`): a native pageSheet follows any vertical
+  drag inside it and cancels the touch, which made dragging symbols finicky. In-sheet pages:
+  **Add a symbol** (a grid of the emoji, up to 40 placed; a pick lands on Arrange, selected, at the
+  first free spot of eight)
+  and **Arrange** (`SymbolCanvas.tsx`): a large drawing of the table, the text faint (laid out
+  alone, so it holds still) and the symbols filled (even-odd: their holes open); one finger on a
+  symbol drags it, two fingers pinch and twist it, the selected one's corner handle resizes it
+  and the knob above it turns it (snapping within 5° of a quarter turn), a tap on the sand lets
+  go; the selected one's Size and Turn sliders and Remove below. A gesture moves only the
+  canvas (its own copy of the symbols, PanResponder refs, the scroll locked); the pattern redraws
+  on release. Layout takes ≤ 45 ms for 160 characters under `node
+  --jitless`, so it redraws on every keystroke. Cancel/Save in the header; a dirty sheet isn't
+  swipe-dismissible and asks Keep editing / Discard (/ Save); setters hand back the same recipe
+  when nothing changed. Rectangular tables need the table's size (`useTravel`; Create toasts
+  until it's known). Names: the first row's words ("Text" when empty); a pattern extension typed
+  into Name is dropped; a name any pattern in the library or on the table uses (in any folder)
+  gets " 2", said under the Name field, and an existing file is never overwritten. Save writes
+  with `savePatternText` (`lib/importPattern.ts`, shared with import; full resolution),
+  `addImported`s it (PreviewGenerator then renders its preview), and Browse opens its detail
+  sheet (Play sends then draws). The sheet remembers the last recipe per table kind for the
+  session. `npm run check-text` runs every font on both table shapes and every layout in both
+  styles, every symbol placed and typed, and placed symbols at the edge: on the table, starting and ending at the edge, no `.thr` step bowing off its line,
+  continuous θ, G-code inside the travel, rows reading the way the app draws them, and (inlay)
+  no host lane within half a ball of a letter drawn before it (a negative control — letters
+  spliced where the lane enters their zone — fails it). The earlier Sandify generator (shapes,
+  effects, layers; vendored engine) was removed on 2026-11-10; its files are in
+  `/Volumes/SSD/projects/_archive/dune-weaver-mobile-sandify-2026-11-10.tgz`.
+- **Sand preview** (`components/SandView.tsx`, round tables, iOS/Android): Browse's preview player
+  (`PatternPlayer`) runs the Sand Weaver sand engine — the same physics as sand-weaver's
+  `dwpro-v6` profile — after the table's own clear, with the steel ball, in a `react-native-webview`
+  (WebGL2 + `EXT_color_buffer_float`). It's dune-weaver-viewer's Sand page (`web/index.html`)
+  without its controls: the app's transport drives it (`sandPlayer.play/pause/seek/speed` via
+  `injectJavaScript`, commands queued until the page posts `ready`) and the page posts back
+  `{f, playing, phase}`; the engine keeps the clock, and playback waits for it ("Simulating the
+  sand…"). **Source chain**: sand-weaver `sim/` → dune-weaver-viewer `web/engine` (its
+  `sync-engine.sh`) + the baked clears (its `bake-clears.mjs`) → `npm run gen-sand`
+  (`scripts/gen-sand.mjs`), which writes `assets/sand/`: `index.js` (the page as ONE string —
+  engine, `clears.js` and `scripts/sand-page.js` in a single inline module with imports dropped,
+  because a file:// page can't load modules; KEY; FILES requires) plus each table's baked clear
+  (`<DWP|DWG|DWMP>-from-<rim|centre>.bin`, ~4 MB for all six, `bin` is a Metro assetExt) and
+  clear pattern (`.thr`). Only the `.bin`s are bundled assets (FILES); the clear patterns ship as
+  text in `TEXTS`, written into the cache folder by SandView: an Android RELEASE build names each
+  raw resource without its extension, so `x.thr` beside `x.bin` fails `:app:mergeReleaseResources`
+  with "Duplicate resources" (dev builds load from Metro and never hit it). The `.thr` files stay
+  on disk for the hub's sand renderer, whose `prepare.mjs` copies them by name. It refuses a bake whose hash doesn't match the engine (the viewer's
+  `bakedName`) — re-bake in the viewer, never hand-copy. Never edit `assets/sand/`; edit
+  `scripts/sand-page.js` (no `window.sand`: the `<canvas id="sand">` owns that name). At run time the
+  page, and the active table's clears, are copied into `Paths.cache/sand-<KEY>/` (the one folder
+  the WebView may read: `allowingReadAccessToURL` / `allowFileAccessFromFileURLs`; XHR, not
+  fetch) and the pattern text is injected as `window.SAND`. The table is the baked one nearest
+  `roundSize(board)` (`sandTable`: ≥ 550 mm DWP, ≥ 320 mm DWG, else DWMP). Any page error or a
+  killed web process falls back to Fast (logged to diagnostics as `sand-preview`). Web/desktop
+  (`SandView.web.tsx`) has no sand yet: Fast only.
+- **Sand renders are tinted on display, never in the render** (owner's call, 2026-11-11): hub
+  and on-phone renders stay the engine's neutral grey; `SandTint` (PatternThumb.tsx) and the
+  sand player's injected overlay (SandView, `injectedJavaScript` — NOT the page, which is the
+  engine KEY and would re-render the hub) blend theme tokens over them: `sandLight` (#FFF8EC,
+  MULTIPLY: the table's warm ring light, option B of four engine tints, matched within 1/255)
+  and, in light mode only, `sandLift` (#FFF1DC, SOFT-LIGHT) so they don't sit too dark on the
+  paper. Retune by editing the tokens; no re-render.
+- **The app's sand grid and light** (owner's calls, 2026-11-11/12, from side-by-sides and a
+  photo of a real Mini Pro): the app (player, on-phone previews, and the hub's previews, made by
+  the same page) simulates on the viewer's `APP_GRID` (`clears.js`), not the 2048 grid the
+  viewer's own page and sand-weaver use: 768 plow cells across every table, rendered at 1024,
+  with the ring light's height and shadow reach scaled to the table (`scaleLight`), so a Gold or
+  Mini Pro is lit at the DWP's angle. 768 holds the DWP look at ~1/6 of 2048's work (512 breaks
+  fine raking into moiré); the DWP's 20 mm ring height on a 250 mm table lit it ~3× steeper and
+  washed it out, where the real table shows dark grooves and the head's fine terraces.
+  `bake-clears.mjs` bakes both grids; `gen-sand` copies the app's.
+- **Sand previews** (owner's call, 2026-11-11): every round pattern's thumbnail is the sand
+  engine's FINISHED sand, after the table's clear, on the active table's size (`useSandTable`:
+  `sandTable(roundSize(board))` → DWP 700 mm / 10 mm ball, DWG 395 / 8, DWMP 250 / 8, the viewer's
+  `TABLES`; the same balls as Create's `tableSize.ts`). Made by the player's own page in STILL
+  mode (`window.SAND.still`, `scripts/sand-page.js`: clear + pattern simulated to the end, cut
+  to the disc, a data URL; no ball). Two sources, never bundled in the app:
+  - **The Pattern Hub has it** (by file name: the bundled set = the starter set, hub downloads,
+    the card's copies): `previews/sand/<DWP|DWG|DWMP>/<id>[-<version>].webp` in the hub bucket,
+    the ink preview's name under the table (`sandPreviewUrl`; website `publicSandPreviewPath`).
+    Each catalog read saves `usePrefs.hubPreviews` (tagKey → the ink preview's bucket path,
+    beside `hubTags`) so Library tiles find theirs; the hub grid and details use the entry's
+    own. `SandImage` (PatternThumb.tsx) layers the sand over the ink preview until it loads,
+    and drops back to the ink when it can't (offline, not rendered yet); `cache:
+    'force-cache'` keeps loaded ones for table-only Wi-Fi on iOS, and `?v=<engine KEY>` on the URL
+    fetches them afresh after a new engine (the bucket ignores the query; the pattern's `?r=<rev>`
+    does the same after an update). A version's renders cover
+    the tables that take it (website `sandTablesFor`: a Pro the pro file, a Mini Pro the
+    mini-pro one, a Gold both). The HUB renders them: the website repo's
+    `services/sand-renderer` (Cloud Run, us-central1) runs THIS app's sand page (its
+    `prepare.mjs` copies `assets/sand` in) on software WebGL, triggered by every write of
+    the hub's `catalog.json` (Eventarc): it renders what's missing or was made by another
+    engine (object metadata `sandKey` = `assets/sand` KEY) and deletes what the catalog no
+    longer lists. Rate-limited (one instance, bursts merged, a daily render budget); see its
+    README. **After `npm run gen-sand` (a new engine, clear or ball), redeploy it**, or the
+    hub keeps the old renders. `npm run gen-sand-previews` here renders a folder on this
+    Mac's GPU (several times faster; for a big backfill, uploaded with the service's `seed`).
+  - **Anything else** (imports, Create's): `SandPreviewGenerator` (App.tsx) renders it ON THE
+    PHONE, one at a time, in a hidden `SandView` in still mode (PNG out of WebKit → webp via
+    `PreviewGenerator`'s `saveCapture`), for the active table's size, into
+    `Documents/sand-previews/<engine KEY>/<table>/` (paths computed, never stored; another
+    KEY's folder is deleted at launch). `useLocalSandPreview` finds them. 4 min cap a
+    pattern; failures go to diagnostics as `sand-preview`.
+  Card-only patterns the hub doesn't have keep the ink preview (no file on the phone).
 - **Shared geometry**: `src/lib/thrGeometry.mjs` (plain ESM `.mjs` so BOTH the Node build script and
   Metro import it — `mjs` is in Expo's `sourceExts`). `parseThr` / `decimate` / `toXY` / `decimateThrText`.
 
@@ -361,7 +714,8 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   viewer shows wall-clock time AND uptime; pre-v2 lines and markers have `ts: null`. This outlives
   the board's ~8 KB RAM ring, which is lost on every table reboot. The app ring is the second
   tab; the share icon exports the VISIBLE tab through the system share sheet. Nothing is uploaded
-  automatically, which keeps the "Data Not Collected" App Privacy label truthful.
+  automatically, which keeps diagnostics off the App Privacy label (since hub sign-in, the label
+  must list the duneweaver.com account's email, for app functionality, and nothing else).
   (`/sand_bootlog`/`/sand_coredump` are no longer fetched; their `board.ts` helpers remain as
   API-surface mirrors.)
 - **Favorites** are LOCAL (`usePrefs.favorites`, persisted; keyed by `patternKey` so they apply
@@ -378,20 +732,30 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   destructive, so never ember; a nested Pressable, so it wins the
   touch over the tile), the same toggle in the pattern detail sheet header, and a single-select
   "Show" filter DROPDOWN in the search row (bottom-sheet listing All patterns / Favorites /
-  Default / each subfolder — replaced BOTH the old folder-chip row and the heart toggle; owner
+  On this phone (imports + Pattern Hub downloads; only once there are some) / Default / each
+  subfolder (labelled by its LAST path segment, so a card's `custom_patterns/…/patterns` reads
+  "patterns") / each Pattern Hub tag the library's patterns carry (tag icon + count, most used
+  first; see the Pattern Hub bullet's hub tags); a choice whose option disappears falls back to All patterns — replaced BOTH the old folder-chip row and the heart toggle; owner
   explicitly did not want a second filter line). The trigger reflects the selection (filter-list
   icon; sand fill whenever a filter is active, Favorites included, with a heart icon for
-  Favorites); the same sheet holds the A–Z / Z–A sort (a `Segmented` above the list — it was a
-  fourth button in the search row), and the search placeholder names the scope ("Search 112
+  Favorites); the same sheet holds the sort (a `Segmented` above the list — it was a
+  fourth button in the search row): Newest (the default: newest first by `LibraryPattern.addedAt`,
+  set on import and Pattern Hub download; the bundled set and card-only patterns have no date, so
+  they come last, A–Z; owner's call — oldest first looked like A–Z), A–Z, Z–A, and the search placeholder names the scope ("Search 112
   patterns" / "Search in Favorites") so the filter shows without a second line. Selecting Favorites with zero
   favorites shows a guidance empty state.
-- `src/screens/` — `Browse` (one grid: bundled + imported + on-table patterns deduped by name,
+- `src/screens/` — `Browse` (Library | Pattern Hub tabs, see the Pattern Hub bullet; the Library tab is one grid: bundled + imported + on-table patterns deduped by name,
   circular thumbs with 13 pt names; once the table's list is known, a small phone glyph marks the
-  tiles the table DOESN'T have. Search row = search · Show (filter + sort) · import "+" — plain,
+  tiles the table DOESN'T have. A hub pattern made in versions per table size shows only the
+  version the active table takes (`forTable`'s rule via `usePrefs.hubVersions`, saved on each
+  catalog read): a Pro-sized table never lists `owl-mini-pro.thr`, a Mini Pro never `owl.thr`,
+  a Gold its pick — even when the phone or the card holds both (owner's call, 2026-11-11; the
+  hidden file still counts for Create's name clashes). Search row = search · Show (filter + sort) · "+" (a pull-down drawn in the view, not a Modal, so the generator's sheet can open straight after: Create from text · Import from file) — plain,
   not sand: sand there means a filter is on. The detail sheet: the pattern on its frame (disc or the table's rectangle). TAPPING it
-  (a play badge on the frame says it can be tapped, only when the app holds a copy) opens the
-  sheet's `preview` sub-page (a page, not a second sheet — one at a time) with a FAST PLAYBACK
-  PREVIEW. On a RECTANGULAR table that page also offers full screen — a tap on the drawing, or
+  (only when the app holds a copy; no play badge on it, the owner's call: nothing covers the pattern) opens the
+  sheet's `preview` sub-page (a page, not a second sheet — one at a time) with a PLAYBACK
+  PREVIEW: on a ROUND table the SAND preview (see "Sand preview"), elsewhere (or when the engine
+  can't run) the FAST one below. On a RECTANGULAR table that page also offers full screen — a tap on the drawing, or
   the full-screen button by the controls — never on its own: `FullscreenPlayer`, sideways so a
   wide pattern gets the phone's length. The app is portrait-only with no native orientation
   module, so on an upright window the player's content is laid out landscape and turned 90°
@@ -438,7 +802,10 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   The running playlist's row is marked in `live` (patina border, dot, "Playing · 3 of 12");
   there is no separate now-playing bar — Skip/Stop are the player's. Editing:
   create/edit/delete, pattern picker grid, loop/shuffle/pause + pause-from-start/clear/
-  auto-home. The firmware holds only ONE global playlist config, so these run options are remembered
+  auto-home. The picker (`add` page) has a row of Pattern Hub tag chips under its search: the
+  tags the table's patterns carry (`usePrefs.hubTags`), most used first, single-select (sand when
+  on; tap again to clear); a tag, then All, then Add makes a playlist of that tag. Only patterns
+  on the table are listed, as before. The firmware holds only ONE global playlist config, so these run options are remembered
   app-side in `usePrefs.playlistPrefs` and re-applied on each run — keyed PER TABLE + filename
   (`playlistPrefKey(base, name)`, `\u001F`-joined), so the same-named playlist can differ per table;
   `usePrefs.playlistPref(base, name)` falls back to a legacy bare-filename entry for prefs saved
@@ -486,16 +853,21 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   (`status.led.active`, not the chosen effect), ANIMATED like WLED's live view by
   `lib/ledSim.ts` — a LINE-FOR-LINE port of the firmware's `Leds::renderEffect` (same integer
   math, frame clock, speed/intensity meanings; the ball tracker follows the live `status.theta`).
-  **Any change to an effect in the firmware's `Leds.cpp` is a change to `ledSim.ts`**, and the
-  palette tables in `lib/ledPreview.ts` mirror the firmware's. It's simulated on the phone because
+  **Any change to an effect in the firmware's `Leds.cpp` is a change to `ledSim.ts`**. The palette
+  tables (`lib/ledPalettes.ts`) are GENERATED with the firmware's by its
+  `tools/gen_led_palettes.py` — never hand-edit them. It's simulated on the phone because
   the table's single-threaded web server can't stream frames. Every `AnimatedLedRing` runs off
   ONE shared requestAnimationFrame clock at the firmware's 33 ms frame (`LedRing.tsx`), so all
   rings on screen update in one batched render; each re-renders only itself. They run only while
   visible (hero: tab focused, gallery closed, LEDs on; gallery tiles: their ROW on screen, via
   SectionList viewability, drawn every other frame ≈15 fps — the simulation keeps full speed) and
   never under Reduce Motion, where rings show `ringDots` — a STILL sketch of each effect in the
-  user's colors. The gallery groups the 37 effects (Calm · Color · Motion · Sparkle · Flash —
-  `GROUPS` in `LedScreen.tsx`; an effect left out of every group falls into "More"). Gallery
+  user's colors. The gallery groups the effects (Calm · Color · Motion · Sparkle · Flash · Noise · 2D —
+  `GROUPS` in `LedScreen.tsx`; an effect left out of every group falls into "More"). 114 of them
+  are WLED's, ported line for line in `lib/wledfx/` (`shim.ts` = the firmware's WledFx layer,
+  `runner.ts`, `fx_*.ts`, generated `catalog.ts`) and shown only on firmware reporting
+  `LED/Palettes`; the firmware's `tools/fx_parity.py` must report every one matching its C++
+  twin byte for byte after any change. Picking one resets the sliders to WLED's defaults for it. Gallery
   tiles preview each effect at the DEFAULT speed/intensity (50/128) — what a tap applies, since
   picking resets them — except the playing one, which shows the user's tuning. Every ring
   simulates the strip's REAL length (`$LED/Count`) and pools it into the dots it draws (brightest
@@ -509,10 +881,18 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   `ball` effect; switching back restores the last non-ball effect WITHOUT resetting sliders).
   Effects mode: an Effect row (mini ring + name + Browse) opening a `page` Sheet GALLERY of every
   effect as a ring in the user's colors — tapping one plays it on the table immediately and the
-  sheet stays open (Done closes) — then only the inputs that effect reads: palette as gradient
-  swatches (`PaletteGrid`), color(s) via the wheel sheet, and speed / intensity sliders that
+  sheet stays open (Done closes) — then only the inputs that effect reads: a Palette row
+  (flowing swatch + name + Browse) opening a `page` Sheet of every palette as a still gradient
+  swatch (`PaletteGrid`; Default's swatch shows the effect's own colors), color(s) via the wheel
+  sheet, and speed / intensity sliders that
   MIRROR WLED's two effect sliders (WLED v16.0.1 `FX.cpp` metadata; the firmware implements the
-  same meanings, table in the firmware's COMMANDS.md): `LED_EFFECTS[].uses.intensity` is WLED's
+  same meanings, table in the firmware's COMMANDS.md). Palettes follow WLED's model: `default`
+  keeps the effect's own colors, any other palette recolors it, replacing Color on the color
+  effects (the first-color picker then hides). `uses.palette` is `true` (auto-hue: every
+  firmware) or `'wled'` (only firmware reporting `LED/Palettes` in `/sand_settings` — WLED's 68
+  palettes; older firmware has the original eight, id 0 named `rainbow`, and ignores a palette on
+  the color effects), resolved by `ledEffectInputs(name, wledPalettes)`.
+  `LED_EFFECTS[].uses.intensity` is WLED's
   label (Gap size, # of balls, Spark rate, …; WLED's default "!" shows as "Intensity") and is
   absent exactly where WLED hides the slider; `uses.speed` is WLED's speed label where it renames
   it (Cooling, Gravity, Repeat speed — plasma keeps plain 'Speed', since its speed isn't WLED's Phase) or `false` where WLED hides it (fireworks; also
@@ -528,12 +908,13 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   / remove, which asks first — Cancel / destructive Remove; add-by-IP folded behind a button), then
   rows grouped by WHERE the setting lives, each showing its current value: the active table's
   name heads Playback (auto-play on boot, clear patterns, auto-home), Still Sands (+ the table
-  clock), Homing, LED strip (only when the table reports `LED/Count`: `$LED/Count` + the
+  clock), Homing, Table size (round tables: Create's sizing, `TableSizeSettings`; stored on
+  the phone, so not gated: From the table / DW Pro / DW Gold / DW Mini Pro / Custom), LED strip (only when the table reports `LED/Count`: `$LED/Count` + the
   `$LED/Order` color-order picker, shown only on firmware that lists `LED/Order` — 6 RGB + 6
   W-last RGBW orders, plus whatever the table has if it's another of the firmware's 30; both
   idle/paused settings, numeric fields save on `onBlur` because react-native-web never fires
-  `onEndEditing`), Wi-Fi, Password, Firmware; "On this phone" heads Patterns (previews + imported
-  catalog), Branding, Diagnostics, About. Row values come from status, local stores and ONE
+  `onEndEditing`), Wi-Fi, Password, Firmware; "On this phone" heads duneweaver.com (the Pattern Hub
+  account, hidden on web), Patterns (previews + imported catalog), Branding, Diagnostics, About. Row values come from status, local stores and ONE
   `/sand_settings` read per focus of the list; each page reads its own. Pages wrap their cards in
   `SettingsPage` (`table` = the table's name above the title; `gated` = the IdleGate below), on
   `Screen`'s `back` row — our own header, not the native nav bar, so safe areas and the iOS 26
@@ -553,8 +934,10 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   estimate wins. File share alone was off by ~10–25 mm (its 0.1% steps, planner lag);
   `npm run check-playback` checks the tip lands on the ball. `useChase` eases the tip along
   the path's LENGTH across each 1 s poll and snaps on a new pattern. Whole pattern between
-  patterns (`drawn` 1), and shown whole (no ball) while clearing or homing, when the progress
-  is another file's. Still ONE ball, the drawing's tip (the owner removed a separate live-θ/ρ
+  patterns (`drawn` 1), and shown whole (no ball) while homing or with no file running. A
+  clear (a Control tile, or a playlist's / Play's clear before a pattern) follows like any
+  pattern: the firmware reports the clear file as `file` with ITS OWN progress, the
+  `clearing` flag only marking the phase. Still ONE ball, the drawing's tip (the owner removed a separate live-θ/ρ
   dot). Patterns the app has no copy of fall back to `PatternThumb`), `PatternThumb`, `NowPlayingBar` (four parts in one file:
   `MiniPlayer` = Pause/Resume + Skip only, tap to open (the floating one also swipes up) — **no Stop in the mini bar**
   (a one-tap stop was too easy to hit; the expanded player and Control have one). On iOS 26+
@@ -648,8 +1031,11 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   files (`AppTabs.web.tsx`), so an iOS bundle doesn't cover it. This repo can't export web itself
   (no `react-dom`/`react-native-web`; the desktop metro config resolves this source against its own
   node_modules), and desktop's `npm run web` writes to the desktop app's own `dist/`. There are no
-  unit tests; the one check is `npm run check-playback` (`scripts/check-playback-path.mjs`:
-  the Fast-preview path on real bundled patterns — run it after touching `lib/playbackPath.ts`).
+  unit tests; the checks are `npm run check-playback` (`scripts/check-playback-path.mjs`:
+  the Fast-preview path on real bundled patterns — run it after touching `lib/playbackPath.ts`),
+  `npm run check-text` (`scripts/check-text.mjs`: the text generator on every font, table shape,
+  layout and style — run it after touching `src/lib/sandText`), and `npm run check-hub-auth` (`scripts/check-hub-auth.mjs`: PKCE and the refresh/sign-out
+  rules — run it after touching `lib/hubAuth.ts` or `lib/pkce.mjs`).
 - **Native tab bar** (`src/components/AppTabs.tsx`, iOS + Android): `createNativeBottomTabNavigator`
   from `@react-navigation/bottom-tabs/unstable` — an UNSTABLE API; re-check it after any
   react-navigation / react-native-screens upgrade.
@@ -659,7 +1045,7 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   every screen's board load into the throttled launch burst). Icons: SF Symbols on iOS; Android
   needs images, so the same MaterialIcons glyphs are rasterized via `getImageSource`.
   `tabBarLabelVisibilityMode: 'labeled'` (Android hides unselected labels with 5 tabs otherwise).
-  The Settings `tabBarBadge` is a COUNT — `''` draws nothing on iOS — in the nav theme's default
+  The Settings (updates) and Browse (new Pattern Hub patterns) `tabBarBadge`s are COUNTs — `''` draws nothing on iOS — in the nav theme's default
   `notification` red (don't override it with ember). Inside a tab, `Screen` uses `SafeAreaView`
   from `react-native-screens/experimental` (NOT safe-area-context, whose insets exclude the tab bar
   and iPadOS 18's top bar) — **exactly ONE per Screen** (Android keeps a single insets listener).
@@ -673,8 +1059,10 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   screens list); re-tapping the tab pops it to the list (`tabBarRepeatedPressBehavior` default /
   the JS tabs' tabPress), so any new nested navigator goes under BOTH tab files the same way.
 - **iPhone Duo** (foldable, iOS 27.1+; HIG "Designing for iPhone Duo", Expo's "Supporting iPhone
-  Duo" guide): full-screen use needs an iOS 27 SDK build (SDK 58 + Xcode 27.1; an Xcode 26 build
-  runs boxed in, clear of the status bar and camera). The NATIVE tab bar moves into the side rail
+  Duo" guide): full-screen use needs an iOS **27.1+** SDK build (SDK 58 + Xcode 27.1 or later). An
+  Xcode 26 or Xcode 27.0 build (`DTSDKName` iphoneos27.0) runs boxed in, clear of the status bar and
+  camera, with a BOTTOM tab bar and no rail, so the unfolded pane covers the tabs. Check the built
+  app's `DTSDKName` before handing a Duo build over. The NATIVE tab bar moves into the side rail
   by itself — keep it native, never a JS bar. What the app does on top: `Screen`, both sheet
   variants and the toast pad left/right safe areas; tab screens size by `useScreenWidth()`; grids
   use even column counts. SPLIT (`useSplit()` in `lib/layout.ts`) the window divides at its
@@ -719,7 +1107,7 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   (the other Modals are full screen: `FwUpdateSplash`, a blocker, and `FullscreenPlayer` (its
   content is a render prop), which Browse and the player open only once no sheet is up). `variant="page"` = a native
   iOS `pageSheet` (non-transparent, `backdropColor` = theme background, system swipe-to-dismiss, no
-  grabber), a tall JS sheet on Android/web — for editors, pickers, logs. `variant="fit"` = a
+  grabber), a tall JS sheet on Android/web — for editors, pickers, logs; `native={false}` keeps it the JS one on iOS too, for content with its own drags (Create's Arrange canvas: a pageSheet follows vertical drags and cancels the touch). `variant="fit"` = a
   content-height JS sheet everywhere (max 560 wide, centered) with a REAL draggable grabber (the
   grabber + header are the only drag zone, so scrolls, Sliders and the ColorWheel never fight it)
   — for short choosers and content that would fight UIKit's sheet pan. Never draw a fake grabber.

@@ -13,6 +13,7 @@
 // suspended for the whole flow — concurrent /sand_status requests during an
 // OTA write would queue against (or wedge) the flash upload.
 
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake'
 import { fetch as binaryFetch } from 'expo/fetch'
 import { board } from '../api/board'
 import { useStatus } from '../stores/useStatus'
@@ -32,6 +33,7 @@ const REBOOT_TIMEOUT_MS = 120_000
 const REBOOT_POLL_MS = 3_000
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+const KEEP_AWAKE_TAG = 'dw-fw-update'
 
 /**
  * Run the whole update. Resolves with the firmware version the board reports
@@ -78,9 +80,11 @@ export async function runFirmwareUpdate(
     throw new Error('Downloaded firmware image looks invalid')
   }
 
-  // Suspend the status poller while flashing + rebooting.
+  // Suspend the status poller while flashing + rebooting, and keep the screen
+  // on: a locked phone suspends the app mid-flash and never sees the reboot.
   const { setBase } = useStatus.getState()
   setBase(null)
+  void activateKeepAwakeAsync(KEEP_AWAKE_TAG).catch(() => undefined)
   try {
     onStage('flash')
     const result = await board.uploadFirmware(base, image)
@@ -115,5 +119,6 @@ export async function runFirmwareUpdate(
     }
   } finally {
     setBase(base) // resume polling whatever happened
+    void deactivateKeepAwake(KEEP_AWAKE_TAG).catch(() => undefined)
   }
 }

@@ -12,13 +12,16 @@ import { PlaybackSettings } from './PlaybackSettings'
 import { HomingSettings } from './HomingSettings'
 import { LedStripSettings } from './LedStripSettings'
 import { PatternsSettings } from './PatternsSettings'
+import { AccountSettings } from './AccountSettings'
 import { BrandingSettings } from './BrandingSettings'
+import { TableSizeSettings } from './TableSizeSettings'
 import { SettingsPage, useActiveBase } from './SettingsPage'
 import { StillSands } from '../../components/StillSands'
 import { WifiCard } from '../../components/WifiCard'
 import { SecurityCard } from '../../components/SecurityCard'
 import { DiagnosticsCard } from '../../components/DiagnosticsCard'
 import { FirmwareCard, AppVersionCard } from '../../components/UpdatesCard'
+import { Acknowledgements } from '../../components/Acknowledgements'
 import type { SettingsStackParamList } from '../../navigation'
 
 const Stack = createNativeStackNavigator<SettingsStackParamList>()
@@ -51,7 +54,12 @@ function DiagnosticsPage(): React.JSX.Element {
 }
 
 function AboutPage(): React.JSX.Element {
-  return <SettingsPage title="About"><AppVersionCard /></SettingsPage>
+  return (
+    <SettingsPage title="About">
+      <AppVersionCard />
+      <Acknowledgements />
+    </SettingsPage>
+  )
 }
 
 export function SettingsStack(): React.JSX.Element {
@@ -65,6 +73,8 @@ export function SettingsStack(): React.JSX.Element {
       <Stack.Screen name="Wifi" component={WifiPage} />
       <Stack.Screen name="Password" component={PasswordPage} />
       <Stack.Screen name="Firmware" component={FirmwarePage} />
+      <Stack.Screen name="TableSize" component={TableSizeSettings} />
+      <Stack.Screen name="Account" component={AccountSettings} />
       <Stack.Screen name="Patterns" component={PatternsSettings} />
       <Stack.Screen name="Branding" component={BrandingSettings} />
       <Stack.Screen name="Diagnostics" component={DiagnosticsPage} />

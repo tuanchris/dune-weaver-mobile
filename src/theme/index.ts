@@ -22,6 +22,15 @@ export interface Palette {
    * fills, the live ball, connect pulse). Distinct from `primary` so "go do
    * this" (sand) never reads the same as "this is running" (patina). */
   live: string
+  /** The light on the sand renders (thumbnails and the sand player): a MULTIPLY
+   * filter that warms the engine's neutral grey to the table's ring light —
+   * the owner's pick (option B of four, 2026-11-11). Same in both themes: it's
+   * the light, not the theme. */
+  sandLight: string
+  /** Light mode lifts the renders to sit on its paper: this colour blended over
+   * them with `sandLiftBlend` (after sandLight). null = no lift (the dark theme). */
+  sandLift: string | null
+  sandLiftBlend: 'screen' | 'soft-light'
 }
 
 // Night — default. Basalt ground, walnut cards, lit-sand ink, dune accent.
@@ -39,6 +48,9 @@ const dark: Palette = {
   inputBackground: '#2B241D',
   success: '#8FBF7F',
   live: '#7BC4B0',
+  sandLight: '#FFF8EC',
+  sandLift: null,
+  sandLiftBlend: 'screen',
 }
 
 // Day — fine-sand paper, not an inversion. Every ink token (muted, primary,
@@ -59,6 +71,9 @@ const light: Palette = {
   inputBackground: '#EDE4D4',
   success: '#3F6E36',
   live: '#2E7261',
+  sandLight: '#FFF8EC',
+  sandLift: '#FFF1DC',
+  sandLiftBlend: 'soft-light',
 }
 
 export const palettes: Record<ThemeMode, Palette> = { dark, light }

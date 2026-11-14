@@ -58,3 +58,6 @@ fastlane/screenshots
 *.aab
 *.cer
 *.certSigningRequest
+# store reviewer passwords (accounts in CLAUDE.md, "Submitting")
+fastlane/metadata/review_information/demo_password.txt
+fastlane/review_accounts.txt

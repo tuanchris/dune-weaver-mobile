@@ -3,18 +3,16 @@
 // effect's colors and rough shape (a comet, every third LED, a gradient…) in
 // the user's palette/colors, so choices read at a glance.
 import { ledEffectInputs } from '../api/board'
+import { LED_PALETTE_LIST } from './ledPalettes'
 
-/** The firmware's 16-entry gradient palettes, mirrored from Leds.cpp (palOcean…palSunset,
- * palAurora). Keep in step with the firmware. "rainbow" is the hue wheel. */
-export const PALETTES: Record<string, number[]> = {
-  ocean: [0x191970, 0x00008b, 0x191970, 0x000080, 0x00008b, 0x0000cd, 0x2e8b57, 0x008080, 0x5f9ea0, 0x0000ff, 0x008b8b, 0x6495ed, 0x7fffd4, 0x2e8b57, 0x00ffff, 0x87cefa],
-  lava: [0x000000, 0x800000, 0x000000, 0x800000, 0x8b0000, 0x800000, 0x8b0000, 0x8b0000, 0x8b0000, 0x8b0000, 0xff0000, 0xffa500, 0xffffff, 0xffa500, 0xff0000, 0x8b0000],
-  forest: [0x006400, 0x006400, 0x556b2f, 0x006400, 0x008000, 0x228b22, 0x6b8e23, 0x008000, 0x2e8b57, 0x66cdaa, 0x32cd32, 0x9acd32, 0x90ee90, 0x7cfc00, 0x66cdaa, 0x228b22],
-  party: [0x5500ab, 0x84007c, 0xb5004b, 0xe5001b, 0xe81700, 0xb84700, 0xab7700, 0xabab00, 0xab5500, 0xdd2200, 0xf2000e, 0xc2003e, 0x8f0071, 0x5f00a1, 0x2f00d0, 0x0700e9],
-  cloud: [0x0000ff, 0x00008b, 0x00008b, 0x00008b, 0x00008b, 0x00008b, 0x00008b, 0x00008b, 0x0000ff, 0x00008b, 0x87ceeb, 0x87ceeb, 0xadd8e6, 0xffffff, 0xadd8e6, 0x87ceeb],
-  heat: [0x000000, 0x330000, 0x660000, 0x990000, 0xcc0000, 0xff0000, 0xff3300, 0xff6600, 0xff9900, 0xffcc00, 0xffff00, 0xffff33, 0xffff66, 0xffff99, 0xffffcc, 0xffffff],
-  sunset: [0x00008b, 0x4b0082, 0x800080, 0xc71585, 0xff1493, 0xff4500, 0xff8c00, 0xffd700, 0xffa500, 0xff4500, 0xc71585, 0x800080, 0x4b0082, 0x191970, 0x00008b, 0x000033],
-  aurora: [0x001a0a, 0x003311, 0x004d1a, 0x006622, 0x00994d, 0x00cc66, 0x00ff7f, 0x2e8b57, 0x008080, 0x4b0082, 0x800080, 0x9400d3, 0x4b0082, 0x008080, 0x00994d, 0x003311],
+/** Aurora's own curtains when no palette is picked (Leds.cpp palAurora). Pacifica's
+ * water is the ocean palette. Every $LED/Palette table is in ./ledPalettes. */
+export const AURORA_FX = [0x001a0a, 0x003311, 0x004d1a, 0x006622, 0x00994d, 0x00cc66, 0x00ff7f, 0x2e8b57, 0x008080, 0x4b0082, 0x800080, 0x9400d3, 0x4b0082, 0x008080, 0x00994d, 0x003311]
+
+/** $LED/Palette name -> firmware id (the LED_PALETTE_LIST index). Unknown names,
+ * and "rainbow" (id 0's name on firmware before WLED's palettes), are 0. */
+export function paletteId(name: string): number {
+  return Math.max(0, LED_PALETTE_LIST.findIndex((p) => p.name === name))
 }
 
 const hex = (n: number) => '#' + n.toString(16).padStart(6, '0').toUpperCase()
@@ -34,11 +32,33 @@ function hue(deg: number): string {
 
 /** A palette sampled at t (0..1, wrapping), interpolated like the firmware. */
 export function paletteColor(name: string, t: number): string {
-  const table = PALETTES[name]
-  if (!table) return hue(t * 360) // rainbow (and anything unknown)
+  return tableColor(LED_PALETTE_LIST[paletteId(name)].colors, t)
+}
+
+/** A 16-entry table sampled at t; null = the hue wheel (the default palette). */
+function tableColor(table: readonly number[] | null, t: number): string {
+  if (!table) return hue(t * 360)
   const f = (((t % 1) + 1) % 1) * 16
   const i = Math.floor(f)
   return hex(mix(table[i % 16], table[(i + 1) % 16], f - i))
+}
+
+/** What `effect` draws under the Default palette, sampled at t (0..1): its own colors. */
+export function defaultColor(effect: string, look: RingLook, t: number): string {
+  switch (effect) {
+    case 'fire':
+      return paletteColor('heat', t)
+    case 'pacifica':
+      return paletteColor('ocean', t)
+    case 'aurora':
+      return tableColor(AURORA_FX, t)
+    case 'lightning':
+      return '#E8EEFF'
+  }
+  const u = ledEffectInputs(effect, look.wledPalettes)
+  if (u.color2) return t < 0.5 ? look.color : look.color2
+  if (u.color) return look.color
+  return paletteColor('default', t) // the hue wheel
 }
 
 /** One LED: its color and how lit it is (0 = dark). */
@@ -51,6 +71,9 @@ export interface RingLook {
   color: string
   color2: string
   palette: string
+  /** The table has WLED's palettes (LED/Palettes in /sand_settings): a palette
+   * then recolors the color effects too. Older firmware ignores it for them. */
+  wledPalettes: boolean
   /** Ball tracker: where the ball is (0..1 around the ring), the glow size in
    * LEDs, and what renders behind it. `at` < 0: no ball to follow (a rectangular
    * table), so just the background, as the firmware shows. */
@@ -65,7 +88,10 @@ export function ringDots(effect: string, n: number, look: RingLook): Dot[] {
   // A comet: a bright head with a fading tail, a quarter of the way round.
   const comet = (c: string, len = Math.max(3, Math.round(n / 5))) =>
     all((i) => (i < len ? { c, a: 1 - i / len } : dark))
-  const u = ledEffectInputs(effect)
+  const u = ledEffectInputs(effect, look.wledPalettes)
+  // A picked palette replaces the effect's own first color (Leds::fxColor).
+  const pal = u.palette && paletteId(look.palette) !== 0 ? look.palette : null
+  const c1 = (t: number) => (pal ? paletteColor(pal, t) : look.color)
 
   switch (effect) {
     case 'off':
@@ -89,26 +115,28 @@ export function ringDots(effect: string, n: number, look: RingLook): Dot[] {
     case 'pride':
       return all((i) => lit(hue((i / n) * 360)))
     case 'pacifica':
-      return all((i) => lit(paletteColor('ocean', i / n)))
+      return all((i) => lit(paletteColor(pal ?? 'ocean', i / n)))
     case 'aurora':
-      return all((i) => lit(paletteColor('aurora', i / n)))
+      return all((i) => lit(pal ? paletteColor(pal, i / n) : tableColor(AURORA_FX, i / n)))
+    case 'fire':
+      return all((i) => lit(paletteColor(pal ?? 'heat', 1 - i / n)))
     case 'lightning':
-      return all((i) => (i % 5 === 0 ? lit('#E8EEFF') : dark))
+      return all((i) => (i % 5 === 0 ? lit(pal ? paletteColor(pal, i / n) : '#E8EEFF') : dark))
     case 'theater':
-      return all((i) => (i % 3 === 0 ? lit(look.color) : dark))
+      return all((i) => (i % 3 === 0 ? lit(c1(i / n)) : dark))
     case 'scan':
     case 'meteor':
     case 'running':
-      return comet(look.color)
+      return comet(c1(0))
     case 'sinelon':
     case 'juggle':
     case 'multicomet':
       return comet(paletteColor(look.palette, 0.3))
     case 'gradient':
-      return all((i) => lit(hex(mix(toNum(look.color), toNum(look.color2), (i / n) * 2 > 1 ? 2 - (i / n) * 2 : (i / n) * 2))))
+      return all((i) => lit(hex(mix(toNum(c1(i / n)), toNum(look.color2), (i / n) * 2 > 1 ? 2 - (i / n) * 2 : (i / n) * 2))))
   }
-  if (u.color2) return all((i) => lit(i < n / 2 ? look.color : look.color2))
-  if (u.color) return all(() => lit(look.color))
+  if (u.color2) return all((i) => lit(i < n / 2 ? c1(i / n) : look.color2))
+  if (u.color) return all((i) => lit(c1(i / n)))
   if (u.palette) return all((i) => lit(paletteColor(look.palette, i / n)))
   return all((i) => lit(hue((i / n) * 360)))
 }

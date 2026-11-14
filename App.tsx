@@ -12,6 +12,7 @@ import { NowPlayingPane, NowPlayingSheet } from './src/components/NowPlayingBar'
 import { Toaster } from './src/components/Toaster'
 import { Onboarding } from './src/components/Onboarding'
 import { PreviewGenerator } from './src/components/PreviewGenerator'
+import { SandPreviewGenerator } from './src/components/SandPreviewGenerator'
 import { useBoards } from './src/stores/useBoards'
 import { useStatus } from './src/stores/useStatus'
 import { useTheme } from './src/stores/useTheme'
@@ -25,6 +26,8 @@ import { useAutoRelocate } from './src/lib/relocate'
 import { useTableLogSync } from './src/lib/tableLogSync'
 import { useFavoritesPlaylistSync } from './src/lib/favoritesPlaylist'
 import { useCatalogRefreshOnIdle } from './src/lib/catalogRefresh'
+import { useHubAutoSync, useNewHubPatterns } from './src/lib/patternHub'
+import { useHubAuthLinks } from './src/lib/hubAuth'
 import { initAppLog } from './src/stores/useAppLog'
 
 export default function App() {
@@ -60,6 +63,10 @@ export default function App() {
   useTableLogSync()
   useFavoritesPlaylistSync()
   useCatalogRefreshOnIdle()
+  // Opt-in (Browse › Pattern Hub): new hub patterns download to this phone.
+  useHubAutoSync()
+  // duneweaver.com sign-in: reads the account, finishes sign-ins from a link.
+  useHubAuthLinks()
 
   // Count badge on the Settings tab: a newer app in the store, and/or a newer
   // firmware release than what the active table reports (0–2).
@@ -67,6 +74,8 @@ export default function App() {
   const fwLatest = useUpdates((s) => s.fwLatest)
   const tableFw = useStatus((s) => s.status?.fw ?? null)
   const updateCount = Number(appUpdateAvailable(appLatest)) + Number(fwUpdateAvailable(fwLatest, tableFw))
+  // Count badge on Browse: Pattern Hub patterns new to this phone.
+  const newPatterns = useNewHubPatterns().length
 
   // Hydrate persisted state on launch.
   useEffect(() => {
@@ -129,7 +138,7 @@ export default function App() {
         <Onboarding />
       ) : (
         <NavigationContainer theme={navTheme}>
-          <AppTabs updateCount={updateCount} />
+          <AppTabs updateCount={updateCount} newPatterns={newPatterns} />
           {/* Unfolded iPhone Duo (and other roomy windows): the table's half, over the tabs' content. */}
           <NowPlayingPane />
           {/* The expanded player sheet, mounted once (the mini player lives in the tabs). */}
@@ -138,6 +147,7 @@ export default function App() {
       )}
       <Toaster />
       <PreviewGenerator />
+      <SandPreviewGenerator />
     </SafeAreaProvider>
   )
 }

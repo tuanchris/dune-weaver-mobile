@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { normalizeBase, registerKeyLookup } from '../api/board'
 import { DEMO_BASE, isDemoBase } from '../api/demoBoard'
+import type { HubTable } from '../lib/tableSize'
 
 const KEY = 'dw_boards_v1'
 
@@ -26,6 +27,21 @@ export interface Board {
    * e.g. when the app opens mid-pattern, when the read is refused. Only
    * rectangular tables have one. */
   travel?: [number, number]
+  /** The table's config name (`$/name`, "Dune Weaver Gold ThetaRho"), read off the
+   * board: which model a round table is, for its size (lib/tableSize.ts). */
+  model?: string
+  /** A round table's size set by hand (Settings › Table size), mm; unset = its model's. */
+  size?: { diameter: number; ball: number }
+  /** Which Pattern Hub versions a table between the hub's sizes (a DW Gold) takes:
+   * `table` for every pattern (unset = Mini Pro), `picks` per pattern id (lib/tableSize.ts hubTable). */
+  hub?: { table?: HubTable; picks?: Record<string, HubTable> }
+  /**
+   * The Pattern Hub revision of each hub file this app sent to the table (bare
+   * file name → catalog `rev`), so an updated pattern is sent again over the
+   * old copy (lib/patternHub.ts). A file sent before revs gets the phone's
+   * revision when the phone's copy is updated (the table had what the phone had).
+   */
+  hubSent?: Record<string, string>
 }
 
 interface Persisted {
@@ -53,6 +69,13 @@ interface BoardsStore {
   noteIdentity: (base: string, mac?: string | null, hostname?: string | null) => void
   /** Remember a rectangular table's size (no-op when unchanged). */
   setTravel: (base: string, travel: [number, number]) => void
+  setModel: (base: string, model: string) => void
+  /** null = back to the model's size. */
+  setSize: (id: string, size: { diameter: number; ball: number } | null) => void
+  /** Hub versions: with a pattern id, that pattern's (mix and match); without, every pattern's (drops the per-pattern picks). */
+  setHubTable: (id: string, table: HubTable, patternId?: string) => void
+  /** Record (or, with null, forget) the hub revision of files on the table at `base`. */
+  setHubSent: (base: string, revs: Record<string, string | null>) => void
   setActive: (id: string) => void
   getActive: () => Board | null
   getActiveBase: () => string | null
@@ -153,6 +176,40 @@ export const useBoards = create<BoardsStore>((set, get) => ({
     }
   },
 
+  setModel: (base, model) => {
+    const boards = get().boards.map((b) => (b.base === base && b.model !== model ? { ...b, model } : b))
+    if (boards.some((b, i) => b !== get().boards[i])) {
+      set({ boards })
+      persist(boards, get().activeId)
+    }
+  },
+
+  setSize: (id, size) => {
+    const boards = get().boards.map((b) => {
+      if (b.id !== id) return b
+      if (!size) {
+        if (!b.size) return b
+        const { size: _drop, ...rest } = b
+        return rest
+      }
+      return b.size?.diameter === size.diameter && b.size?.ball === size.ball ? b : { ...b, size }
+    })
+    if (boards.some((b, i) => b !== get().boards[i])) {
+      set({ boards })
+      persist(boards, get().activeId)
+    }
+  },
+
+  setHubTable: (id, table, patternId) => {
+    const boards = get().boards.map((b) =>
+      b.id !== id ? b
+      : patternId ? { ...b, hub: { ...b.hub, picks: { ...b.hub?.picks, [patternId]: table } } }
+      : { ...b, hub: { table } },
+    )
+    set({ boards })
+    persist(boards, get().activeId)
+  },
+
   setTravel: (base, travel) => {
     const boards = get().boards.map((b) =>
       b.base === base && (b.travel?.[0] !== travel[0] || b.travel?.[1] !== travel[1]) ? { ...b, travel } : b,
@@ -161,6 +218,20 @@ export const useBoards = create<BoardsStore>((set, get) => ({
       set({ boards })
       persist(boards, get().activeId)
     }
+  },
+
+  setHubSent: (base, revs) => {
+    const boards = get().boards.map((b) => {
+      if (b.base !== base) return b
+      const sent = { ...b.hubSent }
+      for (const [name, rev] of Object.entries(revs)) {
+        if (rev) sent[name] = rev
+        else delete sent[name]
+      }
+      return { ...b, hubSent: sent }
+    })
+    set({ boards })
+    persist(boards, get().activeId)
   },
 
   setActive: (id) => {

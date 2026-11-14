@@ -4,7 +4,7 @@ const config = getDefaultConfig(__dirname)
 // Bundle raw pattern files (.thr, and G-code for rectangular tables) as assets
 // so they can be read at runtime and uploaded to the board. The .webp/.png
 // previews are already in the default assetExts.
-config.resolver.assetExts.push('thr', 'gcode', 'gc', 'nc')
+config.resolver.assetExts.push('thr', 'gcode', 'gc', 'nc', 'bin') // bin: the sand preview's baked clears (assets/sand)
 
 // Dev-server fix: subdirectory assets required from the generated manifest
 // (assets/previews/*, assets/thr/*) are fetched via Metro's `unstable_path`

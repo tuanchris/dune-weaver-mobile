@@ -144,7 +144,8 @@ export function Segmented<T extends string>({
   fill,
 }: {
   value: T
-  options: { value: T; label: string }[]
+  /** `dot`: a red dot after the label (the colour it's drawn in: the nav theme's notification red). */
+  options: { value: T; label: string; dot?: string }[]
   onChange: (v: T) => void
   fill?: boolean
 }) {
@@ -159,14 +160,16 @@ export function Segmented<T extends string>({
             onPress={() => onChange(o.value)}
             accessibilityRole="button"
             accessibilityState={{ selected: on }}
+            accessibilityLabel={o.dot ? `${o.label}, new` : undefined}
             style={[styles.segment, fill && styles.segmentFill, on && { backgroundColor: colors.primary }]}
           >
             <Text
               numberOfLines={1}
-              style={{ color: on ? colors.primaryForeground : colors.foreground, fontSize: font.size.sm, fontWeight: on ? font.weight.semibold : font.weight.regular }}
+              style={{ flexShrink: 1, color: on ? colors.primaryForeground : colors.foreground, fontSize: font.size.sm, fontWeight: on ? font.weight.semibold : font.weight.regular }}
             >
               {o.label}
             </Text>
+            {o.dot ? <View style={[styles.segmentDot, { backgroundColor: o.dot }]} /> : null}
           </Pressable>
         )
       })}
@@ -367,8 +370,9 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   segments: { flexDirection: 'row', borderWidth: 1, borderRadius: radius.pill, overflow: 'hidden' },
-  segment: { minWidth: 48, minHeight: 36, paddingHorizontal: spacing.md, alignItems: 'center', justifyContent: 'center' },
+  segment: { flexDirection: 'row', minWidth: 48, minHeight: 36, paddingHorizontal: spacing.md, alignItems: 'center', justifyContent: 'center' },
   segmentFill: { flex: 1, minWidth: 0, paddingHorizontal: spacing.xs },
+  segmentDot: { width: 8, height: 8, borderRadius: 4, marginLeft: 6 },
   select: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, minHeight: 48 },
   selectOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing.md, borderBottomWidth: 1 },
   sliderHit: { height: 36, justifyContent: 'center' },

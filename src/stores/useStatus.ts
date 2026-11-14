@@ -49,11 +49,12 @@ let generation = 0 // bumps on every setBase to invalidate in-flight loops
 let failCount = 0 // consecutive failed polls, for unreachable backoff
 let lowHeap = false // last poll saw the board under heap pressure
 
-// A rectangular table's size, read once per app session and again after the
+// A rectangular table's size, or a round table's config name (its model, so its
+// size: lib/tableSize.ts), read once per app session and again after the
 // table restarts (a new config only takes effect on a restart: one booted on
 // FluidNC's defaults reported 1000 x 1000, and the app kept drawing squares
 // after it came back as 725 x 305). Read only while idle (`$/` reads 503 while
-// moving); a failed read retries a minute later, the saved size standing meanwhile.
+// moving); a failed read retries a minute later, the saved value standing meanwhile.
 const travelRead = new Set<string>()
 const travelTried = new Map<string, number>()
 const lastUptime = new Map<string, number>()
@@ -66,14 +67,15 @@ function noteUptime(base: string, uptime: number | null) {
     travelTried.delete(base)
   }
 }
-async function learnTravel(base: string) {
+async function learnTable(base: string, rect: boolean) {
   if (travelRead.has(base) || Date.now() - (travelTried.get(base) ?? 0) < 60_000) return
   travelTried.set(base, Date.now())
   try {
-    useBoards.getState().setTravel(base, await board.travel(base))
+    if (rect) useBoards.getState().setTravel(base, await board.travel(base))
+    else useBoards.getState().setModel(base, await board.configName(base))
     travelRead.add(base)
   } catch (e) {
-    log.warn('table', `Couldn't read the table size: ${(e as Error)?.message ?? e}`)
+    log.warn('table', `Couldn't read the table ${rect ? 'size' : 'model'}: ${(e as Error)?.message ?? e}`)
   }
 }
 
@@ -94,7 +96,7 @@ async function pollOnce(base: string, gen: number, set: (p: Partial<StatusStore>
       useBoards.getState().noteIdentity(base, status.mac, status.hostname)
     }
     noteUptime(base, status.uptime)
-    if (status.cartesian && !isBusy(status)) void learnTravel(base)
+    if (!isBusy(status)) void learnTable(base, status.cartesian)
   } catch (e) {
     if (gen !== generation) return
     failCount++

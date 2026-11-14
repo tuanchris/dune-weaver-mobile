@@ -1,0 +1,1 @@
+Fixes a crash on Android when opening a pattern in Browse.

@@ -52,9 +52,11 @@ function useAndroidIcons(): Partial<Record<TabName, ImageSourcePropType>> {
 export interface AppTabsProps {
   /** Pending updates (app + firmware), shown as a count badge on Settings. */
   updateCount: number
+  /** New Pattern Hub patterns (useNewHubPatterns), a count badge on Browse. */
+  newPatterns: number
 }
 
-export function AppTabs({ updateCount }: AppTabsProps): React.JSX.Element {
+export function AppTabs({ updateCount, newPatterns }: AppTabsProps): React.JSX.Element {
   const colors = useTheme((s) => s.colors)
   const playing = useStatus((s) => isActive(s.status)) // boolean: re-renders only on flips
   const split = !!useSplit() // unfolded: NowPlayingPane shows the player, so no mini player
@@ -70,7 +72,10 @@ export function AppTabs({ updateCount }: AppTabsProps): React.JSX.Element {
           tabBarLabelVisibilityMode: 'labeled', // Android: with 5 items 'auto' hides unselected labels
           tabBarIcon: Platform.OS === 'ios' ? SF[route.name] : img ? { type: 'image', source: img } : undefined,
           // A count, not '': an empty badge draws nothing on iOS. Colour = the theme's notification red.
-          tabBarBadge: route.name === 'Settings' && updateCount > 0 ? updateCount : undefined,
+          tabBarBadge:
+          route.name === 'Settings' && updateCount > 0 ? updateCount
+          : route.name === 'Browse' && newPatterns > 0 ? newPatterns
+          : undefined,
           // undefined (not a null-returning fn) removes the glass capsule when nothing plays.
           bottomAccessory: NATIVE_ACCESSORY && playing && !split ? ({ placement }) => <MiniPlayer placement={placement} /> : undefined,
         }

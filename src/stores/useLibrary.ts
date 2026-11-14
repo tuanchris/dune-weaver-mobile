@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Asset } from 'expo-asset'
-import { File } from 'expo-file-system'
+import { Directory, File, Paths } from 'expo-file-system'
 // @ts-ignore - shared plain-ESM module (Metro resolves .mjs; allowJs covers TS)
 import { thrToXY } from '../lib/thrGeometry.mjs'
 import { isGcode, parseGcode } from '../lib/gcode'
@@ -54,6 +54,11 @@ export interface LibraryPattern {
    * of the bundled webps, stored as app data instead of in the bundle.
    */
   previewUri?: string
+  /**
+   * A Pattern Hub download's revision (catalog `rev`): the copy is out of date
+   * when the catalog's differs (lib/patternHub.ts). Absent for anything else.
+   */
+  hubRev?: string
 }
 
 // Every pattern file the app bundles: round tables' .thr and rectangular tables'
@@ -185,6 +190,10 @@ interface LibraryStore {
   remove: (id: string) => void
   /** Record the persisted preview image file for an imported pattern. */
   setPreviewUri: (name: string, uri: string) => void
+  /** Record which Pattern Hub revision each named import is (by file name). */
+  setHubRevs: (revs: Record<string, string>) => void
+  /** The on-table pattern list cached for `base` (any board, not just the selected one). */
+  tableListOf: (base: string) => string[]
   /**
    * Point the on-table view at `base` (populating from cache instantly), and
    * fetch the pattern manifest from the board ONLY on `force` (pull-to-refresh)
@@ -230,6 +239,23 @@ function persist(patterns: LibraryPattern[]) {
   AsyncStorage.setItem(KEY, JSON.stringify(data)).catch(() => {})
 }
 
+/**
+ * iOS moves the app's container on every app update: the Documents files
+ * survive, but a saved absolute uri goes dead (a blank tile, and "Pattern not
+ * available locally" on Send). Point a dead one back at the same file under
+ * today's Documents dir; imports live in thr/, their previews in previews/.
+ */
+function rebase(uri: string | undefined, dir: string): string | undefined {
+  if (!uri) return uri
+  try {
+    if (new File(uri).exists) return uri
+    const moved = new File(new Directory(Paths.document, dir), decodeURIComponent(uri.split('/').pop() ?? ''))
+    return moved.exists ? moved.uri : uri
+  } catch {
+    return uri
+  }
+}
+
 function makeId(): string {
   return `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`
 }
@@ -264,6 +290,15 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
     set({ patterns })
     persist(patterns)
   },
+
+  setHubRevs: (revs) => {
+    const patterns = get().patterns.map((p) => (revs[p.name] && revs[p.name] !== p.hubRev ? { ...p, hubRev: revs[p.name] } : p))
+    if (patterns.every((p, i) => p === get().patterns[i])) return
+    set({ patterns })
+    persist(patterns)
+  },
+
+  tableListOf: (base) => activeCatalog(get().tableCache[base]),
 
   loadTable: async (base, force) => {
     if (!base) return
@@ -392,7 +427,12 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
       const raw = await AsyncStorage.getItem(KEY)
       if (raw) {
         const data: Persisted = JSON.parse(raw)
-        set({ patterns: data.patterns || [], hydrated: true })
+        const patterns = (data.patterns || []).map((p) => ({
+          ...p,
+          thrUri: rebase(p.thrUri, 'thr') ?? p.thrUri,
+          previewUri: rebase(p.previewUri, 'previews'),
+        }))
+        set({ patterns, hydrated: true })
         return
       }
     } catch {
@@ -404,9 +444,11 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
   addImported: (name, thrUri, sizeBytes, xy) => {
     const key = bareName(name)
     const entry: LibraryPattern = { id: makeId(), name: key, thrUri, sizeBytes, addedAt: Date.now() }
-    // Replace any existing import with the same name.
+    // Replace any existing import with the same name, and the geometry drawn from it.
     const patterns = [...get().patterns.filter((p) => p.name !== key), entry]
-    set({ patterns })
+    const xyCache = { ...get().xyCache }
+    delete xyCache[key]
+    set({ patterns, xyCache })
     persist(patterns)
     if (xy) get().setXY(key, xy)
     return entry

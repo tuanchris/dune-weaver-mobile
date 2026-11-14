@@ -20,6 +20,7 @@ import { usePrefs, type PauseUnit, type PlaylistPref } from '../stores/usePrefs'
 import { loadPlaylist, savePlaylist, deletePlaylist, copyPlaylistTo, fillPlaylistCovers, playlistName } from '../lib/playlists'
 import { isDemoBase } from '../api/demoBoard'
 import { prettyName } from '../lib/patternName'
+import { readCatalogOnce, tagKey } from '../lib/patternHub'
 import { assertNotSyncing } from '../lib/sd'
 import { usePreviews } from '../stores/usePreviews'
 import { useBoardAction } from '../lib/useBoardAction'
@@ -116,6 +117,9 @@ export function PlaylistsScreen() {
   const loadTable = useLibrary((s) => s.loadTable)
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [pickerQuery, setPickerQuery] = useState('')
+  // A Pattern Hub tag narrowing the picker: pick one, then All, for a playlist of it.
+  const [pickerTag, setPickerTag] = useState<string | null>(null)
+  const hubTags = usePrefs((s) => s.hubTags)
 
   // force=true is the pull-to-refresh / post-mutation path (re-reads the board);
   // the bare on-focus call is stale-while-revalidate (cache, first-load fetch).
@@ -268,17 +272,28 @@ export function PlaylistsScreen() {
     // matching dw — saving replaces the list with the full selection.
     setPicked(new Set(items))
     setPickerQuery('')
+    setPickerTag(null)
     setPage('add')
     loadTable(base) // no-op if already loaded; deferred to idle if mid-pattern
+    readCatalogOnce() // refreshes the hub tags, once per app session
   }
+
+  // Only what this table can draw: G-code on a rectangular table, .thr on a round one.
+  const playable = useMemo(() => tablePatterns.filter((p) => isGcode(p) === rect), [tablePatterns, rect])
+
+  // The hub tags this table's patterns carry, most used first.
+  const pickerTags = useMemo(() => {
+    const n = new Map<string, number>()
+    for (const p of playable) for (const t of hubTags[tagKey(p)] ?? []) n.set(t, (n.get(t) ?? 0) + 1)
+    return [...n].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  }, [playable, hubTags])
 
   const pickerVisible = useMemo(() => {
     const q = pickerQuery.trim().toLowerCase()
-    // Only what this table can draw: G-code on a rectangular table, .thr on a round one.
-    const playable = tablePatterns.filter((p) => isGcode(p) === rect)
-    const list = q ? playable.filter((p) => p.toLowerCase().includes(q)) : playable
+    let list = pickerTag ? playable.filter((p) => hubTags[tagKey(p)]?.includes(pickerTag)) : playable
+    if (q) list = list.filter((p) => p.toLowerCase().includes(q))
     return [...list].sort((a, b) => a.localeCompare(b))
-  }, [tablePatterns, pickerQuery, rect])
+  }, [playable, pickerQuery, pickerTag, hubTags])
 
   const allPickedVisible = pickerVisible.length > 0 && pickerVisible.every((p) => picked.has(p))
 
@@ -626,7 +641,7 @@ export function PlaylistsScreen() {
                 <TextInput
                   value={pickerQuery}
                   onChangeText={setPickerQuery}
-                  placeholder="Search"
+                  placeholder={pickerTag ? `Search in ${pickerTag}` : 'Search'}
                   placeholderTextColor={colors.mutedForeground}
                   autoCorrect={false}
                   autoCapitalize="none"
@@ -644,6 +659,31 @@ export function PlaylistsScreen() {
                 <Text style={{ color: colors.foreground, fontSize: font.size.sm }}>{allPickedVisible ? 'None' : 'All'}</Text>
               </Pressable>
             </View>
+
+            {pickerTags.length > 0 ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={styles.tagScroll} contentContainerStyle={styles.tagRow}>
+                {pickerTags.map(([t, n]) => {
+                  const on = pickerTag === t
+                  return (
+                    <Pressable
+                      key={t}
+                      onPress={() => setPickerTag(on ? null : t)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: on }}
+                      accessibilityLabel={`${t}, ${n} patterns`}
+                      style={({ pressed }) => [
+                        styles.tagChip,
+                        on ? { backgroundColor: colors.primary, borderColor: colors.primary } : { backgroundColor: colors.card, borderColor: colors.border },
+                        pressed && { opacity: 0.7 },
+                      ]}
+                    >
+                      <Text style={{ color: on ? colors.primaryForeground : colors.foreground, fontSize: font.size.sm, fontWeight: font.weight.medium }}>{t}</Text>
+                      <Text style={{ color: on ? colors.primaryForeground : colors.mutedForeground, fontSize: font.size.sm, fontFamily: font.family.mono }}>{n}</Text>
+                    </Pressable>
+                  )
+                })}
+              </ScrollView>
+            ) : null}
 
             <SheetGridSize>
               {({ cols, thumb }) => (
@@ -760,4 +800,7 @@ const styles = StyleSheet.create({
   search: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, minHeight: 40 },
   searchInput: { flex: 1, fontSize: font.size.md, paddingVertical: 0 },
   selectAll: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: radius.md, borderWidth: 1, paddingHorizontal: spacing.md, minHeight: 40 },
+  tagScroll: { flexGrow: 0 },
+  tagRow: { gap: spacing.sm, paddingHorizontal: spacing.md, paddingBottom: spacing.sm },
+  tagChip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: radius.pill, borderWidth: 1, paddingHorizontal: spacing.md, paddingVertical: 6, minHeight: 34 },
 })

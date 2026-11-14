@@ -9,15 +9,24 @@ import { Slider } from './ui'
 import { PatternThumb } from './PatternThumb'
 import { useAspect, useIsRect, useThumbFrame } from './RectTable'
 import { useSheetWidth } from './Sheet'
+import { SAND, SandView, sandTable, type SandHandle, type SandState, type SandTable } from './SandView'
 import { playbackPath, reveal, type PlaybackPath } from '../lib/playbackPath'
+import { useBoards } from '../stores/useBoards'
+import { log } from '../stores/useAppLog'
+import { roundSize } from '../lib/tableSize'
 // @ts-ignore - shared plain-ESM module
 import { previewStroke } from '../lib/gcodeGeometry.mjs'
 
-// dune-weaver-viewer's Fast player (mac/Shared/PlayerView.swift), on the phone:
-// the pattern draws itself as the ball moves at constant speed, with play/pause,
-// a scrubber and a speed. Nothing is sent to the table. Browse opens it as a
-// page of the pattern's sheet when its preview image is tapped, and it starts
-// playing then (that tap asked for it); play from the end starts over.
+// dune-weaver-viewer's players on the phone. On a round table it's SAND: the
+// Sand Weaver engine (SandView) simulating the sand the table leaves, after the
+// table's clear. Elsewhere (rectangular tables, web/desktop, or when the engine
+// can't run) it's FAST (mac/Shared/PlayerView.swift): the pattern draws itself
+// as the ball moves at constant speed. Both have play/pause, a scrubber and a
+// speed, and nothing is sent to the table. Browse opens it as a page of the
+// pattern's sheet when its preview image is tapped, and it starts playing then
+// (that tap asked for it); play from the end starts over.
+
+const SAND_LABEL: Record<SandTable, string> = { DWP: 'DW Pro', DWG: 'DW Gold', DWMP: 'DW Mini Pro' }
 
 /** Seconds for the whole pattern at 1×, as in the viewer. */
 const DURATION = 30
@@ -59,6 +68,18 @@ export function PatternPlayer({ name, autoplay, frameWidth, caption = true, onFu
   const [speed, setSpeed] = useState(1)
   const resumeAfterDrag = useRef(false)
 
+  // Sand: the engine keeps the clock, so playing and progress are what it reports.
+  const sandSize = useBoards((s) => roundSize(s.getActive()).diameter)
+  const table = sandTable(sandSize)
+  const [sandFailed, setSandFailed] = useState(false)
+  const sand = SAND && !rect && playable && !sandFailed
+  const sandRef = useRef<SandHandle>(null)
+  const [sandState, setSandState] = useState<SandState>({ f: 0, playing: false, phase: 'loading' })
+  const [dragging, setDragging] = useState(false)
+  const isPlaying = sand ? sandState.playing : playing
+  const shown = sand && !dragging ? sandState.f : progress
+  const busy = sand ? sandState.phase === 'loading' : loading
+
   const load = async (): Promise<PlaybackPath | null> => {
     if (path) return path
     setLoading(true)
@@ -98,6 +119,14 @@ export function PatternPlayer({ name, autoplay, frameWidth, caption = true, onFu
   }, [playing, progress])
 
   const toggle = async () => {
+    if (sand) {
+      if (sandState.playing) sandRef.current?.pause()
+      else sandRef.current?.play()
+      return
+    }
+    await toggleFast()
+  }
+  const toggleFast = async () => {
     if (playing) {
       setPlaying(false)
       return
@@ -114,6 +143,16 @@ export function PatternPlayer({ name, autoplay, frameWidth, caption = true, onFu
   }, [])
 
   const scrub = (v: number) => {
+    if (sand) {
+      if (sandState.playing) {
+        resumeAfterDrag.current = true
+        sandRef.current?.pause()
+      }
+      setDragging(true)
+      setProgress(v / 1000)
+      sandRef.current?.seek(v / 1000)
+      return
+    }
     if (playing) {
       resumeAfterDrag.current = true
       setPlaying(false)
@@ -123,6 +162,15 @@ export function PatternPlayer({ name, autoplay, frameWidth, caption = true, onFu
     setProgress(v / 1000)
   }
   const scrubEnd = (v: number) => {
+    if (sand) {
+      setDragging(false)
+      sandRef.current?.seek(v / 1000)
+      if (resumeAfterDrag.current) {
+        resumeAfterDrag.current = false
+        if (v < 1000) sandRef.current?.play()
+      }
+      return
+    }
     setProgress(v / 1000)
     if (resumeAfterDrag.current) {
       resumeAfterDrag.current = false
@@ -130,8 +178,32 @@ export function PatternPlayer({ name, autoplay, frameWidth, caption = true, onFu
     }
   }
 
-  const drawing =
-    started && path ? <PathDrawing path={path} width={width} height={height} {...reveal(path, progress, 'length')} /> : <PatternThumb name={name} size={width} />
+  const drawing = sand ? (
+    <SandView
+      ref={sandRef}
+      name={name}
+      table={table}
+      size={width}
+      onState={setSandState}
+      onError={(message) => {
+        // Fall back to Fast, which carries on where the tap asked it to.
+        log.warn('sand-preview', message)
+        setSandFailed(true)
+        if (autoplay) void toggleFast()
+      }}
+    />
+  ) : started && path ? (
+    <PathDrawing path={path} width={width} height={height} {...reveal(path, progress, 'length')} />
+  ) : (
+    <PatternThumb name={name} size={width} />
+  )
+  const note = !sand
+    ? 'A preview on this phone. The table doesn’t move.'
+    : sandState.phase === 'clearing'
+      ? 'Clearing the sand first, as the table does…'
+      : sandState.phase === 'simulating'
+        ? 'Simulating the sand…'
+        : `Simulated sand on a ${SAND_LABEL[table]}. The table doesn’t move.`
 
   return (
     <View style={caption ? styles.page : styles.bare}>
@@ -144,9 +216,9 @@ export function PatternPlayer({ name, autoplay, frameWidth, caption = true, onFu
       >
         {drawing}
         {/* Say why it's still: a spinner while the drawing is prepared, a reason when it can't be. */}
-        {loading || failed ? (
+        {busy || failed ? (
           <View style={[StyleSheet.absoluteFill, styles.overlay, { backgroundColor: `${colors.card}cc` }]}>
-            {loading ? (
+            {busy ? (
               <ActivityIndicator size="large" color={colors.foreground} />
             ) : (
               <>
@@ -163,20 +235,24 @@ export function PatternPlayer({ name, autoplay, frameWidth, caption = true, onFu
           <Pressable
             onPress={toggle}
             accessibilityRole="button"
-            accessibilityLabel={playing ? 'Pause preview' : 'Play preview'}
+            accessibilityLabel={isPlaying ? 'Pause preview' : 'Play preview'}
             style={({ pressed }) => [styles.round, { borderColor: colors.border, backgroundColor: pressed ? colors.cardElevated : colors.card }]}
           >
-            {loading ? (
+            {busy ? (
               <ActivityIndicator color={colors.foreground} />
             ) : (
-              <MaterialIcons name={playing ? 'pause' : 'play-arrow'} size={24} color={colors.foreground} />
+              <MaterialIcons name={isPlaying ? 'pause' : 'play-arrow'} size={24} color={colors.foreground} />
             )}
           </Pressable>
           <View style={styles.scrubber}>
-            <Slider value={Math.round(progress * 1000)} min={0} max={1000} step={1} onChange={scrub} onComplete={scrubEnd} />
+            <Slider value={Math.round(shown * 1000)} min={0} max={1000} step={1} onChange={scrub} onComplete={scrubEnd} />
           </View>
           <Pressable
-            onPress={() => setSpeed(SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length])}
+            onPress={() => {
+              const next = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length]
+              setSpeed(next)
+              sandRef.current?.speed(next)
+            }}
             accessibilityRole="button"
             accessibilityLabel={`Preview speed, ${speed} times`}
             style={({ pressed }) => [styles.speed, { borderColor: colors.border, backgroundColor: pressed ? colors.cardElevated : colors.card }]}
@@ -197,7 +273,7 @@ export function PatternPlayer({ name, autoplay, frameWidth, caption = true, onFu
       ) : null}
       {caption ? (
         <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, textAlign: 'center' }}>
-          A preview on this phone. The table doesn’t move.
+          {note}
         </Text>
       ) : null}
     </View>

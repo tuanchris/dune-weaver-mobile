@@ -9,14 +9,15 @@ import { PanResponder, Pressable, ScrollView, SectionList, StyleSheet, Text, Tex
 import Svg, { Circle, Defs, G, Path, RadialGradient, Stop } from 'react-native-svg'
 import { MaterialIcons } from '@expo/vector-icons'
 import { useFocusEffect, useIsFocused, useNavigation } from '@react-navigation/native'
-import { board, LED_DEFAULT_INTENSITY, LED_DEFAULT_SPEED, LED_EFFECTS, LED_PALETTES, ledEffectInputs } from '../api/board'
+import { board, LED_EFFECTS, ledEffectDefaults, ledEffectInputs, ledEffectsFor, ledPalettes, type LedEffectDef } from '../api/board'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
 import { useScrollLock } from '../stores/useScrollLock'
 import { useTheme } from '../stores/useTheme'
 import { toast } from '../stores/useToast'
 import { userMessage } from '../lib/errors'
-import { paletteColor, ringDots, type RingLook } from '../lib/ledPreview'
+import { defaultColor, paletteColor, paletteId, ringDots, type RingLook } from '../lib/ledPreview'
+import type { LedPalette } from '../lib/ledPalettes'
 import type { SimParams } from '../lib/ledSim'
 import { thumbGrid, SCROLL_BOTTOM_PAD, useScreenWidth } from '../lib/layout'
 import { Button, Card, CardTitle, IconButton, Segmented, Select, Slider } from '../components/ui'
@@ -39,12 +40,28 @@ const SWATCHES = [
 // The gallery, grouped by character so 37 effects scan as five short rows of
 // choices. Every effect but 'ball' (its own mode) and 'off' (the power button)
 // appears exactly once — an effect missing from a group lands in "More".
+// Our effects first in each group, then the ported WLED ones (firmware with
+// WLED's effects only); a group with none of a table's effects is dropped.
 const GROUPS: { title: string; names: string[] }[] = [
-  { title: 'Calm', names: ['static', 'breathe', 'candle', 'gradient', 'sine', 'aurora', 'pacifica', 'colorwaves', 'plasma'] },
-  { title: 'Color', names: ['rainbow', 'colorloop', 'pride', 'bpm', 'running', 'theater', 'chase', 'railway'] },
-  { title: 'Motion', names: ['scan', 'dualscan', 'sinelon', 'juggle', 'multicomet', 'meteor', 'bouncing', 'ripple', 'drip', 'wipe', 'dissolve'] },
-  { title: 'Sparkle', names: ['twinkle', 'sparkle', 'glitter', 'fireworks', 'fire'] },
-  { title: 'Flash', names: ['lightning', 'strobe', 'heartbeat', 'police'] },
+  { title: 'Calm', names: ['static', 'breathe', 'candle', 'gradient', 'sine', 'aurora', 'pacifica', 'colorwaves', 'plasma',
+    'fade', 'sunrise', 'lake', 'blends', 'palette', 'phased', 'wavesins', 'flow', 'flow_stripe'] },
+  { title: 'Color', names: ['rainbow', 'colorloop', 'pride', 'bpm', 'running', 'theater', 'chase', 'railway',
+    'dynamic', 'dynamic_smooth', 'random_colors', 'colorful', 'theater_rainbow', 'rainbow_runner', 'sweep', 'sweep_random',
+    'wipe_random', 'chase_2', 'chase_3', 'tri_wipe', 'tri_fade', 'solid_pattern', 'solid_pattern_tri', 'traffic_light'] },
+  { title: 'Motion', names: ['scan', 'dualscan', 'sinelon', 'juggle', 'multicomet', 'meteor', 'bouncing', 'ripple', 'drip', 'wipe', 'dissolve',
+    'scanner', 'scanner_dual', 'lighthouse', 'stream', 'stream_2', 'chase_random', 'chase_rainbow', 'chase_flash', 'chase_flash_rnd',
+    'running_dual', 'saw', 'two_dots', 'oscillate', 'rolling_balls', 'meteor_smooth', 'sinelon_dual', 'sinelon_rainbow', 'tetrix',
+    'loading', 'icu', 'android', 'percent', 'washing_machine', 'chunchun', 'dancing_shadows', 'halloween_eyes'] },
+  { title: 'Sparkle', names: ['twinkle', 'sparkle', 'glitter', 'fireworks', 'fire',
+    'sparkle_dark', 'sparkle_plus', 'solid_glitter', 'fairy', 'fairytwinkle', 'colortwinkles', 'twinklefox', 'twinklecat', 'twinkleup',
+    'spots', 'spots_fade', 'popcorn', 'rain', 'ripple_rainbow', 'fireworks_starburst', 'fireworks_1d', 'dissolve_rnd', 'fire_flicker', 'candle_multi'] },
+  { title: 'Flash', names: ['lightning', 'strobe', 'heartbeat', 'police', 'blink', 'blink_rainbow', 'strobe_rainbow', 'strobe_mega', 'tv_simulator'] },
+  { title: 'Noise', names: ['noise_1', 'noise_2', 'noise_3', 'noise_4', 'fill_noise', 'noise_pal', 'phased_noise', 'perlin_move'] },
+  // WLED's matrix effects: drawn on a 16 x 16 grid, the strip shows its outline.
+  { title: '2D', names: ['polar_lights', 'metaballs', 'distortion_waves', 'plasma_ball', 'noise2d', 'firenoise', 'soap', 'octopus',
+    'black_hole', 'julia', 'hiphotic', 'lissajous', 'frizzles', 'sindots', 'drift', 'drift_rose', 'sun_radiation', 'colored_bursts',
+    'squared_swirl', 'tartan', 'waving_cell', 'pulser', 'dna', 'dna_spiral', 'matrix', 'game_of_life', 'crazy_bees', 'ghost_rider',
+    'spaceships', 'blobs', 'rotozoomer'] },
 ]
 // Rainbow's "Size" (WLED) is 16 << (intensity / 29) hue steps across the ring
 // (Leds.cpp EFFECT_RAINBOW): only 9 sizes, each double the last. A smooth slider
@@ -59,22 +76,22 @@ function rainbowSize(ix: number): string {
 /** Slider step + readout for an effect's intensity (only rainbow is stepped). */
 const ixSlider = (effect: string) => (effect === 'rainbow' ? { step: RAINBOW_STEP, format: rainbowSize } : {})
 
-const GALLERY_GROUPS = (() => {
-  const all = LED_EFFECTS.filter((e) => e.name !== 'ball' && e.name !== 'off')
+function galleryGroups(effects: LedEffectDef[]): { title: string; effects: LedEffectDef[] }[] {
+  const all = effects.filter((e) => e.name !== 'ball' && e.name !== 'off')
   const grouped = new Set(GROUPS.flatMap((g) => g.names))
   const more = all.filter((e) => !grouped.has(e.name))
   return [
     ...GROUPS.map((g) => ({ title: g.title, effects: g.names.flatMap((n) => all.filter((e) => e.name === n)) })),
     ...(more.length ? [{ title: 'More', effects: more }] : []),
-  ]
-})()
+  ].filter((g) => g.effects.length > 0)
+}
 /** Display label for an effect name (falls back to the raw name). */
 const effectLabel = (name: string) => LED_EFFECTS.find((e) => e.name === name)?.label ?? name
 // What renders behind the ball's blob: a solid color, black, or a live effect.
-const BG_OPTIONS = [
+const bgOptions = (effects: LedEffectDef[]) => [
   { value: 'static', label: 'Solid color' },
   { value: 'off', label: 'Off (black)' },
-  ...LED_EFFECTS.filter((e) => e.name !== 'ball' && e.name !== 'off' && e.name !== 'static').map((e) => ({ value: e.name, label: e.label })),
+  ...effects.filter((e) => e.name !== 'ball' && e.name !== 'off' && e.name !== 'static').map((e) => ({ value: e.name, label: e.label })),
 ]
 
 const HEX_RE = /^#?[0-9a-fA-F]{6}$/
@@ -158,6 +175,12 @@ export function LedScreen() {
   const [idleEffect, setIdleEffect] = useState('none')
   const [hasLed, setHasLed] = useState<boolean | null>(null)
   const [galleryOpen, setGalleryOpen] = useState(false)
+  // The palette sheet, and which effect its Default tile previews (the effect,
+  // or the ball tracker's background).
+  const [paletteFor, setPaletteFor] = useState<string | null>(null)
+  // LED/Palettes: how many palettes the table has. Absent = firmware before
+  // WLED's palettes: the original eight, which recolor only the auto-hue effects.
+  const [paletteCount, setPaletteCount] = useState<number | null>(null)
   // Throttle live color previews while dragging the wheel (final value is flushed
   // on release) so we don't fire a command on every move.
   const colorThrottle = useThrottledSend(500)
@@ -189,6 +212,7 @@ export function LedScreen() {
       if (s['LED/Intensity'] != null) setIntensity(Number(s['LED/Intensity']) || 0)
       setHasIntensity('LED/Intensity' in s)
       setLedCount(s['LED/Count'] != null ? Number(s['LED/Count']) || null : null)
+      setPaletteCount(s['LED/Palettes'] != null ? Number(s['LED/Palettes']) || null : null)
       if (s['LED/Direction']) setDirection(s['LED/Direction'] === 'ccw' ? 'ccw' : 'cw')
       if (s['LED/Align'] != null) setAlign(Number(s['LED/Align']) || 0)
       if (s['LED/BallSize'] != null) setBallSize(Number(s['LED/BallSize']) || 3)
@@ -241,7 +265,8 @@ export function LedScreen() {
       setOverride(null)
     }
     if (e !== 'off') lastOnRef.current = e
-    const reset = resetSliders ? { speed: LED_DEFAULT_SPEED, intensity: hasIntensity ? LED_DEFAULT_INTENSITY : undefined } : undefined
+    const d = ledEffectDefaults(e)
+    const reset = resetSliders ? { speed: d.speed, intensity: hasIntensity ? d.intensity : undefined } : undefined
     if (reset) {
       setSpeed(reset.speed)
       if (reset.intensity != null) setIntensity(reset.intensity)
@@ -299,22 +324,32 @@ export function LedScreen() {
     else if (m === 'effects' && isBall) applyEffect(lastNonBallRef.current || 'static')
   }
 
-  const inputs = ledEffectInputs(effect)
+  const wledPalettes = paletteCount != null
+  // Firmware with WLED's palettes also has its effects (the same release).
+  const effects = ledEffectsFor(wledPalettes)
+  const palettes = ledPalettes(paletteCount)
+  const paletteLabel = palettes[paletteId(palette)]?.label ?? palettes[0].label
+  const inputs = ledEffectInputs(effect, wledPalettes)
   // What the ball's background sub-effect reads, so we can expose its controls.
-  const bgInputs = ledEffectInputs(ballBg)
+  const bgInputs = ledEffectInputs(ballBg, wledPalettes)
+  // A picked palette replaces the effect's first color (WLED): its picker would do nothing.
+  const paletteRecolors = inputs.palette === 'wled' && paletteId(palette) !== 0
+  const pickPalette = (p: string) => { setPalette(p); send(() => board.setLedPalette(base!, p)) }
 
   // The ring preview: the user's ring size (clamped so it still reads as a ring),
   // and for the ball tracker, the blob where the sand ball is right now.
   const dotCount = Math.max(12, Math.min(72, ledCount ?? 48))
   const turn = rect ? -1 : ((((status?.theta ?? 0) / (2 * Math.PI)) % 1) + 1) % 1
   const ballAt = rect ? -1 : ((direction === 'ccw' ? 1 - turn : turn) + align / 360) % 1
-  const look: RingLook = { color, color2, palette, ball: { at: ballAt, size: ballSize, bg: ballBg } }
+  const look: RingLook = { color, color2, palette, wledPalettes, ball: { at: ballAt, size: ballSize, bg: ballBg } }
   // The same settings, for the firmware-effect simulation that animates the rings.
   const sim: SimParams = {
     effect: isOn ? active : 'off',
     speed,
     intensity: hasIntensity ? intensity : 128,
     palette,
+    wledPalettes,
+    ring: !rect,
     color,
     color2,
     ball: { bg: ballBg, bgBright: ballBgBright, bright: ballBright, size: ballSize, dir: direction, align, angle: turn },
@@ -438,13 +473,10 @@ export function LedScreen() {
             <Card style={{ gap: spacing.lg }}>
               <View>
                 <CardTitle>Behind the dot</CardTitle>
-                <Select value={ballBg} options={BG_OPTIONS} onChange={(bg) => { setBallBg(bg); send(() => board.setLedBallBg(base, bg)) }} />
+                <Select value={ballBg} options={bgOptions(effects)} onChange={(bg) => { setBallBg(bg); send(() => board.setLedBallBg(base, bg)) }} />
               </View>
               {bgInputs.palette ? (
-                <View>
-                  <Text style={[styles.label, { color: colors.foreground }]}>Palette</Text>
-                  <PaletteGrid value={palette} speed={speed} animate={animate} onChange={(p) => { setPalette(p); send(() => board.setLedPalette(base, p)) }} />
-                </View>
+                <PaletteRow label={paletteLabel} color={paletteSwatchColor(palette, ballBg, look)} speed={speed} animate={animate} onPress={() => setPaletteFor(ballBg)} />
               ) : null}
               {ballBg === 'static' || bgInputs.color2 ? (
                 <ColorField
@@ -485,12 +517,14 @@ export function LedScreen() {
             </Pressable>
 
             {inputs.palette ? (
-              <View>
-                <Text style={[styles.label, { color: colors.foreground }]}>Palette</Text>
-                <PaletteGrid value={palette} speed={speed} animate={animate} onChange={(p) => { setPalette(p); send(() => board.setLedPalette(base, p)) }} />
-              </View>
+              <PaletteRow label={paletteLabel} color={paletteSwatchColor(palette, effect, look)} speed={speed} animate={animate} onPress={() => setPaletteFor(effect)} />
             ) : null}
-            {inputs.color ? (
+            {inputs.color && paletteRecolors ? (
+              <Text style={[styles.hint, { color: colors.mutedForeground }]}>
+                {inputs.color2 ? 'The palette replaces the first color.' : 'The palette sets the colors.'} Pick Default to choose your own.
+              </Text>
+            ) : null}
+            {inputs.color && !paletteRecolors ? (
               <ColorField
                 label={inputs.color2 ? 'First color' : 'Color'}
                 value={color}
@@ -566,7 +600,17 @@ export function LedScreen() {
         title="Effects"
         trailing={<SheetButton title="Done" prominent onPress={() => setGalleryOpen(false)} />}
       >
-        <EffectGallery value={effect} look={look} sim={sim} leds={ledCount ?? 48} animate={animate} onPick={(e) => applyEffect(e, true)} />
+        <EffectGallery effects={effects} value={effect} look={look} sim={sim} leds={ledCount ?? 48} animate={animate} onPick={(e) => applyEffect(e, true)} />
+      </Sheet>
+
+      <Sheet
+        variant="page"
+        visible={paletteFor != null}
+        onClose={() => setPaletteFor(null)}
+        title="Palettes"
+        trailing={<SheetButton title="Done" prominent onPress={() => setPaletteFor(null)} />}
+      >
+        <PaletteGrid palettes={palettes} value={palette} effect={paletteFor ?? effect} look={look} onChange={pickPalette} />
       </Sheet>
     </Screen>
   )
@@ -578,21 +622,21 @@ export function LedScreen() {
  * stop animating, and on-screen tiles draw every other firmware frame (~15 fps;
  * the simulation itself keeps full speed), so a screenful of rings stays smooth.
  * Rendered INSIDE the sheet so it sizes from the sheet's width. */
-function EffectGallery({ value, look, sim, leds, animate, onPick }: { value: string; look: RingLook; sim: SimParams; leds: number; animate: boolean; onPick: (name: string) => void }) {
+function EffectGallery({ effects, value, look, sim, leds, animate, onPick }: { effects: LedEffectDef[]; value: string; look: RingLook; sim: SimParams; leds: number; animate: boolean; onPick: (name: string) => void }) {
   const colors = useTheme((s) => s.colors)
   const rect = useIsRect()
   const { cols, thumb } = thumbGrid(useSheetWidth(), spacing.md, rect)
   const ring = thumb - 10 // tile border (2) + padding (3), both sides
   const sections = useMemo(
     () =>
-      GALLERY_GROUPS.map((g) => ({
+      galleryGroups(effects).map((g) => ({
         title: g.title,
         data: Array.from({ length: Math.ceil(g.effects.length / cols) }, (_, r) => ({
           key: `${g.title}-${r}`,
           effects: g.effects.slice(r * cols, r * cols + cols),
         })),
       })),
-    [cols]
+    [cols, effects]
   )
   // Which rows are on screen — only those animate.
   const [visible, setVisible] = useState<Set<string>>(() => new Set())
@@ -629,7 +673,7 @@ function EffectGallery({ value, look, sim, leds, animate, onPick }: { value: str
                   <AnimatedLedRing
                     // Preview what a tap gives: picking an effect resets speed and
                     // intensity to its defaults. The playing one keeps your tuning.
-                    params={on ? { ...sim, effect: e.name } : { ...sim, effect: e.name, speed: LED_DEFAULT_SPEED, intensity: LED_DEFAULT_INTENSITY }}
+                    params={on ? { ...sim, effect: e.name } : { ...sim, effect: e.name, ...ledEffectDefaults(e.name) }}
                     count={24}
                     leds={leds}
                     animate={animate && visible.has(row.key)}
@@ -658,41 +702,80 @@ function EffectGallery({ value, look, sim, leds, animate, onPick }: { value: str
   )
 }
 
-/** The firmware's palettes as gradient swatches (same tables as the strip),
- * flowing the way a palette moves on the strip: one palette length per 65536 /
- * (speed × 8) frames, the firmware's phase rate. */
-function PaletteGrid({ value, speed, animate, onChange }: { value: string; speed: number; animate: boolean; onChange: (p: string) => void }) {
+/** A palette's colors at t (0..1) for `effect`: under Default, the effect's own. */
+function paletteSwatchColor(palette: string, effect: string, look: RingLook): (t: number) => string {
+  return paletteId(palette) === 0 ? (t) => defaultColor(effect, look, t) : (t) => paletteColor(palette, t)
+}
+
+/** A palette as a gradient strip (the same table the strip samples), `shift` along. */
+function PaletteSwatch({ color, shift, on }: { color: (t: number) => string; shift: number; on: boolean }) {
   const colors = useTheme((s) => s.colors)
-  const shift = (useLedClock(animate, 2) * speed) / 8192
   return (
-    <View style={styles.paletteGrid}>
-      {LED_PALETTES.map((p) => {
-        const on = p === value
-        return (
-          <Pressable
-            key={p}
-            onPress={() => onChange(p)}
-            accessibilityRole="button"
-            accessibilityState={{ selected: on }}
-            accessibilityLabel={`${cap(p)} palette`}
-            style={({ pressed }) => [styles.paletteCell, { opacity: pressed ? 0.7 : 1 }]}
-          >
-            <View style={[styles.paletteSwatch, { borderColor: on ? colors.foreground : colors.border, borderWidth: on ? 2 : 1 }]}>
-              {Array.from({ length: 16 }, (_, k) => (
-                <View key={k} style={{ flex: 1, backgroundColor: paletteColor(p, (k + 0.5) / 16 + shift) }} />
-              ))}
-            </View>
-            <Text numberOfLines={1} style={{ color: on ? colors.foreground : colors.mutedForeground, fontSize: font.size.sm, fontWeight: on ? font.weight.semibold : font.weight.regular }}>
-              {cap(p)}
-            </Text>
-          </Pressable>
-        )
-      })}
+    <View style={[styles.paletteSwatch, { borderColor: on ? colors.foreground : colors.border, borderWidth: on ? 2 : 1 }]}>
+      {Array.from({ length: 16 }, (_, k) => (
+        <View key={k} style={{ flex: 1, backgroundColor: color((k + 0.5) / 16 + shift) }} />
+      ))}
     </View>
   )
 }
 
-const cap = (s: string) => s[0].toUpperCase() + s.slice(1)
+/** The palette in use, as a row that opens the palette sheet (like the effect
+ * row). Its swatch flows the way the palette moves on the strip: one palette
+ * length per 65536 / (speed × 8) frames, the firmware's phase rate. */
+function PaletteRow({ label, color, speed, animate, onPress }: { label: string; color: (t: number) => string; speed: number; animate: boolean; onPress: () => void }) {
+  const colors = useTheme((s) => s.colors)
+  const shift = (useLedClock(animate, 2) * speed) / 8192
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`Palette, ${label}. Browse palettes`}
+      style={({ pressed }) => [styles.effectRow, { opacity: pressed ? 0.7 : 1 }]}
+    >
+      <View style={styles.rowSwatch}>
+        <PaletteSwatch color={color} shift={shift} on={false} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm }}>Palette</Text>
+        <Text numberOfLines={1} style={[styles.effectName, { color: colors.foreground }]}>{label}</Text>
+      </View>
+      <Text style={{ color: colors.primary, fontSize: font.size.md, fontWeight: font.weight.medium }}>Browse</Text>
+      <MaterialIcons name="chevron-right" size={22} color={colors.primary} />
+    </Pressable>
+  )
+}
+
+/** Every palette the table has, as still swatches (68 animated strips would
+ * redraw ~1100 views a tick). Default previews `effect`'s own colors. Tapping
+ * one applies it right away and the sheet stays open to try another. */
+function PaletteGrid({ palettes, value, effect, look, onChange }: { palettes: LedPalette[]; value: string; effect: string; look: RingLook; onChange: (p: string) => void }) {
+  const colors = useTheme((s) => s.colors)
+  const current = paletteId(value)
+  return (
+    <ScrollView contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl }}>
+      <View style={styles.paletteGrid}>
+        {palettes.map((p, id) => {
+          const on = id === current
+          return (
+            <Pressable
+              key={p.name}
+              onPress={() => onChange(p.name)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: on }}
+              accessibilityLabel={`${p.label} palette`}
+              style={({ pressed }) => [styles.paletteCell, { opacity: pressed ? 0.7 : 1 }]}
+            >
+              <PaletteSwatch color={paletteSwatchColor(p.name, effect, look)} shift={0} on={on} />
+              <Text numberOfLines={1} style={{ color: on ? colors.foreground : colors.mutedForeground, fontSize: font.size.sm, fontWeight: on ? font.weight.semibold : font.weight.regular }}>
+                {p.label}
+              </Text>
+            </Pressable>
+          )
+        })}
+      </View>
+    </ScrollView>
+  )
+}
 
 // ---- color math (HSV<->hex) for the wheel ----
 function hsvToRgb(h: number, s: number, v: number): [number, number, number] {
@@ -948,6 +1031,7 @@ const styles = StyleSheet.create({
   paletteGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   paletteCell: { flexBasis: '22%', flexGrow: 1, gap: 4, alignItems: 'center', minHeight: 44 },
   paletteSwatch: { alignSelf: 'stretch', height: 28, borderRadius: radius.pill, overflow: 'hidden', flexDirection: 'row' },
+  rowSwatch: { width: 56 },
   hookRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: StyleSheet.hairlineWidth },
   colorValue: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   colorPreview: { width: 24, height: 24, borderRadius: 12, borderWidth: 1 },

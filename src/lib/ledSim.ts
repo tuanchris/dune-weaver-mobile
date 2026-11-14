@@ -1,19 +1,25 @@
 // The firmware's LED effects, ported to run in the app: a line-for-line port of
 // Leds::renderEffect (dune-weaver-firmware FluidNC/src/Leds.cpp), so the LEDs
 // tab animates the SAME math the strip runs — same speed and intensity meanings,
-// same palettes (lib/ledPreview.ts PALETTES). Keep it in step with the firmware:
+// same palettes (lib/ledPalettes.ts, generated with the firmware's). Keep it in step with the firmware:
 // a change to an effect there is a change here.
 //
 // C semantics made explicit: uint8_t = `& 255`, uint32_t phase = `>>> 0`,
 // integer division = `Math.trunc` (`div`). One step() = one firmware frame
 // (frame_ms, 33 ms by default); the strip's master brightness is NOT applied
 // here — the ring view does that.
-import { PALETTES } from './ledPreview'
+import { AURORA_FX, paletteId } from './ledPreview'
 import type { Dot } from './ledPreview'
+import { LED_PALETTE_LIST } from './ledPalettes'
+import { WLED_FX } from './wledfx/catalog'
+import { Runner } from './wledfx/runner'
+
+// Ported WLED effects (lib/wledfx), run by the same Runner the firmware uses.
+const WLED_BY_NAME = new Map(WLED_FX.map((d) => [d.name, d.info]))
 
 const FRAME_MS = 33 // config.yaml leds: frame_ms default — the app can't read the table's
 const K_BALLS = 5 // Leds.h kBalls
-const PALETTE_IDS = ['rainbow', 'ocean', 'lava', 'forest', 'party', 'cloud', 'heat', 'sunset']
+const OCEAN = LED_PALETTE_LIST[1].colors! // pacifica's water (Leds.cpp palOcean)
 export const SIM_FRAME_MS = FRAME_MS
 
 export interface SimParams {
@@ -21,6 +27,10 @@ export interface SimParams {
   speed: number // 1..255
   intensity: number // 0..255
   palette: string
+  /** Firmware with WLED's palettes: a palette recolors the color effects too. */
+  wledPalettes: boolean
+  /** The strip is a ring (default); false = round a rectangle (2D effects sample its border). */
+  ring?: boolean
   color: string // #RRGGBB
   color2: string
   ball: { bg: string; bgBright: number; bright: number; size: number; dir: 'cw' | 'ccw'; align: number; angle: number /* 0..1, or -1 = no theta (rectangular table) */ }
@@ -58,7 +68,7 @@ function heatColor(heat: number): Rgb {
   return [ramp, 0, 0]
 }
 
-function sampleTable(pal: number[], index: number): Rgb {
+function sampleTable(pal: readonly number[], index: number): Rgb {
   const e = u8(index) >> 4
   const f = (u8(index) & 0x0f) << 4
   const c0 = pal[e]
@@ -83,6 +93,9 @@ export class LedSim {
   // Resolved once per frame, like render().
   private ix = 128
   private pal = 0
+  private wled = true
+  private ms = 1000 // effect clock (Leds' now_ms), one FRAME_MS per frame
+  private runner = new Runner()
   private c1: Rgb = [0, 0, 0]
   private c2: Rgb = [0, 0, 0]
 
@@ -95,11 +108,13 @@ export class LedSim {
   /** One firmware frame (Leds::render minus the hooks: the caller passes the effect showing). */
   frame(p: SimParams): void {
     this.ix = u8(p.intensity)
-    this.pal = Math.max(0, PALETTE_IDS.indexOf(p.palette))
+    this.pal = paletteId(p.palette)
+    this.wled = p.wledPalettes
     this.c1 = rgbOf(p.color)
     this.c2 = rgbOf(p.color2)
     const speed = Math.max(1, Math.min(255, Math.round(p.speed)))
     this.phase = (this.phase + speed * 8) >>> 0
+    this.ms = (this.ms + FRAME_MS) >>> 0
     this.render(p.effect, speed, false, p)
   }
 
@@ -159,7 +174,15 @@ export class LedSim {
     for (let i = 0; i < this.fb.length; i++) this.fb[i] = (this.fb[i] * keep) >> 8
   }
   private palColor(index: number): Rgb {
-    return this.pal === 0 ? wheel(index) : sampleTable(PALETTES[PALETTE_IDS[this.pal]], index)
+    return this.pal === 0 ? wheel(index) : sampleTable(LED_PALETTE_LIST[this.pal].colors!, index)
+  }
+  /** Leds::fxColor: the color effects keep `own` unless a palette is picked
+   * (and the table's firmware lets a palette recolor them). */
+  private get palOn(): boolean {
+    return this.wled && this.pal !== 0
+  }
+  private fx(index: number, own: Rgb): Rgb {
+    return this.palOn ? this.palColor(index) : own
   }
   private ixMore(base: number) {
     return Math.min(255, div(base * this.ix, 128))
@@ -189,6 +212,8 @@ export class LedSim {
         this.ballVel[k] = 4.4 - 0.5 * k
       }
       if (!nested) this.ballTrack = -1
+      // Leds::renderEffect: our own effect (not the ball) frees the WLED runner
+      if (!WLED_BY_NAME.has(effect) && effect !== 'ball') this.runner.release()
     }
     const ph = this.phase
     const hi = (ph >>> 8) & 255
@@ -207,7 +232,10 @@ export class LedSim {
       }
       case 'breathe': {
         const lvl = 16 + ((sin8(hi) * 239) >> 8)
-        for (let i = 0; i < n; i++) this.set(i, (r * lvl) >> 8, (g * lvl) >> 8, (b * lvl) >> 8)
+        for (let i = 0; i < n; i++) {
+          const [cr, cg, cb] = this.fx(div(i * 256, n), this.c1)
+          this.set(i, (cr * lvl) >> 8, (cg * lvl) >> 8, (cb * lvl) >> 8)
+        }
         return
       }
       case 'colorloop': {
@@ -227,21 +255,22 @@ export class LedSim {
           this.aux = u8((this.aux + 1) % w)
         }
         const off = this.aux % w
-        for (let i = 0; i < n; i++) i % w === off ? this.set(i, r, g, b) : this.set(i, 0, 0, 0)
+        for (let i = 0; i < n; i++) i % w === off ? this.set(i, ...this.fx(div(i * 256, n), this.c1)) : this.set(i, 0, 0, 0)
         return
       }
       case 'scan': {
         this.fadeBy(90)
         const size = 1 + ((ix * ix * n) >> 18)
         const start = div(sin8(hi) * (n - size), 255)
-        for (let j = 0; j < size; j++) this.set(start + j, r, g, b)
+        for (let j = 0; j < size; j++) this.set(start + j, ...this.fx(div((start + j) * 256, n), this.c1))
         return
       }
       case 'running': {
         const k = Math.max(1, (ix * ix + 8192) >> 14)
         for (let i = 0; i < n; i++) {
           const s = sin8(div(i * 256 * k, n) - hi)
-          this.set(i, (r * s) >> 8, (g * s) >> 8, (b * s) >> 8)
+          const [cr, cg, cb] = this.fx(div(i * 256, n), this.c1)
+          this.set(i, (cr * s) >> 8, (cg * s) >> 8, (cb * s) >> 8)
         }
         return
       }
@@ -249,7 +278,8 @@ export class LedSim {
         const k = Math.max(1, (ix * ix + 4096) >> 13)
         for (let i = 0; i < n; i++) {
           const s = sin8(div(i * 256 * k, n) + hi)
-          this.set(i, (r * s) >> 8, (g * s) >> 8, (b * s) >> 8)
+          const [cr, cg, cb] = this.fx(div(i * 256, n), this.c1)
+          this.set(i, (cr * s) >> 8, (cg * s) >> 8, (cb * s) >> 8)
         }
         return
       }
@@ -257,7 +287,8 @@ export class LedSim {
         for (let i = 0; i < n; i++) {
           const t = u8(div(i * 256, n) + hi)
           const tri = this.ixFade(t < 128 ? t * 2 : (255 - t) * 2)
-          this.set(i, lerp8(r, r2, tri), lerp8(g, g2, tri), lerp8(b, b2, tri))
+          const [cr, cg, cb] = this.fx(div(i * 256, n), this.c1)
+          this.set(i, lerp8(cr, r2, tri), lerp8(cg, g2, tri), lerp8(cb, b2, tri))
         }
         return
       }
@@ -277,7 +308,10 @@ export class LedSim {
         return
       }
       case 'sparkle': {
-        for (let i = 0; i < n; i++) this.set(i, (r * 40) >> 8, (g * 40) >> 8, (b * 40) >> 8)
+        for (let i = 0; i < n; i++) {
+          const [cr, cg, cb] = this.fx(div(i * 256, n), this.c1)
+          this.set(i, (cr * 40) >> 8, (cg * 40) >> 8, (cb * 40) >> 8)
+        }
         if (this.aux === 0) {
           this.step = (this.random8() * n) >> 8
           this.aux = Math.min(255, div(10 + (255 - speed) * 2, FRAME_MS))
@@ -295,7 +329,7 @@ export class LedSim {
           const y = this.random8(n < 7 ? n : 7)
           this.heat[y] = qadd8(this.heat[y], this.random8(95) + 160)
         }
-        for (let i = 0; i < n; i++) this.set(i, ...heatColor(this.heat[i]))
+        for (let i = 0; i < n; i++) this.set(i, ...(this.palOn ? this.palColor(Math.min(this.heat[i], 240)) : heatColor(this.heat[i])))
         return
       }
       case 'candle': {
@@ -303,13 +337,17 @@ export class LedSim {
         const target = u8(255 - depth + this.random8(depth))
         const sh = speed > 252 ? 1 : speed > 99 ? 2 : speed > 49 ? 3 : 4
         this.candle = u8((this.candle * ((1 << sh) - 1) + target) >> sh)
-        for (let i = 0; i < n; i++) this.set(i, (r * this.candle) >> 8, (g * this.candle) >> 8, (b * this.candle) >> 8)
+        for (let i = 0; i < n; i++) {
+          const [cr, cg, cb] = this.fx(div(i * 256, n), this.c1)
+          this.set(i, (cr * this.candle) >> 8, (cg * this.candle) >> 8, (cb * this.candle) >> 8)
+        }
         return
       }
       case 'meteor': {
         const decay = this.ixFade(40)
         this.fadeBy(qadd8(decay, this.random8(decay)))
-        this.set((ph >>> 8) % n, r, g, b)
+        const pos = (ph >>> 8) % n
+        this.set(pos, ...this.fx(div(pos * 256, n), this.c1))
         return
       }
       case 'bouncing': {
@@ -324,7 +362,7 @@ export class LedSim {
             this.ballVel[k] = -this.ballVel[k] * 0.9
             if (this.ballVel[k] < 0.6) this.ballVel[k] = 4.4 - 0.5 * k
           }
-          this.add(Math.trunc(this.ballPos[k] * (n - 1)), r, g, b)
+          this.add(Math.trunc(this.ballPos[k] * (n - 1)), ...this.fx(k * 32, this.c1))
         }
         return
       }
@@ -335,8 +373,9 @@ export class LedSim {
         let q = ph % (2 * len)
         const pass = q >= len ? 1 : 0
         q -= pass * len
-        const nw = c[pass], od = c[pass ^ 1]
         for (let i = 0; i < n; i++) {
+          c[0] = this.fx(div(i * 256, n), this.c1)
+          const nw = c[pass], od = c[pass ^ 1]
           const d = q - i * 128
           const t = d <= 0 ? 0 : d >= w ? 256 : div(d * 256, w)
           this.set(i, od[0] + (((nw[0] - od[0]) * t) >> 8), od[1] + (((nw[1] - od[1]) * t) >> 8), od[2] + (((nw[2] - od[2]) * t) >> 8))
@@ -348,7 +387,7 @@ export class LedSim {
         const size = 1 + ((ix * ix * n) >> 18)
         const start = div(sin8(hi) * (n - size), 255)
         for (let j = start; j < start + size; j++) {
-          this.add(j, r, g, b)
+          this.add(j, ...this.fx(div(j * 256, n), this.c1))
           this.add(n - 1 - j, r2, g2, b2)
         }
         return
@@ -380,7 +419,7 @@ export class LedSim {
       case 'dissolve': {
         const converts = this.ixSpawns(256 * (div(n, 12) + 1))
         for (let k = 0; k < converts; k++) this.heat[this.random8(n)] = this.aux ^ 1
-        for (let i = 0; i < n; i++) this.heat[i] ? this.set(i, r2, g2, b2) : this.set(i, r, g, b)
+        for (let i = 0; i < n; i++) this.heat[i] ? this.set(i, r2, g2, b2) : this.set(i, ...this.fx(div(i * 256, n), this.c1))
         this.step = (this.step + 1) & 0xffff
         if (this.step * FRAME_MS > (255 - speed + 15) * 24) {
           this.aux ^= 1
@@ -412,15 +451,16 @@ export class LedSim {
         const accel = 0.02 * (speed / 50)
         const drips = 1 + (ix >> 6)
         for (let k = 0; k < drips; k++) {
+          const [dr, dg, db] = this.fx(k * 64, this.c1)
           this.ballVel[k] += accel
           this.ballPos[k] -= this.ballVel[k]
           if (this.ballPos[k] <= 0) {
             this.set(0, 255, 255, 255)
-            this.set(1, (r * 128) >> 8, (g * 128) >> 8, (b * 128) >> 8)
+            this.set(1, (dr * 128) >> 8, (dg * 128) >> 8, (db * 128) >> 8)
             this.ballPos[k] = n - 1 - this.random8(div(n, 2))
             this.ballVel[k] = 0
           }
-          this.add(Math.trunc(this.ballPos[k]), r, g, b)
+          this.add(Math.trunc(this.ballPos[k]), dr, dg, db)
         }
         return
       }
@@ -441,7 +481,10 @@ export class LedSim {
             this.candle = 1 + this.random8(3)
             const start = this.random8(n)
             const len = 2 + this.random8(div(n, 3))
-            for (let j = 0; j < len; j++) this.set((start + j) % n, 255, 255, 255)
+            for (let j = 0; j < len; j++) {
+              const i = (start + j) % n
+              this.set(i, ...this.fx(div(i * 256, n), [255, 255, 255]))
+            }
             if (this.aux === 0) this.step = div(this.random8(255 - speed) * 100, FRAME_MS) & 0xffff
           }
         }
@@ -474,12 +517,15 @@ export class LedSim {
         let lvl = 24
         if (hi < w) lvl = sin8(div(hi * 128, w))
         else if (hi >= 96 && hi < 96 + w) lvl = sin8(div((hi - 96) * 128, w))
-        for (let i = 0; i < n; i++) this.set(i, (r * lvl) >> 8, (g * lvl) >> 8, (b * lvl) >> 8)
+        for (let i = 0; i < n; i++) {
+          const [cr, cg, cb] = this.fx(div(i * 256, n), this.c1)
+          this.set(i, (cr * lvl) >> 8, (cg * lvl) >> 8, (cb * lvl) >> 8)
+        }
         return
       }
       case 'strobe': {
         const on = hi < 32
-        for (let i = 0; i < n; i++) on ? this.set(i, r, g, b) : this.set(i, 0, 0, 0)
+        for (let i = 0; i < n; i++) on ? this.set(i, ...this.fx(div(i * 256, n), this.c1)) : this.set(i, 0, 0, 0)
         return
       }
       case 'police': {
@@ -496,7 +542,10 @@ export class LedSim {
         for (let i = 0; i < n; i++) this.set(i, (r2 * 40) >> 8, (g2 * 40) >> 8, (b2 * 40) >> 8)
         const w = ix <= 128 ? 1 + div(ix, 64) : 3 + div((ix - 128) * n, 256)
         const pos = (ph >>> 8) % n
-        for (let j = 0; j < w; j++) this.set((pos + j) % n, r, g, b)
+        for (let j = 0; j < w; j++) {
+          const i = (pos + j) % n
+          this.set(i, ...this.fx(div(i * 256, n), this.c1))
+        }
         return
       }
       case 'railway': {
@@ -508,7 +557,8 @@ export class LedSim {
           const s = sin8(div(i * 256, n) - hi)
           const scale = 100 + ((s * 155) >> 8)
           const t = i & 1 ? pos : 255 - pos
-          this.set(i, (lerp8(r2, r, t) * scale) >> 8, (lerp8(g2, g, t) * scale) >> 8, (lerp8(b2, b, t) * scale) >> 8)
+          const [cr, cg, cb] = this.fx(div(i * 256, n), this.c1)
+          this.set(i, (lerp8(r2, cr, t) * scale) >> 8, (lerp8(g2, cg, t) * scale) >> 8, (lerp8(b2, cb, t) * scale) >> 8)
         }
         return
       }
@@ -518,7 +568,8 @@ export class LedSim {
           const a = sin8(div(x, 62) + (ph >>> 8))
           const c = sin8(div(x * 5, 248) - (ph >>> 7))
           const d = sin8(div(x * 3, 248) + (ph >>> 9))
-          this.set(i, ...sampleTable(PALETTES.ocean, div(a + c + d, 3)))
+          const idx = div(a + c + d, 3)
+          this.set(i, ...(this.palOn ? this.palColor(idx) : sampleTable(OCEAN, idx)))
           const cap = sin8(div(x * 9, 248) - (ph >>> 5))
           if (cap > 236) {
             const w = (cap - 236) * 8
@@ -532,7 +583,8 @@ export class LedSim {
           const x = i * (ix + 32)
           const a = sin8(div(x * 3, 160) + (ph >>> 8))
           const c = sin8(div(x, 80) - (ph >>> 9))
-          const [cr, cg, cb] = sampleTable(PALETTES.aurora, div(a + c, 2))
+          const v = div(a + c, 2)
+          const [cr, cg, cb] = this.palOn ? this.palColor(v) : sampleTable(AURORA_FX, v)
           const w = sin8(div(x, 32) + (ph >>> 7))
           const bri = 40 + ((w * 215) >> 8)
           this.set(i, (cr * bri) >> 8, (cg * bri) >> 8, (cb * bri) >> 8)
@@ -596,8 +648,16 @@ export class LedSim {
         }
         return
       }
-      default: // 'off'
-        this.fb.fill(0)
+      default: {
+        const fx = WLED_BY_NAME.get(effect)
+        if (fx) { // a ported WLED effect (Leds.cpp's default branch)
+          const pack = (c: Rgb) => ((c[0] << 16) | (c[1] << 8) | c[2]) >>> 0
+          const f = { speed, intensity: this.ix, color1: pack(this.c1), color2: pack(this.c2), palette: this.pal, now: this.ms, ring: p.ring ?? true }
+          if (!this.runner.render(fx, f, this.fb, n)) this.fb.fill(0)
+          return
+        }
+        this.fb.fill(0) // 'off'
+      }
     }
   }
 }

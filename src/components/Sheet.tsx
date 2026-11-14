@@ -34,6 +34,9 @@ export interface SheetProps {
   trailing?: React.ReactNode
   /** Sub-page: a back chevron replaces `leading`; Android back calls it. */
   onBack?: () => void
+  /** false = the tall JS sheet on iOS too, for content with its own drags (a canvas):
+   * iOS's pageSheet follows any vertical drag in it, and takes the touch away. */
+  native?: boolean
   children: React.ReactNode
 }
 
@@ -52,7 +55,7 @@ export function useSheetWidth(): number {
   return w ?? width
 }
 
-export function Sheet({ visible, onClose, dismissible = true, variant = 'fit', title, leading, trailing, onBack, children }: SheetProps) {
+export function Sheet({ visible, onClose, dismissible = true, variant = 'fit', title, leading, trailing, onBack, native = true, children }: SheetProps) {
   const colors = useTheme((s) => s.colors)
   const { height: winH } = useWindowDimensions()
   // Split (unfolded / half folded, useSplit): every sheet is the JS one, held to the
@@ -60,7 +63,7 @@ export function Sheet({ visible, onClose, dismissible = true, variant = 'fit', t
   // Chosen per presentation: a sheet never changes kind while up or sliding out.
   const split = useSplit()
   const [mounted, setMounted] = useState(false) // the JS sheet's Modal (never set for a native one)
-  const wantNative = variant === 'page' && Platform.OS === 'ios' && !split
+  const wantNative = variant === 'page' && Platform.OS === 'ios' && !split && native
   const nativeRef = useRef(wantNative)
   if (!visible && !mounted) nativeRef.current = wantNative
   const nativePage = nativeRef.current

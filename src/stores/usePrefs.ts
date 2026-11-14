@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import type { ClearMode } from '../api/board'
 import { patternKey } from './useLibrary'
+import type { HubTable } from '../lib/tableSize'
 
 const KEY = 'dw_prefs_v1'
 
@@ -24,6 +25,12 @@ export function playlistPrefKey(base: string, name: string): string {
   return `${base}\u001F${name}`
 }
 
+
+/** One file of a hub pattern: its tagKey and the table size it's for (null = any). */
+export interface HubFile {
+  key: string
+  table: HubTable | null
+}
 interface Persisted {
   clearMode: ClearMode
   playlistPrefs: Record<string, PlaylistPref>
@@ -31,6 +38,12 @@ interface Persisted {
   favSynced?: Record<string, string[]>
   previewNagDismissedCount?: number
   showPrereleaseFirmware?: boolean
+  hubAuto?: boolean
+  hubSeen?: string[]
+  hubShown?: string[]
+  hubTags?: Record<string, string[]>
+  hubPreviews?: Record<string, string>
+  hubVersions?: Record<string, HubFile[]>
 }
 
 interface PrefsStore {
@@ -67,12 +80,42 @@ interface PrefsStore {
    * actually on the table, so a tester on an rc can still see where they are. */
   showPrereleaseFirmware: boolean
   setShowPrereleaseFirmware: (v: boolean) => void
+  /** Download new Pattern Hub patterns to this phone on their own
+   * (lib/patternHub.ts useHubAutoSync). Off by default: it spends data. */
+  hubAuto: boolean
+  setHubAuto: (v: boolean) => void
+  /** Hub pattern ids the auto-download won't fetch: the whole catalog when it
+   * was switched on (it's for patterns added after that), plus each one it has
+   * put on the phone. "Seen", not "on the phone", so one deleted from the phone
+   * isn't downloaded again. */
+  hubSeen: string[]
+  setHubSeen: (ids: string[]) => void
+  /** Hub pattern ids already announced as new (the Browse tab's red badge and the
+   * Pattern Hub segment's dot): the hub tab was opened. Apart from hubSeen, so
+   * looking never stops an auto-download. */
+  hubShown: string[]
+  setHubShown: (ids: string[]) => void
+  /** The Pattern Hub's tags, keyed by tagKey (file name, lowercased), saved from
+   * each catalog read. App-side only: nothing is written to a table. They apply
+   * to the bundled set, hub downloads and the table's copies alike, since all
+   * share the hub's file names. */
+  hubTags: Record<string, string[]>
+  /** The Pattern Hub's preview of each file, keyed by tagKey like hubTags, as a
+   * bucket path (`previews/<id>[-<version>].webp`): where its sand previews are
+   * (patternHub's sandPreviewUrl). Saved from each catalog read, so the bundled
+   * set, hub downloads and the card's copies show the hub's sand previews. */
+  hubPreviews: Record<string, string>
+  /** Hub patterns made in versions per table size: id → its files (tagKey) and the
+   * size each is for, main file first. Browse shows only the one the active table
+   * takes (patternHub's forTable rule). Saved from each catalog read, like hubTags. */
+  hubVersions: Record<string, HubFile[]>
+  setHubCatalogData: (tags: Record<string, string[]>, previews: Record<string, string>, versions: Record<string, HubFile[]>) => void
   hydrate: () => Promise<void>
 }
 
 export const usePrefs = create<PrefsStore>((set, get) => {
   const save = () => {
-    const { clearMode, playlistPrefs, favorites, favSynced, previewNagDismissedCount, showPrereleaseFirmware } = get()
+    const { clearMode, playlistPrefs, favorites, favSynced, previewNagDismissedCount, showPrereleaseFirmware, hubAuto, hubSeen, hubShown, hubTags, hubPreviews, hubVersions } = get()
     AsyncStorage.setItem(
       KEY,
       JSON.stringify({
@@ -82,6 +125,12 @@ export const usePrefs = create<PrefsStore>((set, get) => {
         favSynced,
         previewNagDismissedCount,
         showPrereleaseFirmware,
+        hubAuto,
+        hubSeen,
+        hubShown,
+        hubTags,
+        hubPreviews,
+        hubVersions,
       } satisfies Persisted),
     ).catch(() => {})
   }
@@ -92,6 +141,12 @@ export const usePrefs = create<PrefsStore>((set, get) => {
     favSynced: {},
     previewNagDismissedCount: 0,
     showPrereleaseFirmware: false,
+    hubAuto: false,
+    hubSeen: [],
+    hubShown: [],
+    hubTags: {},
+    hubPreviews: {},
+    hubVersions: {},
     setClearMode: (clearMode) => {
       set({ clearMode })
       save()
@@ -125,6 +180,22 @@ export const usePrefs = create<PrefsStore>((set, get) => {
       set({ showPrereleaseFirmware })
       save()
     },
+    setHubAuto: (hubAuto) => {
+      set({ hubAuto })
+      save()
+    },
+    setHubSeen: (hubSeen) => {
+      set({ hubSeen })
+      save()
+    },
+    setHubShown: (hubShown) => {
+      set({ hubShown })
+      save()
+    },
+    setHubCatalogData: (hubTags, hubPreviews, hubVersions) => {
+      set({ hubTags, hubPreviews, hubVersions })
+      save()
+    },
     hydrate: async () => {
       try {
         const raw = await AsyncStorage.getItem(KEY)
@@ -137,6 +208,12 @@ export const usePrefs = create<PrefsStore>((set, get) => {
             favSynced: data.favSynced ?? {},
             previewNagDismissedCount: data.previewNagDismissedCount ?? 0,
             showPrereleaseFirmware: data.showPrereleaseFirmware ?? false,
+            hubAuto: data.hubAuto ?? false,
+            hubSeen: data.hubSeen ?? [],
+            hubShown: data.hubShown ?? [],
+            hubTags: data.hubTags ?? {},
+            hubPreviews: data.hubPreviews ?? {},
+            hubVersions: data.hubVersions ?? {},
           })
         }
       } catch {

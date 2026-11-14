@@ -4,7 +4,7 @@
 // shows the current value so the whole setup reads at a glance; the pages
 // themselves are in screens/settings/ (SettingsStack.tsx).
 import React, { useCallback, useRef, useState } from 'react'
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
 import { useFocusEffect, useNavigation, useTheme as useNavTheme } from '@react-navigation/native'
 import { board, normalizeBase, testBoard } from '../api/board'
@@ -15,11 +15,13 @@ import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
 import { useBranding, brandName } from '../stores/useBranding'
 import { usePreviews } from '../stores/usePreviews'
+import { useHubAccount } from '../lib/hubAuth'
 import { useUpdates, appUpdateAvailable, fwUpdateAvailable, APP_VERSION } from '../stores/useUpdates'
 import { toast } from '../stores/useToast'
 import { Button, Card, IconButton } from '../components/ui'
 import { Screen } from '../components/Screen'
 import { useIsRect } from '../components/RectTable'
+import { roundSize } from '../lib/tableSize'
 import { useDiscovery, type DiscoveredTable } from '../lib/discovery'
 import { syncHostname, renameMessage } from '../lib/renameTable'
 import { parseSlots } from '../lib/quietSlots'
@@ -139,6 +141,9 @@ export function SettingsScreen(): React.JSX.Element {
   const locked = useStatus((s) => isSettingsLocked(s.status))
   const previewCount = usePreviews((s) => Object.keys(s.map).length)
   const brand = useBranding((s) => s.name)
+  const email = useHubAccount((s) => s.email)
+  // Only 'signedOut' is signed out: 'unknown' is a stored sign-in /me hasn't confirmed.
+  const hubSignedOut = useHubAccount((s) => s.state === 'signedOut')
   const go = (page: keyof SettingsStackParamList) => navigation.navigate(page)
 
   const addDiscovered = (t: DiscoveredTable) => {
@@ -326,6 +331,8 @@ export function SettingsScreen(): React.JSX.Element {
               <NavRow icon="bedtime" label="Still Sands" value={tv?.stillSands} onPress={() => go('StillSands')} />
               {/* Homing mode, offset and orientation are round-table settings; a rectangular table always homes on its switches. */}
               {rect ? null : <NavRow icon="my-location" label="Homing" value={tv?.homing} onPress={() => go('Homing')} />}
+              {/* A round table's size, for Create (lib/tableSize.ts); a rectangle reports its travel. */}
+              {rect ? null : <NavRow icon="straighten" label="Table size" value={roundSize(active).label} onPress={() => go('TableSize')} />}
               {/* Only tables with an LED strip (firmware with $LED/Count) report one. */}
               {tv?.ledStrip ? (
                 <NavRow icon="lightbulb-outline" label="LED strip" value={tv.ledStrip} onPress={() => go('LedStrip')} />
@@ -343,6 +350,10 @@ export function SettingsScreen(): React.JSX.Element {
         <View style={styles.group}>
           <SectionHeader title="On this phone" />
           <Section>
+            {/* Desktop has no secure store or sign-in redirect, so no account (lib/hubAuth.ts). */}
+            {Platform.OS === 'web' ? null : (
+              <NavRow icon="account-circle" label="duneweaver.com" value={email ?? (hubSignedOut ? 'Signed out' : 'Signed in')} onPress={() => go('Account')} />
+            )}
             <NavRow icon="grid-view" label="Patterns" value={previewCount > 0 ? `${previewCount} previews` : undefined} onPress={() => go('Patterns')} />
             <NavRow icon="palette" label="Branding" value={brandName(brand)} onPress={() => go('Branding')} />
             <NavRow icon="receipt-long" label="Diagnostics" onPress={() => go('Diagnostics')} />

@@ -22,7 +22,7 @@ const ICONS: Record<keyof TabParamList, keyof typeof MaterialIcons.glyphMap> = {
   Settings: 'settings',
 }
 
-export function AppTabs({ updateCount }: AppTabsProps): React.JSX.Element {
+export function AppTabs({ updateCount, newPatterns }: AppTabsProps): React.JSX.Element {
   const colors = useTheme((s) => s.colors)
   return (
     <Tab.Navigator
@@ -33,7 +33,10 @@ export function AppTabs({ updateCount }: AppTabsProps): React.JSX.Element {
         tabBarStyle: { backgroundColor: colors.card, borderTopColor: colors.border },
         tabBarIcon: ({ color, size }) => <MaterialIcons name={ICONS[route.name]} size={size} color={color} />,
         // Default badge colour = the theme's notification red (not ember).
-        tabBarBadge: route.name === 'Settings' && updateCount > 0 ? updateCount : undefined,
+        tabBarBadge:
+          route.name === 'Settings' && updateCount > 0 ? updateCount
+          : route.name === 'Browse' && newPatterns > 0 ? newPatterns
+          : undefined,
       })}
     >
       <Tab.Screen name="Browse" component={BrowseScreen} />

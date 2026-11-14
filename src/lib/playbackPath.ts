@@ -12,7 +12,7 @@
 // Then simplified to a quarter point on screen, which cuts a 150k-point
 // pattern to ~20k without changing how it looks.
 import { File } from 'expo-file-system'
-import { useLibrary } from '../stores/useLibrary'
+import { bareName, useLibrary } from '../stores/useLibrary'
 import { isGcode } from './gcode'
 import { toScreen } from './patternGeometry'
 import { rectToScreen } from '../components/RectTable'
@@ -159,7 +159,9 @@ const cache = new Map<string, Promise<PlaybackPath | null>>()
  * on a `width`×`height` preview (G-code framed by its own extent, like its
  * preview image). Null when the app has no copy of the pattern. */
 export function playbackPath(name: string, width: number, height: number): Promise<PlaybackPath | null> {
-  const key = `${name}|${width}|${height}`
+  // The import's id too: a re-imported or updated file under the same name is a new path.
+  const entry = useLibrary.getState().patterns.find((p) => p.name === bareName(name))?.id ?? ''
+  const key = `${name}|${entry}|${width}|${height}`
   let p = cache.get(key)
   if (!p) {
     p = build(name, width, height)
