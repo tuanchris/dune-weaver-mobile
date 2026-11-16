@@ -4,7 +4,7 @@
 // shows the current value so the whole setup reads at a glance; the pages
 // themselves are in screens/settings/ (SettingsStack.tsx).
 import React, { useCallback, useRef, useState } from 'react'
-import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
 import { useFocusEffect, useNavigation, useTheme as useNavTheme } from '@react-navigation/native'
 import { board, normalizeBase, testBoard } from '../api/board'
@@ -350,10 +350,7 @@ export function SettingsScreen(): React.JSX.Element {
         <View style={styles.group}>
           <SectionHeader title="On this phone" />
           <Section>
-            {/* Desktop has no secure store or sign-in redirect, so no account (lib/hubAuth.ts). */}
-            {Platform.OS === 'web' ? null : (
-              <NavRow icon="account-circle" label="duneweaver.com" value={email ?? (hubSignedOut ? 'Signed out' : 'Signed in')} onPress={() => go('Account')} />
-            )}
+            <NavRow icon="account-circle" label="duneweaver.com" value={email ?? (hubSignedOut ? 'Signed out' : 'Signed in')} onPress={() => go('Account')} />
             <NavRow icon="grid-view" label="Patterns" value={previewCount > 0 ? `${previewCount} previews` : undefined} onPress={() => go('Patterns')} />
             <NavRow icon="palette" label="Branding" value={brandName(brand)} onPress={() => go('Branding')} />
             <NavRow icon="receipt-long" label="Diagnostics" onPress={() => go('Diagnostics')} />

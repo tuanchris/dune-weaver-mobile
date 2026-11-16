@@ -14,8 +14,7 @@ import { SettingsPage } from './SettingsPage'
 import { spacing, font } from '../../theme'
 
 /** The duneweaver.com account behind Pattern Hub downloads (lib/hubAuth.ts).
- * No purchase wording and no shop links here (App Store 3.1.1 / 3.1.3). The
- * Settings row that opens it is hidden on desktop. */
+ * No purchase wording and no shop links here (App Store 3.1.1 / 3.1.3). */
 export function AccountSettings(): React.JSX.Element {
   const colors = useTheme((s) => s.colors)
   const { state, email } = useHubAccount()

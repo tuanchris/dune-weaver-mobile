@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react'
-import { AppState, Platform } from 'react-native'
+import { AppState } from 'react-native'
 import { create } from 'zustand'
 import { fetch as binaryFetch } from 'expo/fetch'
 import { Directory, File, Paths } from 'expo-file-system'
@@ -302,21 +302,19 @@ export function readCatalogOnce(): void {
 /**
  * Whether Browse shows the hub: once the website has launched it (to everyone,
  * signed in or not: the tab is where a plan owner signs in), or to an admin
- * before that. Never on desktop (no secure store, no sign-in redirect).
+ * before that. Desktop too (its shims: safeStorage, duneweaver:// links).
  */
 export function useHubVisible(): boolean {
   const launched = usePrefs((s) => s.hubLaunched)
   const admin = useHubAccount((s) => s.admin)
-  const web = Platform.OS === 'web'
   useEffect(() => {
-    if (web) return
     readCatalogOnce()
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') readCatalogOnce()
     })
     return () => sub.remove()
-  }, [web])
-  return !web && (launched || admin)
+  }, [])
+  return launched || admin
 }
 
 async function download(url: string): Promise<Uint8Array> {

@@ -240,7 +240,7 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
 - **Import**: `expo-document-picker` → parse/validate → decimate → save to `Paths.document/thr/` →
   `useLibrary.addImported`. See `src/lib/importPattern.ts`.
 - **Pattern Hub** (`src/lib/patternHub.ts` + `components/HubPane.tsx`, round tables only — the hub
-  is `.thr`; hidden on desktop): duneweaver.com/patterns (dune-weaver-website, `lib/pattern-hub*.ts`)
+  is `.thr`; desktop too, see below): duneweaver.com/patterns (dune-weaver-website, `lib/pattern-hub*.ts`)
   keeps `catalog.json` (`{version: 2, launched, patterns:[{id, title, author, license, preview,
   bytes, …}]}`) and every preview webp in a PUBLIC bucket (paths relative to it, CORS `*`, no auth),
   so everyone sees the catalog. The `.thr` files are PRIVATE: **downloads are for Dune Weaver plan
@@ -250,7 +250,7 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   `SignedOutError` ENDS the run (`result.error`): what already downloaded stays, there's no "N
   didn't download" toast, and the hub tab's panel shows the matching state. **Launch gate**: the website
   writes `launched` (its `PATTERN_HUB_PUBLIC`) into the catalog, and Browse's Pattern Hub tab needs
-  `useHubVisible()` = `launched || admin`, never on web — so the app can ship before the site
+  `useHubVisible()` = `launched || admin` — so the app can ship before the site
   launches the hub. `launched` comes from ONE successful catalog read per app session and is SAVED
   (`usePrefs.hubLaunched`), so a launch that can't reach the hub (table-only Wi-Fi) keeps the tab; a
   failed read is retried on the next foreground. Signed out, the tab still shows (it's where a plan
@@ -282,7 +282,7 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   row shows the email or "Signed in", the account page "Signed in. Can’t reach duneweaver.com
   right now.", the hub tab "Checking your duneweaver.com account…" then that line + Try again.
   Settings › On this
-  phone › **duneweaver.com** (`settings/AccountSettings.tsx`, row hidden on web): Sign in, or the
+  phone › **duneweaver.com** (`settings/AccountSettings.tsx`): Sign in, or the
   email + plan status, **Open Pattern Hub** (`navigate('Browse', { tab: 'hub' })`; Browse reads
   the `tab` param and clears it; shown when the hub is visible on a round table), Sign out
   (best-effort revoke) and, in its own card at the foot of the page behind a confirm, Delete account… (opens `${SITE}/account/delete`), then for a plan owner
@@ -293,9 +293,14 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   downloads are for Dune Weaver plan owners." + "Use the duneweaver.com account your plan is
   under." (a Hide My Email Apple sign-in matches no order; this is the user's only hint) + the
   email + Use another account (sign out, then sign in); member → the sync buttons. **No purchase
-  wording and no shop links anywhere in the app** (App Store 3.1.1 / 3.1.3). Desktop hides the hub
-  and the account row (no secure store, no redirect handling; its metro config shims
-  `expo-secure-store`/`expo-web-browser`/`expo-crypto`). `npm run check-hub-auth` checks PKCE,
+  wording and no shop links anywhere in the app** (App Store 3.1.1 / 3.1.3). **Desktop has the hub
+  and the account too** (owner's call, 2026-11-16: on par with mobile), through its shims
+  (`../dune-weaver-desktop/shims`): `expo-secure-store` = Electron `safeStorage`; `expo-web-browser`
+  opens the sign-in page in the system browser and answers `cancel`, which keeps the pending
+  sign-in; the site's `duneweaver://oauth` redirect reaches the app from the OS (`main.js`
+  registers the scheme) and arrives as a `Linking` 'url' event (`shims/linking.ts`), so
+  `useHubAuthLinks` finishes it as it does an email link; `expo-crypto` = Web Crypto. Desktop's
+  Sync to table is the per-file path (no `UploadTask`), running while the app is open. `npm run check-hub-auth` checks PKCE,
   the refresh/sign-out rules and the saved-account / weekly re-check rules offline. Browse has two
   tabs, a `Segmented` **Library | Pattern Hub** under its title (only where the hub is visible;
   otherwise Browse is just the library). The hub tab mounts on its first visit and then stays
@@ -701,7 +706,13 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   fetch) and the pattern text is injected as `window.SAND`. The table is the baked one nearest
   `roundSize(board)` (`sandTable`: ≥ 550 mm DWP, ≥ 320 mm DWG, else DWMP). Any page error or a
   killed web process falls back to Fast (logged to diagnostics as `sand-preview`). Web/desktop
-  (`SandView.web.tsx`) has no sand yet: Fast only.
+  (`SandView.web.tsx`, desktop; owner's call 2026-11-16: on par with mobile) runs the SAME page in an
+  `<iframe>`: the clears are prepared in the same cache folder (`lib/sandFiles.ts` `prepareSand`,
+  shared with `SandView.tsx`), which desktop serves as `app://cache/…`; the page goes in as `srcdoc`
+  with a `<base>` there (its XHRs find the clears), reads `window.SAND` from the app's window
+  (`__dwSand[id]`, same origin) and its `ReactNativeWebView.postMessage` comes back the same way. So
+  the player, Create's sand preview and on-device sand thumbnails work there (Chromium encodes the
+  still as WebP). The page stays untouched (it's the KEY). Desktop's metro lists `bin` as an assetExt.
 - **Sand renders are tinted on display, never in the render** (owner's call, 2026-11-11): hub
   and on-phone renders stay the engine's neutral grey; `SandTint` (PatternThumb.tsx) and the
   sand player's injected overlay (SandView, `injectedJavaScript` — NOT the page, which is the
@@ -1025,7 +1036,7 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   W-last RGBW orders, plus whatever the table has if it's another of the firmware's 30; both
   idle/paused settings, numeric fields save on `onBlur` because react-native-web never fires
   `onEndEditing`), Wi-Fi, Password, Firmware; "On this phone" heads duneweaver.com (the Pattern Hub
-  account, hidden on web), Patterns (previews + imported catalog), Branding, Diagnostics, About. Row values come from status, local stores and ONE
+  account), Patterns (previews + imported catalog), Branding, Diagnostics, About. Row values come from status, local stores and ONE
   `/sand_settings` read per focus of the list; each page reads its own. Pages wrap their cards in
   `SettingsPage` (`table` = the table's name above the title; `gated` = the IdleGate below), on
   `Screen`'s `back` row — our own header, not the native nav bar, so safe areas and the iOS 26
