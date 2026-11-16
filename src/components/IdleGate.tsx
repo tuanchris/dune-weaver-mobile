@@ -38,6 +38,7 @@ import { MaterialIcons } from '@expo/vector-icons'
 import { board } from '../api/board'
 import { isJobLocked, isSettingsLocked, settingsWritableInHold } from '../api/status'
 import { useStatus } from '../stores/useStatus'
+import { useHubSync } from '../lib/patternHub'
 import { useTheme } from '../stores/useTheme'
 import { toast } from '../stores/useToast'
 import { userMessage } from '../lib/errors'
@@ -45,7 +46,8 @@ import { Button } from './ui'
 import { radius, spacing, font } from '../theme'
 
 export function IdleGate({ children }: { children: React.ReactNode }) {
-  const locked = useStatus((s) => isSettingsLocked(s.status))
+  const receiving = useReceiving()
+  const locked = useStatus((s) => isSettingsLocked(s.status)) || receiving
   if (!locked) return <>{children}</>
   return (
     <View
@@ -60,8 +62,15 @@ export function IdleGate({ children }: { children: React.ReactNode }) {
 }
 
 /** The single explanation + way out, rendered once above the first gated card. */
+/** A hub sync is sending to the active table (lib/tableBatch.ts): it answers nothing else. */
+function useReceiving(): boolean {
+  const base = useStatus((s) => s.base)
+  return useHubSync((s) => !!s.receiving && s.receiving === base)
+}
+
 export function IdleGateBanner({ base }: { base: string | null }) {
   const colors = useTheme((s) => s.colors)
+  const receiving = useReceiving()
   const locked = useStatus((s) => isSettingsLocked(s.status))
   // The between-patterns gap leaves Settings open but the next pattern relocks
   // them, so the banner stays up to say so and offer the Pause that holds them
@@ -79,6 +88,16 @@ export function IdleGateBanner({ base }: { base: string | null }) {
   // holds Settings open past the gap instead of relocking as it winds down.
   const canPause = useStatus((s) => !!s.status && !s.status.isPaused && settingsWritableInHold(s.status.fw))
   const [working, setWorking] = useState<'pause' | 'stop' | null>(null)
+  if (receiving && base) {
+    return (
+      <View style={[styles.banner, { backgroundColor: colors.cardElevated, borderColor: colors.border }]}>
+        <MaterialIcons name="cloud-upload" size={18} color={colors.live} />
+        <Text style={{ color: colors.foreground, fontSize: font.size.sm, flex: 1 }}>
+          The table is receiving patterns. Settings open again when the sync is done.
+        </Text>
+      </View>
+    )
+  }
   if ((!locked && !gapOpen) || !base) return null
 
   const run = async (what: 'pause' | 'stop') => {

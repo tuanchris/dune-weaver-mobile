@@ -44,6 +44,7 @@ interface Persisted {
   hubTags?: Record<string, string[]>
   hubPreviews?: Record<string, string>
   hubVersions?: Record<string, HubFile[]>
+  hubLaunched?: boolean
   createHintSeen?: boolean
 }
 
@@ -110,7 +111,11 @@ interface PrefsStore {
    * size each is for, main file first. Browse shows only the one the active table
    * takes (patternHub's forTable rule). Saved from each catalog read, like hubTags. */
   hubVersions: Record<string, HubFile[]>
-  setHubCatalogData: (tags: Record<string, string[]>, previews: Record<string, string>, versions: Record<string, HubFile[]>) => void
+  /** The last catalog read's `launched` (the website's PATTERN_HUB_PUBLIC). Saved, so
+   * Browse keeps its Pattern Hub tab through a launch that can't reach the hub
+   * (table-only Wi-Fi), signed in or not. */
+  hubLaunched: boolean
+  setHubCatalogData: (tags: Record<string, string[]>, previews: Record<string, string>, versions: Record<string, HubFile[]>, launched: boolean) => void
   /** Browse's one-time callout on its "+" (Create from text, once it ships: CREATE_TEXT) was seen: the
    * "+" was tapped or the callout closed. True until prefs load, so it never flashes. */
   createHintSeen: boolean
@@ -120,7 +125,7 @@ interface PrefsStore {
 
 export const usePrefs = create<PrefsStore>((set, get) => {
   const save = () => {
-    const { clearMode, playlistPrefs, favorites, favSynced, previewNagDismissedCount, showPrereleaseFirmware, hubAuto, hubSeen, hubShown, hubTags, hubPreviews, hubVersions, createHintSeen } = get()
+    const { clearMode, playlistPrefs, favorites, favSynced, previewNagDismissedCount, showPrereleaseFirmware, hubAuto, hubSeen, hubShown, hubTags, hubPreviews, hubVersions, hubLaunched, createHintSeen } = get()
     AsyncStorage.setItem(
       KEY,
       JSON.stringify({
@@ -136,6 +141,7 @@ export const usePrefs = create<PrefsStore>((set, get) => {
         hubTags,
         hubPreviews,
         hubVersions,
+        hubLaunched,
         createHintSeen,
       } satisfies Persisted),
     ).catch(() => {})
@@ -153,6 +159,7 @@ export const usePrefs = create<PrefsStore>((set, get) => {
     hubTags: {},
     hubPreviews: {},
     hubVersions: {},
+    hubLaunched: false,
     createHintSeen: true,
     markCreateHintSeen: () => {
       if (get().createHintSeen) return
@@ -204,8 +211,8 @@ export const usePrefs = create<PrefsStore>((set, get) => {
       set({ hubShown })
       save()
     },
-    setHubCatalogData: (hubTags, hubPreviews, hubVersions) => {
-      set({ hubTags, hubPreviews, hubVersions })
+    setHubCatalogData: (hubTags, hubPreviews, hubVersions, hubLaunched) => {
+      set({ hubTags, hubPreviews, hubVersions, hubLaunched })
       save()
     },
     hydrate: async () => {
@@ -226,6 +233,7 @@ export const usePrefs = create<PrefsStore>((set, get) => {
             hubTags: data.hubTags ?? {},
             hubPreviews: data.hubPreviews ?? {},
             hubVersions: data.hubVersions ?? {},
+            hubLaunched: data.hubLaunched ?? false,
             createHintSeen: data.createHintSeen ?? false,
           })
         } else set({ createHintSeen: false })

@@ -1,3 +1,4 @@
+import { TableReceivingError, isTableReceiving } from './sd'
 import { useState } from 'react'
 import { useStatus } from '../stores/useStatus'
 import { toast } from '../stores/useToast'
@@ -16,6 +17,11 @@ export function useBoardAction(refreshDelay = 400) {
   const [busy, setBusy] = useState(false)
 
   const act = async (fn: () => Promise<void>, successMsg: string, doing = 'complete that action') => {
+    // A hub sync is sending: the table answers nothing else (lib/sd.ts).
+    if (isTableReceiving()) {
+      toast.error(userMessage(new TableReceivingError(), doing))
+      return
+    }
     setBusy(true)
     try {
       await fn()

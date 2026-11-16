@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react'
-import { Linking, StyleSheet, Text, View } from 'react-native'
+import { Alert, Linking, StyleSheet, Text, View } from 'react-native'
 import { useFocusEffect, useNavigation, type NavigationProp } from '@react-navigation/native'
 import type { TabParamList } from '../../navigation'
 import { setHubAutoDownload, useHubVisible } from '../../lib/patternHub'
@@ -65,7 +65,7 @@ export function AccountSettings(): React.JSX.Element {
     return (
       <SettingsPage title="duneweaver.com">
         <Card>
-          <Text style={muted}>Sign in with your duneweaver.com account to sync Pattern Hub patterns.</Text>
+          <Text style={muted}>Pattern Hub is for every Dune Weaver plan owner. Sign in with your duneweaver.com account to sync its patterns to your phone and table.</Text>
           <Button title="Sign in" icon="login" loading={signingIn} onPress={doSignIn} />
         </Card>
       </SettingsPage>
@@ -91,12 +91,6 @@ export function AccountSettings(): React.JSX.Element {
             <Button title="Open Pattern Hub" icon="public" onPress={() => navigation.navigate('Browse', { tab: 'hub' })} />
           ) : null}
           <Button title="Sign out" icon="logout" variant="secondary" onPress={() => void signOut().catch(() => toast.error('Couldn’t sign out. Try again.'))} />
-          <Button
-            title="Delete account"
-            icon="delete-outline"
-            variant="destructive"
-            onPress={() => void Linking.openURL(`${SITE}/account/delete`).catch(() => toast.error('Couldn’t open duneweaver.com'))}
-          />
         </View>
       </Card>
       {showHub && state === 'member' ? (
@@ -113,8 +107,25 @@ export function AccountSettings(): React.JSX.Element {
           </View>
         </Card>
       ) : null}
+      {/* Its own card at the foot of the page, away from Sign out, and confirmed first:
+          a slip shouldn't start a deletion (App Review 5.1.1(v) still wants it findable). */}
+      <Card>
+        <Text style={[muted, styles.text]}>Deleting your duneweaver.com account is permanent. You confirm it on duneweaver.com.</Text>
+        <Button title="Delete account…" icon="delete-outline" variant="destructive" onPress={confirmDelete} />
+      </Card>
     </SettingsPage>
   )
+}
+
+function confirmDelete(): void {
+  Alert.alert('Delete your duneweaver.com account?', 'This can’t be undone. duneweaver.com opens next, where you confirm the deletion.', [
+    { text: 'Cancel', style: 'cancel' },
+    {
+      text: 'Continue',
+      style: 'destructive',
+      onPress: () => void Linking.openURL(`${SITE}/account/delete`).catch(() => toast.error('Couldn’t open duneweaver.com')),
+    },
+  ])
 }
 
 const styles = StyleSheet.create({

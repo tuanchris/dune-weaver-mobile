@@ -1,5 +1,8 @@
 import { useStatus } from '../stores/useStatus'
 import { usePreviews } from '../stores/usePreviews'
+import { TableReceivingError, tableReceiving } from '../api/board'
+
+export { TableReceivingError }
 import { isBusy } from '../api/status'
 
 /**
@@ -45,7 +48,17 @@ export class SyncBusyError extends Error {
   }
 }
 
-/** Throw if a preview sync is in progress. Guards motion-start entry points. */
+/**
+ * A Pattern Hub batch is sending to the active table (lib/tableBatch.ts): the table
+ * answers nothing else until it ends, so nothing that talks to it can work.
+ */
+export function isTableReceiving(): boolean {
+  const receiving = tableReceiving()
+  return !!receiving && receiving === useStatus.getState().base
+}
+
+/** Throw if a preview sync is in progress, or the table is receiving patterns. Guards motion-start entry points. */
 export function assertNotSyncing(): void {
+  if (isTableReceiving()) throw new TableReceivingError()
   if (isSyncingPreviews()) throw new SyncBusyError()
 }

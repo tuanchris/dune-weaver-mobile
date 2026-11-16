@@ -40,6 +40,11 @@ interface StatusStore {
    * board's web server is single-threaded, so poll traffic queues against (and
    * slows) an in-flight transfer. Balance with resume(). */
   suspend: () => void
+  /** A Pattern Hub batch is sending to the table: its single-threaded server answers
+   * nothing else until the request ends, so polling would only fail and mark it
+   * offline. While held, resume() (e.g. App.tsx on every return to the app) does
+   * nothing; holdForSync(false) polls again. */
+  holdForSync: (on: boolean) => void
   /** Restart polling after suspend(). No-op when no board is active. */
   resume: () => void
 }
@@ -134,6 +139,8 @@ async function pollOnce(base: string, gen: number, set: (p: Partial<StatusStore>
   }
 }
 
+let syncHeld = false // holdForSync
+
 export const useStatus = create<StatusStore>((set, get) => ({
   status: null,
   base: null,
@@ -175,6 +182,12 @@ export const useStatus = create<StatusStore>((set, get) => ({
     }
   },
 
+  holdForSync: (on) => {
+    syncHeld = on
+    if (on) get().suspend()
+    else get().resume()
+  },
+
   suspend: () => {
     generation++ // invalidates any in-flight pollOnce
     if (timer) {
@@ -184,6 +197,7 @@ export const useStatus = create<StatusStore>((set, get) => ({
   },
 
   resume: () => {
+    if (syncHeld) return
     const base = get().base
     if (!base) return
     generation++

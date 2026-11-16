@@ -1,0 +1,5 @@
+• Sync to table keeps going in the background on firmware v0.2.3 or newer
+• While a sync sends, the app shows the table is receiving, with progress and time left
+• Vote on Pattern Hub patterns
+• One Sync to table button in Pattern Hub
+• Delete account now sits apart, behind a confirm

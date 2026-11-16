@@ -35,7 +35,7 @@ The official `dune-weaver` repo (sibling `../dune-weaver`) has a Python/FastAPI 
   answers Ok and leaves alone; the route redirects to a 503 page, so its status is ignored), `$Bye` (reboot). Built with
   `encodeURIComponent` on the whole `plain` value (the firmware `arg("plain")` URL-decodes it).
   EnumSetting values are case-insensitive (`strcasecmp`); booleans are `ON`/`OFF`.
-- Files: `POST /upload` multipart (file part's **filename = full SD path**, e.g. `/patterns/x.thr`;
+- Files: `POST /upload?dontlist=yes` multipart (`dontlist`: no directory listing in the reply) (file part's **filename = full SD path**, e.g. `/patterns/x.thr`;
   text field `<sdPath>S` = byte size). `GET /upload?action=delete&path=&filename=` to delete.
   On upload failure, `uploadTextFile` retries once after best-effort `action=createdir` of the
   parent folders — user SD cards prepared on a computer often lack `/playlists`, and firmware
@@ -251,8 +251,10 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   didn't download" toast, and the hub tab's panel shows the matching state. **Launch gate**: the website
   writes `launched` (its `PATTERN_HUB_PUBLIC`) into the catalog, and Browse's Pattern Hub tab needs
   `useHubVisible()` = `launched || admin`, never on web — so the app can ship before the site
-  launches the hub. `launched` comes from ONE successful catalog read per app session (module
-  cache; a failed read counts as false and is retried on the next foreground).
+  launches the hub. `launched` comes from ONE successful catalog read per app session and is SAVED
+  (`usePrefs.hubLaunched`), so a launch that can't reach the hub (table-only Wi-Fi) keeps the tab; a
+  failed read is retried on the next foreground. Signed out, the tab still shows (it's where a plan
+  owner signs in).
   **Sign-in** (`src/lib/hubAuth.ts`): OAuth authorization code + PKCE S256 (`lib/pkce.mjs`) against
   the website's public client `duneweaver-app`, redirect `duneweaver://oauth` (`app.json`
   `"scheme": "duneweaver"`), in the system sign-in window (`expo-web-browser`
@@ -283,10 +285,11 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   phone › **duneweaver.com** (`settings/AccountSettings.tsx`, row hidden on web): Sign in, or the
   email + plan status, **Open Pattern Hub** (`navigate('Browse', { tab: 'hub' })`; Browse reads
   the `tab` param and clears it; shown when the hub is visible on a round table), Sign out
-  (best-effort revoke) and Delete account (opens `${SITE}/account/delete`), then for a plan owner
+  (best-effort revoke) and, in its own card at the foot of the page behind a confirm, Delete account… (opens `${SITE}/account/delete`), then for a plan owner
   (same visibility as Open Pattern Hub) a Pattern Hub card with the auto-download toggle. A finished sign-in
-  toasts "Signed in as <email>". The hub tab's panel: signed out → "Sign in with your
-  duneweaver.com account to sync Pattern Hub patterns." + Sign in; not a member → "Pattern Hub
+  toasts "Signed in as <email>". The hub tab's panel: signed out → "Pattern Hub is for every
+  Dune Weaver plan owner. Sign in with your duneweaver.com account to sync its patterns to your phone
+  and table." + Sign in; not a member → "Pattern Hub
   downloads are for Dune Weaver plan owners." + "Use the duneweaver.com account your plan is
   under." (a Hide My Email Apple sign-in matches no order; this is the user's only hint) + the
   email + Use another account (sign out, then sign in); member → the sync buttons. **No purchase
@@ -298,8 +301,8 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   otherwise Browse is just the library). The hub tab mounts on its first visit and then stays
   mounted, hidden with `display: none`, so a sync keeps its progress and Stop across a switch to
   Library. It is: a search row (search + Tags), a PANEL (the account states above, or for a
-  plan owner the scope summary + Sync to phone / Sync to table side by side, then progress + Stop
-  while running) and the
+  plan owner the scope summary + ONE **Sync to table** button, then progress + Stop while running;
+  no phone-only sync, owner's call 2026-11-15: people don't keep patterns on the phone) and the
   catalog as a grid, newest first with the starter set LAST (as the website's hub does: it ships
   with every table and is bundled here; `license === 'dune-weaver-starter'`). Only the search row
   is fixed (like the Library tab); the panel is the grid's first header item and scrolls away, so
@@ -313,18 +316,64 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   sheet laid out like a Library pattern's: the disc, "by <author>", the description (few have
   one), the tags as chips (a tap filters the grid by that tag and closes the sheet), where it is
   · size · license (`CC-BY-NC-4.0` shown as "CC BY-NC 4.0"; the starter set as "Dune Weaver
-  starter set") and Select / Deselect. A search or tag with no results says so and offers
-  **Show all patterns**. **Sync to phone** downloads into the library like an import (`.thr` verbatim to
-  `Paths.document/thr`, the hub's webp to `Paths.document/previews` as `previewUri`, so
-  PreviewGenerator has nothing to render). **Sync to table** does that for whatever's missing, then
+  starter set") and Select / Deselect. **Votes** (`lib/hubVotes.ts` + `components/HubVote.tsx`, as on the website: ↑ score ↓
+  in a pill, your vote in sand, the same vote again takes it back) sit in that sheet under the author, and in the Library
+  tab's detail sheet for any file that is a hub pattern's version (`useHubIdFor`: the session's catalog read; the
+  starter set counts), only where the hub is visible. Scores = the site's public `GET /api/patterns/votes` once a
+  session; your votes = `GET /api/patterns/my-votes` once per account; `POST /api/patterns/vote` with the app's
+  token (website a1b04dc, 2026-11-15: both routes take the app's token via `hubPrincipal`). Any signed-in account with
+  a verified email votes, plan or not (the site's rule); signed out, a tap says where to sign in. A search or tag with no results says so and offers
+  **Show all patterns**. **Sync to table** downloads whatever the phone lacks into the library like an
+  import (`.thr` verbatim to `Paths.document/thr`, the hub's webp to `Paths.document/previews` as
+  `previewUri`, so PreviewGenerator has nothing to render), then
   `pushToTable`s every pick the table lacks (bare-name match, so a copy in a subfolder counts), one
   file at a time behind a size/time confirm — gated on `isJobLocked` + preview sync, keep-awake held,
   Stop checked between files, the first send error ends the run. Both stages show "n of N · title"
-  and a size-weighted bar, plus a time-left estimate per stage (elapsed over fraction done, shown
-  after 3 s, time away from the app not counted). A sync runs only while the app is open: iOS
-  suspends it seconds after it leaves the screen (a sync on through a locked phone would need
-  native background transfers), and the progress panel asks people to stay on the page while it runs. So it PAUSES: a file that failed after the app left is retried
-  once the app is active again (`resumable` in `patternHub.ts`), and the sync carries on. File names follow the WEBSITE's rules so everything dedupes: the starter
+  and a size-weighted bar, plus a time-left estimate per stage (the rate since a point 5 s in,
+  shown after 5 s more: from the stage's start, connection start-up and the first burst into the
+  phone's send buffer threw it way off; time away from the app not counted). iOS gives the batch
+  upload's `bytesSent` as a BigInt (`tableBatch.ts` takes `Number()` of it: mixed into the math it
+  threw on every event and the bar never moved). **On firmware >= v0.2.3 the table stage runs in the
+  BACKGROUND** (never on the demo table: it reports v99 with no server to send to, so App Review's
+  sync takes the per-file path; `supportsBatchUpload(fw, base)`) (owner's call, 2026-11-15; `lib/tableBatch.ts`): the phone writes ONE multipart body
+  with every file (no `<path>S` size fields: the firmware refuses a request's 33rd non-file field) to the cache and Expo's `UploadTask` sends it as one
+  request, `sessionType: 'background'`, so on iOS the shared background URLSession carries on with the
+  app suspended or the phone locked. ONE request because the table's single-threaded server can't take
+  several connections (Expo's background session allows a few per host) and chaining one task per file
+  from a suspended app gets throttled by iOS. It needs v0.2.3: the firmware feeds its 120 s task
+  watchdog per upload chunk (older builds panic on a request that long) and adds each uploaded pattern
+  to `/patterns/index.json` itself (so the app writes no manifest on this path). On Android the
+  foreground service `modules/sync-service` (local Expo module, type `dataSync`, one ongoing
+  "Syncing patterns" notification with the progress; POST_NOTIFICATIONS asked on Android 13+;
+  `lib/syncService.ts`) keeps the process alive for any Sync to table (not the phone-only
+  auto-download); **Play Console needs the foreground-service declaration (data sync) for it**.
+  **While a batch sends, the table answers nothing else** (owner: the user must know they can't do
+  anything meanwhile, and see progress): `useHubSync.receiving` = its base; `board.ts`'s Proxy refuses
+  every call to it at once with `TableReceivingError` (`setTableReceiving`); `useStatus.holdForSync`
+  keeps the poller off, so `resume()` on returning to the app doesn't fail polls into "offline";
+  Control's lock reason reads "Receiving patterns" (Home and the clears off), Playlists' Play is off,
+  the IdleGate pages say so, `act()` refuses with the reason, and `SyncBanner` on every screen adds
+  "The table can't do anything else until this is done." The confirm says it up front. The body is
+  written a file at a time with a `prepare` progress stage ("Preparing n of N", yielding between
+  files), then the upload's byte progress maps to files. A batch the app
+  didn't see finish (failed, stopped, or iOS finished it after the app was killed) is settled by
+  `settlePendingTableSync` (launch + foreground, `useSettlePendingTableSync` in App.tsx): it re-reads
+  the table's list and records the hub revision of every NEW file there (`dw.hub.pendingTableSync`);
+  an overwritten file can't be told from its old copy and is sent again next time. If the marker is
+  recent (`at` + its `bytes` at 40 KB/s + 2 min: iOS may still be sending it after purging the app) and
+  the table doesn't answer, `waitOutBatch` shows it RECEIVING, not offline (same locks; the header dot
+  in `live`, Control's state word "Receiving"; the banner and hub panel "Sending N patterns to the
+  table · started X min ago", no percentage or Stop: the system's task isn't reattached), and checks
+  `/sand_status` every 20 s past the gate (`board.tableAnswers`) until it answers, then settles. Swiping the app away
+  (iOS) or force-stopping it (Android) still stops it. Downloads from the hub stay in the foreground
+  (seconds). On older firmware the stage is per file as before, and it runs only while the app is
+  open: iOS suspends it seconds after it leaves the screen, and the progress panel asks people to keep
+  the app open while it runs. So it PAUSES: a file that failed after the app left (or
+  started just after it came back) is retried once the app is active again, with growing waits for about a minute (`resumable` in
+  `patternHub.ts`: coming back, the request in flight fails with "The network connection was lost" and Wi-Fi takes a while
+  to rejoin, so one retry after 2 s wasn't enough), and the sync carries on. Its progress is a store (`useHubSync`) so
+  every other screen shows it too: `SyncBanner`, rendered by `Screen` (`hideSync` on Browse's hub tab, whose panel shows it),
+  a tap opens the hub tab. During a sync the tiles' picks are fixed but touch and hold still opens the details. File names follow the WEBSITE's rules so everything dedupes: the starter
   set maps back to the bundled file (`starterId(file)` = the seed script's id), community patterns
   get `downloadFilename(title)` — keep `slug`/`starterId` in step with the website's
   `cardFilenames` (`lib/pattern-hub-types.ts`), which the installer's SD card Pattern Manager uses to
@@ -392,18 +441,18 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   banner on top (owner: the red dot is enough). Opening the hub tab adds them to `hubShown`: both
   clear and return only when more are published. `hubShown` is kept apart from `hubSeen` so looking
   never stops an auto-download. (A first-time owner with auto-download off is told about every hub
-  pattern not on the phone once.) In the panel, the sync button that can run is the prominent one:
-  Sync to table, or Sync to phone while the table can't take a sync (`tableReason`).
-  **Upload** is a link to `duneweaver.com/patterns/upload` at the END of the grid
-  ("Share your own pattern"; contributing comes after browsing): the site's `POST /api/patterns` needs
-  a Firebase ID token (email link / Google / password sign-in), the same plan, plus license, credit
-  and photos — and the app's tokens open only `/api/patterns/me` and the download route. The site's
+  pattern not on the phone once.) While the table can't take a sync, Sync to table is disabled with
+  the reason under it (`tableReason`: no table, offline, busy, preview sync). **No upload in the app**
+  (the "Share your own pattern" link was removed 2026-11-15: people don't keep pattern files on the
+  phone); uploading is the website's `duneweaver.com/patterns/upload`, whose `POST /api/patterns` needs
+  a Firebase ID token the app's tokens can't stand in for. The site's
   hub pages 404 for non-admins until `PATTERN_HUB_PUBLIC` (website `lib/pattern-hub-types.ts`).
 - **Push to table**: holds an `expo-keep-awake` lock for the transfer (an auto-locked phone suspends
   the app mid-upload; the firmware OTA, `runFirmwareUpdate`, holds one too). Read the decimated `.thr` (bundled asset via `expo-asset`, or imported file) and
   `board.uploadFile` to `/patterns/<name>`. See `src/lib/pushPattern.ts`.
 - **On-card catalog stays in step**: `src/lib/tableManifest.ts` — after a push/delete, best-effort
-  read-modify-write of `/patterns/index.json` (the firmware serves it VERBATIM from `/sand_patterns`
+  read-modify-write of `/patterns/index.json` (a hub Sync to table writes it ONCE per 25 files and at the end,
+  `strict` so a failure is retried/logged: per file it was a GET + a ~20 KB rewrite, ~2 s a pattern on a DW Gold) (the firmware serves it VERBATIM from `/sand_patterns`
   when present, so a push without a catalog update vanishes after the next cold start). It only ever
   MODIFIES an existing manifest — creating one on a card without it would hide every other pattern.
 - **Preview bundle sync** (`src/lib/previewSync.ts` — `syncPreviewBundle`, **MANUAL only**: Settings →
@@ -1162,9 +1211,19 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   system UI are the system's to place; `Screen`'s own header stays a horizontal row (it isn't a
   native toolbar, so it never joins the rail). Test in Xcode's Device Hub on the "iPhone Duo"
   simulator (iOS 27.1 runtime): folded, open portrait/landscape, partially folded, Split View.
-- **Android R8 is OFF** (`expo-build-properties` `android.enableMinifyInReleaseBuilds: false`):
-  SDK 58 turned it on by default; it stays off until a release build has been checked with it
-  (reflection-based modules like `react-native-zeroconf` can need keep rules).
+- **Android R8 is ON** (`expo-build-properties` `android.enableMinifyInReleaseBuilds: true`, since
+  1.4.1: Play flagged 1.4.0's DEX obfuscation at 1%, fix by Feb 2027). Keep rules go in
+  `extraProguardRules` there (EAS prebuilds `android/`, so never only in `android/app/proguard-rules.pro`):
+  `com.github.druk.**` (react-native-zeroconf's bundled mDNSResponder, whose `JNISupport.c` finds its
+  classes, fields and callbacks BY NAME) and `@JavascriptInterface` methods (react-native-webview's
+  bridge, which the sand page calls by name). Libraries with their own consumer rules (React Native,
+  Expo modules, screens, svg) need nothing here. After adding a native module, check a release build
+  on a phone: mDNS discovery, the sand preview, uploads, sign-in. Resource shrinking stays off (Expo's
+  assets are looked up by name). Play's other 1.4.0 note, "deprecated APIs or parameters for
+  edge-to-edge", can't be cleared from the app: `dexdump` of the bundle finds `Window.setStatusBarColor`
+  / `setNavigationBarColor` / `layoutInDisplayCutoutMode` only in androidx (activity's `EdgeToEdge*`,
+  core's `WindowCompat`), Material's sheet dialogs and React Native's `WindowUtilKt`, all
+  version-guarded compat paths; it's a recommendation with no deadline, and goes when they drop them.
 - **Sheets**: every bottom sheet goes through `src/components/Sheet.tsx`, the ONLY Modal wrapper
   (the other Modals are full screen: `FwUpdateSplash`, a blocker, and `FullscreenPlayer` (its
   content is a render prop), which Browse and the player open only once no sheet is up). `variant="page"` = a native

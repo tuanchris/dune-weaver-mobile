@@ -7,6 +7,7 @@ import { MaterialIcons } from '@expo/vector-icons'
 import { useTheme } from '../stores/useTheme'
 import { MiniPlayer } from './NowPlayingBar'
 import { TablePill } from './TablePill'
+import { SyncBanner } from './SyncBanner'
 import { NATIVE_ACCESSORY, setScreenBox, setScreenWidth, useSplit } from '../lib/layout'
 import { spacing, font } from '../theme'
 
@@ -14,6 +15,7 @@ import { spacing, font } from '../theme'
  * App chrome shared by every tab screen, mirroring the dw web UI:
  *  - a floating pill "brand" header (TablePill: logo · active table name · connection dot; tap to switch tables)
  *  - a large page title row below it, with an optional right-aligned action
+ *  - a Pattern Hub sync's progress (SyncBanner) while one runs, except where its own panel shows it (hideSync)
  *  - the fallback mini player, in flow at the bottom, wherever the tab bar has no native accessory.
  */
 export function Screen({
@@ -22,6 +24,7 @@ export function Screen({
   action,
   back,
   eyebrow,
+  hideSync,
 }: {
   children: React.ReactNode
   title?: string
@@ -30,6 +33,8 @@ export function Screen({
   back?: { label: string; onPress: () => void }
   /** Small label above the title — whose settings these are (the table's name). */
   eyebrow?: string
+  /** Browse's Pattern Hub tab: its panel already shows the sync. */
+  hideSync?: boolean
 }) {
   const colors = useTheme((s) => s.colors)
   const split = useSplit()
@@ -83,6 +88,7 @@ export function Screen({
           </View>
         ) : null}
 
+        {hideSync ? null : <SyncBanner />}
         <View style={{ flex: 1 }} onLayout={(e) => setScreenWidth(e.nativeEvent.layout.width)}>{children}</View>
         {NATIVE_ACCESSORY || split ? null : <MiniPlayer placement="floating" />}
       </View>

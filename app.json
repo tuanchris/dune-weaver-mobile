@@ -3,7 +3,7 @@
     "name": "Dune Weaver",
     "slug": "dune-weaver-mobile",
     "scheme": "duneweaver",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "orientation": "portrait",
     "icon": "./assets/dw-logo.png",
     "userInterfaceStyle": "automatic",
@@ -34,7 +34,10 @@
       "permissions": [
         "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.ACCESS_WIFI_STATE",
-        "android.permission.CHANGE_WIFI_MULTICAST_STATE"
+        "android.permission.CHANGE_WIFI_MULTICAST_STATE",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+        "android.permission.POST_NOTIFICATIONS"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#1a1a1a",
@@ -57,7 +60,8 @@
           },
           "android": {
             "usesCleartextTraffic": true,
-            "enableMinifyInReleaseBuilds": false
+            "enableMinifyInReleaseBuilds": true,
+            "extraProguardRules": "-keep class com.github.druk.** { *; }\n-keepclassmembers class * { @android.webkit.JavascriptInterface <methods>; }"
           }
         }
       ],

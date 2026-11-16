@@ -25,7 +25,8 @@ import { hubTableFor, roundSize } from '../lib/tableSize'
 import { isGcode } from '../lib/gcode'
 import { MissingPreviewsBanner } from '../components/MissingPreviewsBanner'
 import { HubPane } from '../components/HubPane'
-import { readCatalogOnce, tagKey, useHubVisible, useNewHubPatterns } from '../lib/patternHub'
+import { readCatalogOnce, tagKey, useHubIdFor, useHubVisible, useNewHubPatterns } from '../lib/patternHub'
+import { HubVote } from '../components/HubVote'
 import { useMissingPreviewCount } from '../lib/previewCoverage'
 import { Button, IconButton, Segmented } from '../components/ui'
 import { Screen } from '../components/Screen'
@@ -408,6 +409,8 @@ export function BrowseScreen() {
     }
   }
 
+  // The open pattern's hub id, for its vote (before the early return: it's a hook).
+  const hubId = useHubIdFor(importPreview ? null : selected)
   if (!base) {
     return (
       <Screen>
@@ -480,7 +483,7 @@ export function BrowseScreen() {
     : 'Not in your library or on the table.'
 
   return (
-    <Screen title="Browse">
+    <Screen title="Browse" hideSync={hubTab}>
       {showHub ? (
         <View style={styles.tabRow}>
           <Segmented
@@ -804,6 +807,8 @@ export function BrowseScreen() {
                 </Pressable>
               ) : null}
               <Text style={{ color: colors.mutedForeground, fontSize: font.size.sm, textAlign: 'center' }}>{where}</Text>
+              {/* Votes are for Pattern Hub patterns only (the hub's own, the starter set, downloads, the card's copies). */}
+              {hubVisible && hubId ? <HubVote id={hubId} /> : null}
             </View>
 
             {pushPct != null ? (

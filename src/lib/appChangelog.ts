@@ -21,6 +21,16 @@ export interface AppReleaseNote {
 
 export const APP_CHANGELOG: AppReleaseNote[] = [
   {
+    version: '1.4.1',
+    notes: [
+      '• Sync to table keeps going in the background on firmware v0.2.3 or newer: switch apps or lock your phone and it carries on',
+      '• While a sync sends, the app shows the table is receiving patterns, with progress and time left, and holds back what the table can’t do meanwhile',
+      '• Vote on Pattern Hub patterns, in the Pattern Hub and in Browse',
+      '• One Sync to table button in Pattern Hub',
+      '• Delete account now sits apart, behind a confirm',
+    ].join('\n'),
+  },
+  {
     version: '1.4.0',
     notes: [
       '• Pattern Hub: browse the duneweaver.com pattern library in Browse. Dune Weaver plan owners sign in with their duneweaver.com account to sync patterns to the phone and the table, and new patterns get a red badge',

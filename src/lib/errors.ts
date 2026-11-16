@@ -7,7 +7,7 @@
 
 import { log } from '../stores/useAppLog'
 import { useStatus } from '../stores/useStatus'
-import { SdBusyError, SyncBusyError } from './sd'
+import { SdBusyError, SyncBusyError, TableReceivingError } from './sd'
 
 const SD_HELP =
   'the table can’t access its SD card. Check that a card is inserted and formatted as FAT32, then restart the table.'
@@ -17,6 +17,9 @@ export function userMessage(e: unknown, doing: string): string {
   log.error('ui', `Failed to ${doing}: ${raw}`)
   const m = raw.toLowerCase()
 
+  if (e instanceof TableReceivingError) {
+    return `Couldn’t ${doing}: the table is receiving patterns. Try again when the sync is done.`
+  }
   if (e instanceof SyncBusyError) {
     return `Couldn’t ${doing} — the app is syncing previews from the table. Try again in a moment.`
   }

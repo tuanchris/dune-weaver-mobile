@@ -237,7 +237,7 @@ export function registerKeyLookup(fn: (base: string) => string | undefined): voi
 }
 /** X-Sand-Key header for a base; {} when no key is saved. The header is sent
  * on every request (open routes and unlocked tables simply ignore it). */
-function keyHeaders(base: string, override?: string): Record<string, string> {
+export function keyHeaders(base: string, override?: string): Record<string, string> {
   const k = override ?? lookupKey(base)
   return k ? { 'X-Sand-Key': k } : {}
 }
@@ -247,6 +247,11 @@ function withTimeout(ms: number): { signal: AbortSignal; cancel: () => void } {
   const t = setTimeout(() => c.abort(), ms)
   return { signal: c.signal, cancel: () => clearTimeout(t) }
 }
+
+/** Whether the table answers /sand_status: raw, past the gate and the receiving refusal
+ * (patternHub's wait for a batch the system is still sending). */
+export const tableAnswers = (base: string, timeoutMs: number): Promise<boolean> =>
+  getJson(base, '/sand_status', timeoutMs).then(() => true, () => false)
 
 async function getJson<T>(base: string, path: string, timeoutMs = 6000): Promise<T> {
   const { signal, cancel } = withTimeout(timeoutMs)
@@ -364,7 +369,7 @@ async function getText(base: string, path: string, timeoutMs = 8000, tries = 3):
  * body with `error.message` (and a `status` string) buried in a full directory
  * listing — extract the message instead of dumping the listing into a toast.
  */
-function httpErrorMessage(status: number, text: string): string {
+export function httpErrorMessage(status: number, text: string): string {
   try {
     const body = JSON.parse(text) as { status?: string; error?: { message?: string } }
     const msg = body.error?.message || body.status
@@ -493,7 +498,9 @@ async function uploadTextFile(
   const attempt = (): Promise<{ ok: boolean; status: number; text: string }> =>
     new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest()
-      xhr.open('POST', `${base}/upload`)
+      // dontlist=yes: the firmware otherwise answers every upload with a directory
+      // listing nobody reads (an SD walk; measured ~2.6 s of a 1 MB upload on a DW Gold).
+      xhr.open('POST', `${base}/upload?dontlist=yes`)
       xhr.timeout = timeout
       xhr.setRequestHeader('Content-Type', `multipart/form-data; boundary=${boundary}`)
       const sandKey = lookupKey(base)
@@ -976,6 +983,26 @@ async function readConfig(base: string, path: string): Promise<string> {
  * to every screen/store — they all just call `board.x(base, …)` as before.
  * Real-board calls pass through the concurrency gate above.
  */
+/**
+ * A Pattern Hub batch is sending to this table (lib/tableBatch.ts, through Expo's
+ * UploadTask, not this client): its single-threaded server answers nothing else
+ * until that request ends, so every call to it is refused at once instead of
+ * timing out one by one (and the UI says why). Set by lib/patternHub.ts.
+ */
+let receivingBase: string | null = null
+export function setTableReceiving(base: string | null): void {
+  receivingBase = base
+}
+export function tableReceiving(): string | null {
+  return receivingBase
+}
+export class TableReceivingError extends Error {
+  constructor() {
+    super('The table is receiving patterns. Try again when the sync is done.')
+    this.name = 'TableReceivingError'
+  }
+}
+
 export const board: typeof realBoard = new Proxy(realBoard, {
   get(target, prop, receiver) {
     const realValue = Reflect.get(target, prop, receiver)
@@ -988,6 +1015,7 @@ export const board: typeof realBoard = new Proxy(realBoard, {
           ? (demoFn as (...a: unknown[]) => unknown)(...args)
           : Promise.resolve() // action with no demo impl -> silent success
       }
+      if (receivingBase && base === receivingBase) return Promise.reject(new TableReceivingError())
       return acquire(base).then(() => {
         let out: unknown
         try {

@@ -20,7 +20,7 @@ import { usePrefs, type PauseUnit, type PlaylistPref } from '../stores/usePrefs'
 import { loadPlaylist, savePlaylist, deletePlaylist, copyPlaylistTo, fillPlaylistCovers, playlistName } from '../lib/playlists'
 import { isDemoBase } from '../api/demoBoard'
 import { prettyName } from '../lib/patternName'
-import { readCatalogOnce, tagKey } from '../lib/patternHub'
+import { readCatalogOnce, tagKey, useHubSync } from '../lib/patternHub'
 import { assertNotSyncing } from '../lib/sd'
 import { usePreviews } from '../stores/usePreviews'
 import { useBoardAction } from '../lib/useBoardAction'
@@ -65,6 +65,7 @@ export function PlaylistsScreen() {
   const loadPlaylists = useLibrary((s) => s.loadPlaylists)
   // A running preview sync blocks starting playback (shared single-threaded SD).
   const syncing = usePreviews((s) => s.syncing)
+  const receiving = useHubSync((s) => !!s.receiving && s.receiving === base)
   const { busy, setBusy } = useBoardAction()
   // What each playlist holds, as far as the app has seen (lib/playlists records it on every read/write).
   const covers = useLibrary((s) => (base ? s.tableCache[base]?.playlistCovers : undefined))
@@ -581,7 +582,7 @@ export function PlaylistsScreen() {
 
             {/* Pinned in flow at the sheet's bottom (thumb reach); never floats over the grid. */}
             <View style={[styles.playBar, { borderColor: colors.border }]}>
-              <Button title="Play" icon="play-arrow" onPress={run} loading={busy} disabled={items.length === 0 || syncing} />
+              <Button title="Play" icon="play-arrow" onPress={run} loading={busy} disabled={items.length === 0 || syncing || receiving} />
             </View>
           </View>
         ) : null}

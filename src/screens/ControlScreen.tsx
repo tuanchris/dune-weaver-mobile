@@ -6,6 +6,7 @@ import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
 import { useScrollLock } from '../stores/useScrollLock'
 import { usePreviews } from '../stores/usePreviews'
+import { useHubSync } from '../lib/patternHub'
 import { useTheme } from '../stores/useTheme'
 import { bareName, useLibrary } from '../stores/useLibrary'
 import { assertNotSyncing } from '../lib/sd'
@@ -74,6 +75,8 @@ export function ControlScreen(): React.JSX.Element {
   // Block motion-START while the app is streaming previews off the card (shared
   // single-threaded SD). Stop stays enabled — you must always be able to halt.
   const syncing = usePreviews((s) => s.syncing)
+  // A hub sync is sending to this table: it answers nothing else until that's done.
+  const receiving = useHubSync((s) => !!s.receiving && s.receiving === base)
   const { busy, act } = useBoardAction()
   const rect = useIsRect()
   const travel = useTravel()
@@ -101,7 +104,8 @@ export function ControlScreen(): React.JSX.Element {
   // Moving the ball / clearing needs an idle, homed table (the firmware answers
   // 409 mid-pattern), and a preview sync holds the SD. Say WHY they're off.
   const lockReason =
-    !online ? 'Table offline'
+    receiving ? 'Receiving patterns'
+    : !online ? 'Table offline'
     : syncing ? 'Syncing previews'
     : isAlarm ? 'Home or unlock first'
     : status.playlist ? 'Stop the playlist first'
@@ -111,7 +115,8 @@ export function ControlScreen(): React.JSX.Element {
   const canPosition = !lockReason
 
   const stateWord =
-    !online ? 'Offline'
+    receiving ? 'Receiving'
+    : !online ? 'Offline'
     : status.isHoming ? 'Homing'
     : status.isClearing || clearing ? 'Clearing'
     : status.isPaused ? 'Paused'
@@ -121,7 +126,8 @@ export function ControlScreen(): React.JSX.Element {
     : 'Idle'
   const pct = status?.percentage != null ? ` · ${status.percentage}%` : ''
   const subline =
-    !online ? 'Can’t reach the table'
+    receiving ? 'Patterns from your phone'
+    : !online ? 'Can’t reach the table'
     : isAlarm ? 'Home or unlock it to carry on'
     : status.isHoming ? 'Finding its home position'
     : clearing ? clearing + pct
@@ -186,7 +192,7 @@ export function ControlScreen(): React.JSX.Element {
             ) : null}
           </View>
           <View style={styles.row}>
-            <Button title="Home" icon="home" variant={moving ? 'secondary' : 'primary'} flex disabled={busy || syncing || !online} onPress={() => act(() => { assertNotSyncing(); return board.home(base) }, 'Homing', 'home the table')} />
+            <Button title="Home" icon="home" variant={moving ? 'secondary' : 'primary'} flex disabled={busy || syncing || receiving || !online} onPress={() => act(() => { assertNotSyncing(); return board.home(base) }, 'Homing', 'home the table')} />
             {isAlarm ? (
               <Button title="Unlock" icon="lock-open" variant="secondary" flex disabled={busy} onPress={() => act(() => board.unlock(base), 'Unlocked', 'unlock the table')} />
             ) : null}

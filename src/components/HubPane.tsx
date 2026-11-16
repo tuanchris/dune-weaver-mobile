@@ -29,7 +29,9 @@ import { toast } from '../stores/useToast'
 import { isJobLocked } from '../api/status'
 import { userMessage } from '../lib/errors'
 import { SCROLL_BOTTOM_PAD, thumbGrid, useScreenWidth } from '../lib/layout'
-import { STARTER_LICENSE, fetchHubCatalog, forTable, staleHubFiles, syncHub, type HubPattern, type HubProgress } from '../lib/patternHub'
+import { HubVote } from './HubVote'
+import { supportsBatchUpload } from '../lib/tableBatch'
+import { STARTER_LICENSE, backgroundLine, fetchHubCatalog, forTable, staleHubFiles, stageLabel, syncHub, useHubSync, type HubPattern, type HubProgress } from '../lib/patternHub'
 import { HUB_TABLES, hubTable, hubTableLabel, type HubTable } from '../lib/tableSize'
 import { NotMemberError, SignedOutError, refreshAccount, signIn, signOut, useHubAccount } from '../lib/hubAuth'
 import { radius, spacing, font } from '../theme'
@@ -44,7 +46,6 @@ const timeLeft = (ms: number) => {
 }
 // Uploading needs a duneweaver.com account and the site's form (license,
 // credit, photos), so the app links to it rather than copying it.
-const HUB_UPLOAD = 'https://duneweaver.com/patterns/upload'
 // App Store 1.2 (user-generated content): every hub pattern can be reported.
 // Uploads are approved before they're published; this reaches the same inbox.
 const reportUrl = (p: HubPattern) =>
@@ -54,15 +55,16 @@ const reportUrl = (p: HubPattern) =>
 /**
  * Browse's Pattern Hub tab: the hub's catalog as a grid, each tile marked by
  * where the pattern is (hub only / this phone / the table). Tap tiles to pick
- * some, or pick none for all of them. "Sync to phone" downloads into the
- * library; "Sync to table" downloads what's missing and then sends it, one file
- * at a time (lib/patternHub.ts). Search and Tags narrow the grid; with nothing
- * picked, the buttons act on what's shown. Touch and hold a tile for its
+ * some, or pick none for all of them. ONE button, "Sync to table": it downloads
+ * what the phone lacks and then sends what the table lacks, one file at a time
+ * (lib/patternHub.ts); there's no phone-only sync (owner's call, 2026-11-15:
+ * people don't keep patterns on the phone; auto-download in Settings still fills
+ * it). Search and Tags narrow the grid; with nothing picked, it acts on what's shown. Touch and hold a tile for its
  * details (credit, tags, license). The panel holds the account (sign in
- * right here) and the sync buttons. It scrolls away with the grid, so browsing
+ * right here) and the sync button. It scrolls away with the grid, so browsing
  * gets the whole screen, and pins above the grid only while something is picked
  * or a sync runs. Round tables only: the hub is .thr. Everyone sees the catalog; the
- * sync buttons are for a signed-in plan owner (lib/hubAuth.ts). No purchase
+ * sync button is for a signed-in plan owner (lib/hubAuth.ts). No purchase
  * wording, no shop links (App Store 3.1.1 / 3.1.3).
  *
  * Stays mounted once opened (BrowseScreen hides it), so a sync keeps its
@@ -97,9 +99,11 @@ export function HubPane({ active }: { active: boolean }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [progress, setProgress] = useState<(HubProgress & { eta: number | null }) | null>(null)
-  const [running, setRunning] = useState(false)
-  const [stopping, setStopping] = useState(false)
+  // In a store, not state: SyncBanner shows the sync on every other screen.
+  const { progress, running, stopping } = useHubSync()
+  const setProgress = (p: (HubProgress & { eta: number | null }) | null) => useHubSync.setState({ progress: p })
+  const setRunning = (on: boolean) => useHubSync.setState({ running: on })
+  const setStopping = (on: boolean) => useHubSync.setState({ stopping: on })
   const stop = useRef(false)
   const [query, setQuery] = useState('')
   const [tag, setTag] = useState<string | null>(null)
@@ -176,7 +180,6 @@ export function HubPane({ active }: { active: boolean }) {
     () => (selected.size ? (catalog ?? []).filter((p) => selected.has(p.id)) : shown),
     [catalog, selected, shown],
   )
-  const needPhone = scope.filter((p) => !onPhone.has(p.name))
   const needTable = scope.filter((p) => !onTable.has(p.name))
   const tableReason =
     !base ? 'No table connected.'
@@ -193,16 +196,19 @@ export function HubPane({ active }: { active: boolean }) {
       return next
     })
 
-  const run = async (toTable: boolean) => {
-    const list = toTable ? needTable : needPhone
+  // One sync: download what the phone lacks, then send what the table lacks.
+  const run = async () => {
     stop.current = false
     setStopping(false)
     setRunning(true)
-    // Time left per stage (downloads, then sends): elapsed over the size-weighted
-    // fraction done. Held back for the first 3 s, while one file is all it knows.
+    // Time left per stage (downloads, then sends): the size-weighted rate since a
+    // point 5 s in, shown after 5 s more. Measured from the stage's start it was way
+    // off: the connection's start-up made it long, then the first burst into the
+    // phone's send buffer (far faster than the table takes it) made it short.
     // Time away from the app doesn't count: the sync pauses there (patternHub.ts).
     let stage = ''
     let startedAt = 0
+    let mark: { at: number; f: number } | null = null
     let awayAt = 0
     const away = AppState.addEventListener('change', (state) => {
       if (state !== 'active') {
@@ -216,14 +222,18 @@ export function HubPane({ active }: { active: boolean }) {
       if (p.stage !== stage) {
         stage = p.stage
         startedAt = Date.now()
+        mark = null
       }
       const elapsed = Date.now() - startedAt
-      const eta = elapsed > 3000 && p.fraction > 0.01 ? (elapsed * (1 - p.fraction)) / p.fraction : null
+      if (!mark && elapsed > 5000) mark = { at: elapsed, f: p.fraction }
+      const span = mark ? elapsed - mark.at : 0
+      const done = mark ? p.fraction - mark.f : 0
+      const eta = span > 5000 && done > 0.002 ? (span * (1 - p.fraction)) / done : null
       setProgress({ ...p, eta })
     }
     try {
-      const r = await syncHub(list, {
-        base: toTable && base ? base : undefined,
+      const r = await syncHub(needTable, {
+        base: base ?? undefined,
         onTable,
         onProgress,
         shouldStop: () => stop.current,
@@ -234,10 +244,8 @@ export function HubPane({ active }: { active: boolean }) {
         // Sign in / the non-member note. What downloaded before it stays.
       } else if (r.error) {
         toast.error(`${userMessage(r.error, 'send the patterns')}${r.toTable ? ` (${r.toTable} sent)` : ''}`)
-      } else if (toTable) {
+      } else if (r.toTable || !r.failed.length) {
         toast.success(`${r.stopped ? 'Stopped: sent' : 'Sent'} ${plural(r.toTable, 'pattern')} to the table${failed}`)
-      } else if (r.toPhone || !r.failed.length) {
-        toast.success(`${r.stopped ? 'Stopped: synced' : 'Synced'} ${plural(r.toPhone, 'pattern')} to this phone${failed}`)
       } else {
         // An HTTP status means the site answered: say what it said, not "check the internet".
         const why = r.failedError instanceof Error ? r.failedError.message : ''
@@ -255,24 +263,19 @@ export function HubPane({ active }: { active: boolean }) {
     const bytes = needTable.reduce((n, p) => n + p.bytes, 0)
     Alert.alert(
       `Sync ${plural(needTable.length, 'pattern')} to the table?`,
-      `About ${mb(bytes)}, sent one file at a time, so it can take a while. It runs while the app is open: leave it and the sync pauses, then carries on when you come back.`,
+      supportsBatchUpload(status?.fw, base)
+        ? `About ${mb(bytes)}, so it can take a while. While it sends, the table can't draw or do anything else. It carries on if you switch apps or lock the phone; swiping the app away (force quit) stops it.`
+        : `About ${mb(bytes)}, sent one file at a time, so it can take a while. It runs while the app is open: leave it and the sync pauses, then carries on when you come back.`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Sync', onPress: () => void run(true) },
+        { text: 'Sync', onPress: () => void run() },
       ],
     )
   }
 
   const all = selected.size === 0
   const scopeLabel = !all ? `${selected.size} selected` : filtered ? `${shown.length} shown` : `All ${catalog?.length ?? 0}`
-  const summary =
-    needPhone.length + needTable.length === 0
-      ? `${scopeLabel} · on this phone and the table`
-      : [
-          scopeLabel,
-          needPhone.length ? `${needPhone.length} to download (${mb(needPhone.reduce((n, p) => n + p.bytes, 0))})` : 'on this phone',
-          needTable.length ? `${needTable.length} to send to the table` : 'on the table',
-        ].join(' · ')
+  const summary = `${scopeLabel} · ${needTable.length ? `${needTable.length} to sync (${mb(needTable.reduce((n, p) => n + p.bytes, 0))})` : 'on the table'}`
 
   const small = [styles.small, { color: colors.mutedForeground }]
   const panelColors = { backgroundColor: colors.card, borderColor: colors.border }
@@ -284,10 +287,18 @@ export function HubPane({ active }: { active: boolean }) {
   // two spots coincide, and further down the header shrinks as much as the
   // pinned copy grows, so the tiles don't jump when it moves.
   const pinned = running || selected.size > 0
-  const panel = progress ? (
+  const panel = progress?.since != null ? (
+    // A batch an earlier run of the app started: the system is still sending it.
+    <View>
+      <Text numberOfLines={2} style={{ color: colors.foreground, fontSize: font.size.sm }}>{backgroundLine(progress)}</Text>
+      <Text style={[styles.small, { color: colors.foreground, marginTop: spacing.xs, marginBottom: spacing.sm }]}>
+        Your phone is sending them in the background. The table can’t draw or do anything else until it’s done.
+      </Text>
+    </View>
+  ) : progress ? (
     <View>
       <Text numberOfLines={2} style={{ color: colors.foreground, fontSize: font.size.sm }}>
-        {progress.stage === 'phone' ? 'Downloading' : 'Sending to the table'} {progress.index} of {progress.total} · {progress.title}
+        {stageLabel(progress.stage)} {progress.index} of {progress.total} · {progress.title}
       </Text>
       <View style={styles.progressRow}>
         <View style={[styles.track, { backgroundColor: colors.border }]}>
@@ -304,7 +315,9 @@ export function HubPane({ active }: { active: boolean }) {
       ) : null}
       {/* iOS suspends the app seconds after it leaves the screen, which pauses the sync. */}
       <Text style={[styles.small, { color: colors.foreground, marginTop: spacing.xs, marginBottom: spacing.sm }]}>
-        Stay on this page until it’s done. Leaving the app pauses the sync.
+        {progress.stage === 'table' && supportsBatchUpload(status?.fw, base)
+          ? 'The table can’t draw or do anything else until this is done. You can switch apps or lock the phone: sending carries on. Swiping the app away stops it.'
+          : 'Keep the app open until it’s done. Leaving the app pauses the sync.'}
       </Text>
       <Button
         title={stopping ? 'Stopping after this one…' : 'Stop'}
@@ -336,7 +349,7 @@ export function HubPane({ active }: { active: boolean }) {
     </View>
   ) : account === 'signedOut' ? (
     <View style={styles.panelBody}>
-      <Text style={small}>Sign in with your duneweaver.com account to sync Pattern Hub patterns.</Text>
+      <Text style={small}>Pattern Hub is for every Dune Weaver plan owner. Sign in with your duneweaver.com account to sync its patterns to your phone and table.</Text>
       <Button title="Sign in" icon="login" loading={signingIn} onPress={() => void startSignIn(false)} />
     </View>
   ) : catalog ? (
@@ -345,26 +358,13 @@ export function HubPane({ active }: { active: boolean }) {
         <Text style={[small, { flex: 1 }]}>{summary}</Text>
         {!all ? <Button title="Deselect" variant="ghost" disabled={running} onPress={() => setSelected(new Set())} /> : null}
       </View>
-      <View style={styles.buttons}>
-        <Button
-          flex
-          title="Sync to phone"
-          icon="download"
-          // Prominent when it's the one that can run: no table to sync to, or it's busy.
-          variant={tableReason ? 'primary' : 'secondary'}
-          disabled={running || needPhone.length === 0}
-          onPress={() => void run(false)}
-        />
-        <Button
-          flex
-          title="Sync to table"
-          icon="cloud-upload"
-          variant={tableReason ? 'secondary' : 'primary'}
-          loading={running}
-          disabled={running || needTable.length === 0 || !!tableReason}
-          onPress={confirmTable}
-        />
-      </View>
+      <Button
+        title="Sync to table"
+        icon="cloud-upload"
+        loading={running}
+        disabled={running || needTable.length === 0 || !!tableReason}
+        onPress={confirmTable}
+      />
       {tableReason && needTable.length ? <Text style={small}>{tableReason}</Text> : null}
     </View>
   ) : null
@@ -452,20 +452,6 @@ export function HubPane({ active }: { active: boolean }) {
                 }}
               />
             </View>
-          }
-          footer={
-            // Contributing comes after browsing: the end of the grid, not ahead of it.
-            <Pressable
-              onPress={() => void Linking.openURL(HUB_UPLOAD).catch(() => toast.error('Couldn’t open duneweaver.com'))}
-              accessibilityRole="link"
-              style={({ pressed }) => [styles.panel, styles.shareRow, panelColors, { opacity: pressed ? 0.7 : 1 }]}
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.optionTitle, { color: colors.foreground }]}>Share your own pattern</Text>
-                <Text style={small}>Upload a .thr on duneweaver.com</Text>
-              </View>
-              <MaterialIcons name="open-in-new" size={20} color={colors.mutedForeground} />
-            </Pressable>
           }
         />
       ) : error ? (
@@ -581,6 +567,7 @@ function HubDetail({ p, where, choose, onVersion, selected, disabled, onToggle, 
         by {p.author}
         {p.table ? ` · made for a ${hubTableLabel(p.table)}` : ''}
       </Text>
+      <HubVote id={p.id} />
       {choose && p.versions.length > 1 ? (
         <Segmented
           fill
@@ -636,10 +623,9 @@ interface HubGridProps {
   onRefresh: () => void
   header: React.ReactElement
   empty: React.ReactElement
-  footer: React.ReactElement
 }
 
-function HubGrid({ catalog, selected, onPhone, onTable, updated, disabled, onToggle, onDetail, refreshing, onRefresh, header, empty, footer }: HubGridProps) {
+function HubGrid({ catalog, selected, onPhone, onTable, updated, disabled, onToggle, onDetail, refreshing, onRefresh, header, empty }: HubGridProps) {
   const colors = useTheme((s) => s.colors)
   const { cols, thumb } = thumbGrid(useScreenWidth(), spacing.md)
   return (
@@ -654,15 +640,14 @@ function HubGrid({ catalog, selected, onPhone, onTable, updated, disabled, onTog
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       ListHeaderComponent={header}
       ListEmptyComponent={empty}
-      ListFooterComponent={footer}
       renderItem={({ item: p }) => {
         const on = selected.has(p.id)
         const where = whereIs(p, onPhone, onTable, updated)
         return (
           <Pressable
-            onPress={() => onToggle(p.id)}
+            // During a sync the picks are fixed, but touch and hold still opens the details.
+            onPress={() => !disabled && onToggle(p.id)}
             onLongPress={() => onDetail(p)}
-            disabled={disabled}
             accessibilityRole="button"
             accessibilityState={{ selected: on }}
             accessibilityLabel={`${p.title} by ${p.author}, ${where}`}
@@ -715,10 +700,8 @@ const styles = StyleSheet.create({
   inList: { marginBottom: spacing.md },
   panelBody: { gap: spacing.sm },
   summaryRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 32 },
-  buttons: { flexDirection: 'row', gap: spacing.sm },
   small: { fontSize: font.size.sm },
   hint: { marginBottom: spacing.md },
-  shareRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 56, marginTop: spacing.sm },
   optionTitle: { fontSize: font.size.md, fontWeight: font.weight.medium },
   detail: { gap: spacing.md, paddingHorizontal: spacing.lg, paddingBottom: spacing.lg },
   detailDisc: { alignSelf: 'center' },

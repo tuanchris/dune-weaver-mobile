@@ -26,7 +26,7 @@ import { useAutoRelocate } from './src/lib/relocate'
 import { useTableLogSync } from './src/lib/tableLogSync'
 import { useFavoritesPlaylistSync } from './src/lib/favoritesPlaylist'
 import { useCatalogRefreshOnIdle } from './src/lib/catalogRefresh'
-import { useHubAutoSync, useNewHubPatterns } from './src/lib/patternHub'
+import { useHubAutoSync, useNewHubPatterns, useSettlePendingTableSync } from './src/lib/patternHub'
 import { useHubAuthLinks } from './src/lib/hubAuth'
 import { initAppLog } from './src/stores/useAppLog'
 
@@ -65,6 +65,7 @@ export default function App() {
   useCatalogRefreshOnIdle()
   // Opt-in (Browse › Pattern Hub): new hub patterns download to this phone.
   useHubAutoSync()
+  useSettlePendingTableSync()
   // duneweaver.com sign-in: reads the account, finishes sign-ins from a link.
   useHubAuthLinks()
 

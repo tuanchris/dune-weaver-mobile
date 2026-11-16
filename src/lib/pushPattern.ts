@@ -19,7 +19,8 @@ import { updateTableManifest } from './tableManifest'
 /** Screen stays on while a file goes to the table: a locked phone suspends the app mid-upload. */
 const KEEP_AWAKE_TAG = 'dw-push'
 
-export async function pushToTable(base: string, name: string, onProgress?: (fraction: number) => void): Promise<void> {
+/** `manifest: false` leaves /patterns/index.json to the caller: a hub sync adds all its files in one write (tableManifest.ts). */
+export async function pushToTable(base: string, name: string, onProgress?: (fraction: number) => void, { manifest = true } = {}): Promise<void> {
   assertSdIdle()
   const key = bareName(name)
   const resolved = await useLibrary.getState().resolveThr(key)
@@ -38,7 +39,7 @@ export async function pushToTable(base: string, name: string, onProgress?: (frac
     useBoards.getState().setHubSent(base, { [key]: hubRev })
     // Keep the on-card catalog in step, or the pushed pattern disappears
     // from the on-table list after the next manifest read (best-effort).
-    await updateTableManifest(base, { add: key })
+    if (manifest) await updateTableManifest(base, { add: key })
   } finally {
     resume()
     void deactivateKeepAwake(KEEP_AWAKE_TAG).catch(() => undefined)

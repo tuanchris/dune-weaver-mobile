@@ -18,18 +18,18 @@ import { patternKey } from '../stores/useLibrary'
  *   prefixes from other tools); membership tests compare normalized keys.
  */
 
-/** Apply an add/remove to manifest entries; null → no write needed. */
+/** Apply an add (one name or several: a hub sync adds its files at once) or a remove to manifest entries; null → no write needed. */
 export function applyManifestChange(
   entries: unknown,
-  change: { add?: string; remove?: string }
+  change: { add?: string | string[]; remove?: string }
 ): string[] | null {
   if (!Array.isArray(entries)) return null
   const keys = entries.filter((e): e is string => typeof e === 'string')
 
   if (change.add) {
-    const addKey = patternKey(change.add)
-    if (keys.some((e) => patternKey(e) === addKey)) return null
-    return [...keys, addKey]
+    const have = new Set(keys.map(patternKey))
+    const added = (Array.isArray(change.add) ? change.add : [change.add]).map(patternKey).filter((k) => !have.has(k) && have.add(k))
+    return added.length ? [...keys, ...added] : null
   }
   if (change.remove) {
     const removeKey = patternKey(change.remove)
@@ -44,17 +44,21 @@ export function applyManifestChange(
  * `name` is the pattern's key relative to /patterns (e.g. "star.thr" or
  * "custom_patterns/x.thr"). Never throws — a failed catalog update must not
  * fail the push/delete that already succeeded; the SD Card Pattern Manager
- * can always reconcile drift later.
+ * can always reconcile drift later. `strict` throws a failed read (other than
+ * the card having no manifest) or write instead, so a caller can retry: a hub
+ * sync's one write carries every file it sent.
  */
 export async function updateTableManifest(
   base: string,
-  change: { add?: string; remove?: string }
+  change: { add?: string | string[]; remove?: string },
+  { strict = false } = {}
 ): Promise<void> {
   let text: string
   try {
     text = await board.patternManifest(base)
-  } catch {
+  } catch (e) {
     // No manifest on the card (404) or unreachable — nothing to maintain.
+    if (strict && !(e instanceof Error && e.message === 'HTTP 404')) throw e
     return
   }
 
@@ -69,6 +73,7 @@ export async function updateTableManifest(
   try {
     await board.uploadTextFile(base, '/patterns/index.json', JSON.stringify(next))
   } catch (e) {
+    if (strict) throw e
     console.warn('Could not update the on-card pattern catalog', e)
   }
 }

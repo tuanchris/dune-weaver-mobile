@@ -4,6 +4,7 @@ import { MaterialIcons } from '@expo/vector-icons'
 import { useBoards } from '../stores/useBoards'
 import { useStatus } from '../stores/useStatus'
 import { useTheme } from '../stores/useTheme'
+import { useHubSync } from '../lib/patternHub'
 import { useBranding, brandName } from '../stores/useBranding'
 import { Sheet } from './Sheet'
 import { spacing, font, radius } from '../theme'
@@ -19,6 +20,9 @@ export function TablePill(): React.JSX.Element {
   const activeId = useBoards((s) => s.activeId)
   const setActive = useBoards((s) => s.setActive)
   const connected = useStatus((s) => !!s.status?.connected)
+  // Busy with a sync, not gone: its server answers nothing else meanwhile.
+  const base = useStatus((s) => s.base)
+  const receiving = useHubSync((s) => !!s.receiving && s.receiving === base)
   const brand = useBranding((s) => s.name)
   const logoUri = useBranding((s) => s.logoUri)
   const [open, setOpen] = useState(false)
@@ -34,10 +38,10 @@ export function TablePill(): React.JSX.Element {
         disabled={!multiTable}
         hitSlop={8}
         accessibilityRole={multiTable ? 'button' : 'text'}
-        accessibilityLabel={`${active?.name ?? brandName(brand)}, ${connected ? 'connected' : 'offline'}${multiTable ? '. Switch table' : ''}`}
+        accessibilityLabel={`${active?.name ?? brandName(brand)}, ${receiving ? 'receiving patterns' : connected ? 'connected' : 'offline'}${multiTable ? '. Switch table' : ''}`}
         style={({ pressed }) => [styles.tableChip, { opacity: pressed && multiTable ? 0.6 : 1 }]}
       >
-        <View style={[styles.dot, { backgroundColor: connected ? colors.success : colors.destructive }]} />
+        <View style={[styles.dot, { backgroundColor: receiving ? colors.live : connected ? colors.success : colors.destructive }]} />
         <Text numberOfLines={1} style={[styles.brand, { color: colors.foreground }]}>{active?.name ?? brandName(brand)}</Text>
         {multiTable ? <MaterialIcons name="expand-more" size={18} color={colors.mutedForeground} /> : null}
       </Pressable>
