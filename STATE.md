@@ -2,6 +2,23 @@
 
 Point-in-time notes. Durable rules live in AGENTS.md / CLAUDE.md.
 
+## 2026-11-17: 1.4.4 + firmware v0.2.6 — long LED strips, on every platform
+
+- **Firmware v0.2.6** (cut from `origin/main` in a worktree, not the WIP tree; torture gate
+  skipped, owner's call): own effects picked strip indices with `random8(lim)`, a `uint8_t`
+  lim, so past 255 LEDs Twinkle, Glitter, Dissolve, Ripple, Drip, Lightning, Fireworks and
+  Juggle reached only the first n % 256 LEDs (300 → the first 44). `random16(lim)` and an int
+  Juggle scale fix it. The same change is in the firmware WIP tree, which is still 11 commits
+  behind `origin/main`.
+- **App**: `ledSim.ts` mirrors it; Settings › LED strip takes 1–400 (firmware v0.2.5 raised
+  `$LED/Count` to 400). Checked with a scratch harness at 49/255/256/300/400 LEDs (every effect
+  reaches the strip's last 10%) and `fx_parity.py --leds 400` (114/114 WLED ports match).
+- **Android**: versionCode 30 to production with `changelogs/30.txt`, via the androidpublisher
+  API (upload + track + commit in one edit).
+- **iOS**: build 29 (cloud, iphoneos27.1), altool, new App Store version 1.4.4 submitted
+  through the ASC API.
+- **Desktop**: v1.4.4 released (notarized dmg + exe); `releases/latest` = v1.4.4.
+
 ## 2026-11-16: 1.4.3 — Android nav bar, keyboard and toasts, on every platform
 
 - **Sheets clear Android's nav bar** (customer report, 3-button navigation: a playlist's Play sat
