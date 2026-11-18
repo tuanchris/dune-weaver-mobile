@@ -705,7 +705,13 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   the WebView may read: `allowingReadAccessToURL` / `allowFileAccessFromFileURLs`; XHR, not
   fetch) and the pattern text is injected as `window.SAND`. The table is the baked one nearest
   `roundSize(board)` (`sandTable`: ≥ 550 mm DWP, ≥ 320 mm DWG, else DWMP). Any page error or a
-  killed web process falls back to Fast (logged to diagnostics as `sand-preview`). Web/desktop
+  killed web process falls back to Fast (logged to diagnostics as `sand-preview`). **Float filtering**: the engine samples its R32F heightfield
+  LINEAR, which needs `OES_texture_float_linear`; a phone GPU without it (a customer's iPhone 13
+  Pro on iOS 27.2.1, 2026-11-18; many Android GPUs) drew FLAT sand with no error: the ball moved,
+  but no clear and no grooves. `lib/floatLinearShim.mjs`, injected by SandView BEFORE the page (not
+  in it: the page is the KEY), makes those textures NEAREST and filters in the shaders, only where
+  the extension is missing. `npm run check-sand-shim` renders a still with the extension hidden:
+  flat without the shim, the normal render with it. Web/desktop
   (`SandView.web.tsx`, desktop; owner's call 2026-11-16: on par with mobile) runs the SAME page in an
   `<iframe>`: the clears are prepared in the same cache folder (`lib/sandFiles.ts` `prepareSand`,
   shared with `SandView.tsx`), which desktop serves as `app://cache/…`; the page goes in as `srcdoc`
@@ -763,7 +769,8 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   - **Anything else** (imports, Create's): `SandPreviewGenerator` (App.tsx) renders it ON THE
     PHONE, one at a time, in a hidden `SandView` in still mode (PNG out of WebKit → webp via
     `PreviewGenerator`'s `saveCapture`), for the active table's size, into
-    `Documents/sand-previews/<engine KEY>/<table>/` (paths computed, never stored; another
+    `Documents/sand-previews/<engine KEY>-2/<table>/` (`-2` dropped the flat ones made before
+    the float-filtering shim) (paths computed, never stored; another
     KEY's folder is deleted at launch). `useLocalSandPreview` finds them. 4 min cap a
     pattern; failures go to diagnostics as `sand-preview`.
   Card-only patterns the hub doesn't have keep the ink preview (no file on the phone).
@@ -1161,8 +1168,10 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   unit tests; the checks are `npm run check-playback` (`scripts/check-playback-path.mjs`:
   the Fast-preview path on real bundled patterns — run it after touching `lib/playbackPath.ts`),
   `npm run check-text` (`scripts/check-text.mjs`: the text generator on every font, table shape,
-  layout and style — run it after touching `src/lib/sandText`), and `npm run check-hub-auth` (`scripts/check-hub-auth.mjs`: PKCE and the refresh/sign-out
-  rules — run it after touching `lib/hubAuth.ts` or `lib/pkce.mjs`).
+  layout and style — run it after touching `src/lib/sandText`), `npm run check-hub-auth` (`scripts/check-hub-auth.mjs`: PKCE and the refresh/sign-out
+  rules — run it after touching `lib/hubAuth.ts` or `lib/pkce.mjs`), and `npm run check-sand-shim`
+  (`scripts/check-sand-shim.mjs`, headless Chrome — run it after touching `lib/floatLinearShim.mjs`
+  or after `npm run gen-sand`).
 - **Native tab bar** (`src/components/AppTabs.tsx`, iOS + Android): `createNativeBottomTabNavigator`
   from `@react-navigation/bottom-tabs/unstable` — an UNSTABLE API; re-check it after any
   react-navigation / react-native-screens upgrade.

@@ -21,6 +21,12 @@ export interface AppReleaseNote {
 
 export const APP_CHANGELOG: AppReleaseNote[] = [
   {
+    version: '1.4.5',
+    notes: [
+      '• Fixed the sand preview on some phones, where it showed flat sand with only the ball moving. Sand thumbnails of imported patterns made there are drawn again',
+    ].join('\n'),
+  },
+  {
     version: '1.4.4',
     notes: [
       '• Settings › LED strip takes up to 400 LEDs (needs firmware v0.2.5 or newer)',

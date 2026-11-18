@@ -51,7 +51,8 @@
     "check-hub-auth": "node scripts/check-hub-auth.mjs",
     "check-text": "node scripts/check-text.mjs",
     "gen-sand": "node scripts/gen-sand.mjs",
-    "gen-sand-previews": "node scripts/gen-sand-previews.mjs"
+    "gen-sand-previews": "node scripts/gen-sand-previews.mjs",
+    "check-sand-shim": "node scripts/check-sand-shim.mjs"
   },
   "private": true
 }

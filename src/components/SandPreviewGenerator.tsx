@@ -24,7 +24,10 @@ const OUT = 512 // the ink previews' size
 const TIMEOUT_MS = 4 * 60_000
 
 const root = () => new Directory(Paths.document, 'sand-previews')
-const dirFor = (table: SandTable) => new Directory(root(), SAND_KEY, table)
+// "-2": renders made before floatLinearShim.mjs came out FLAT on phones without float
+// filtering (2026-11-18), so this folder name drops them once, like a new engine.
+const RENDERS = `${SAND_KEY}-2`
+const dirFor = (table: SandTable) => new Directory(root(), RENDERS, table)
 const fileFor = (table: SandTable, name: string) => new File(dirFor(table), `${safeName(bareName(name))}.webp`)
 
 /** Bumped when the worker saves one, so thumbnails look again. */
@@ -59,7 +62,7 @@ export function SandPreviewGenerator(): React.JSX.Element | null {
   // Another engine's renders are stale: drop them once.
   useEffect(() => {
     try {
-      if (SAND && root().exists) for (const d of root().list()) if (d.name !== SAND_KEY) d.delete()
+      if (SAND && root().exists) for (const d of root().list()) if (d.name !== RENDERS) d.delete()
     } catch {
       // keep them; harmless
     }

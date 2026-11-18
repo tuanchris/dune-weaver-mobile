@@ -2,6 +2,23 @@
 
 Point-in-time notes. Durable rules live in AGENTS.md / CLAUDE.md.
 
+## 2026-11-18: 1.4.5 — flat sand preview fixed, on every platform
+
+- **Customer report** (iPhone 13 Pro, iOS 27.2.1, app 1.4.3): the sand player played, but the
+  sand stayed flat (no clear, no grooves), only the ball moved. The engine's R32F heightfield is
+  sampled LINEAR, which needs `OES_texture_float_linear`; that GPU lacks it, so the textures are
+  incomplete and read 0, with no error. `lib/floatLinearShim.mjs` (injected by SandView before the
+  page, so the engine KEY and the hub's renders are unchanged) filters in the shaders there.
+  `npm run check-sand-shim` reproduces it (sd 69.4 normal, 8.6 hidden, 69.4 with the shim). Not
+  yet seen on an affected phone. On-phone sand stills moved to `<KEY>-2` (flat ones re-render).
+- **Android**: versionCode 31 to production with `changelogs/31.txt` (androidpublisher API).
+- **iOS**: 1.4.4 (build 29) was pulled from review while IN_REVIEW; that App Store version was
+  renamed 1.4.5, given build 30 (cloud, iphoneos27.1) and both releases' notes, and is
+  WAITING_FOR_REVIEW. 1.4.4 never shipped on iOS; build 29 is burned.
+- **Desktop**: v1.4.5 released (notarized dmg + exe); `releases/latest` = v1.4.5. Desktop keeps
+  the extension, so `SandView.web.tsx` has no shim; it ships for parity.
+- dune-weaver-viewer's own web Sand page has the same flaw on such phones (engine untouched).
+
 ## 2026-11-17: 1.4.4 + firmware v0.2.6 — long LED strips, on every platform
 
 - **Firmware v0.2.6** (cut from `origin/main` in a worktree, not the WIP tree; torture gate

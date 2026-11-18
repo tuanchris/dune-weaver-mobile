@@ -1,2 +1,3 @@
+• Fixed the sand preview on some phones, where it showed flat sand with only the ball moving. Sand thumbnails of imported patterns made there are drawn again
 • Settings › LED strip takes up to 400 LEDs (needs firmware v0.2.5 or newer)
 • On strips longer than 255 LEDs, Twinkle, Juggle, Lightning, Fireworks and the other sparkle effects now cover the whole ring in the app’s previews. Firmware v0.2.6 fixes the same on the table
