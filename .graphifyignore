@@ -1,0 +1,3 @@
+# Keep out of the graph: store metadata (reviewer contact details) and generated/binary assets
+fastlane/
+assets/

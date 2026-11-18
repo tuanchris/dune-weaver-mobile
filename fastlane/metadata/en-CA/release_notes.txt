@@ -1,5 +1,2 @@
-• Sync to table keeps going in the background on firmware v0.2.3 or newer: switch apps or lock your phone and it carries on
-• While a sync sends, the app shows the table is receiving patterns, with progress and time left, and holds back what the table can’t do meanwhile
-• Vote on Pattern Hub patterns, in the Pattern Hub and in Browse
-• One Sync to table button in Pattern Hub
-• Delete account now sits apart, behind a confirm
+• Settings › LED strip takes up to 400 LEDs (needs firmware v0.2.5 or newer)
+• On strips longer than 255 LEDs, Twinkle, Juggle, Lightning, Fireworks and the other sparkle effects now cover the whole ring in the app’s previews. Firmware v0.2.6 fixes the same on the table

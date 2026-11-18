@@ -19,10 +19,15 @@ import { create } from 'zustand'
 import { useTheme } from '../stores/useTheme'
 import { useSplit } from '../lib/layout'
 import { MaterialIcons } from '@expo/vector-icons'
+import { Toaster } from './Toaster'
 import { font, radius, spacing } from '../theme'
 
 const SCRIM = 'rgba(0,0,0,0.5)'
 const NATIVE_DRIVER = Platform.OS !== 'web' // RNW has no native Animated module (warns)
+// Android/web: a Modal is its own window (a portal on web) above the root's Toaster, so a
+// toast fired while a sheet is up ("Playlist saved", an error) drew under it. Each JS
+// sheet draws its own on top (iOS uses a window overlay instead: Toaster.tsx).
+const SHEET_TOAST = Platform.OS !== 'ios'
 
 export interface SheetProps {
   visible: boolean
@@ -185,7 +190,7 @@ export function Sheet({ visible, onClose, dismissible = true, variant = 'fit', t
         <View style={area ? { position: 'absolute', left: area.x, top: area.y, width: area.width, height: area.height } : StyleSheet.absoluteFill}>
           <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: colors.background, transform: [{ translateY: y }] }]}>
             <SafeAreaView edges={area ? ['bottom'] : ['top', 'bottom', 'left', 'right']} style={{ flex: 1 }}>
-              <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+              <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
                 <View style={{ flex: 1 }} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
                   <SheetWidth.Provider value={width}>
                     {header}
@@ -196,6 +201,7 @@ export function Sheet({ visible, onClose, dismissible = true, variant = 'fit', t
             </SafeAreaView>
           </Animated.View>
         </View>
+        {SHEET_TOAST ? <Toaster /> : null}
       </Modal>
     )
   }
@@ -211,7 +217,9 @@ export function Sheet({ visible, onClose, dismissible = true, variant = 'fit', t
         </Animated.View>
         {/* Clear of side insets (iPhone Duo's status bar + camera rail); taps there reach the scrim. */}
         <SafeAreaView edges={['left', 'right']} style={{ flex: 1 }} pointerEvents="box-none">
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.anchor} pointerEvents="box-none">
+          {/* padding on Android too: edge-to-edge, its window no longer resizes for the keyboard
+              (Expo's keyboard guide), so without a behavior the keyboard covered a sheet's fields. */}
+          <KeyboardAvoidingView behavior="padding" style={styles.anchor} pointerEvents="box-none">
             <Animated.View
               onLayout={(e) => {
                 sheetH.current = e.nativeEvent.layout.height
@@ -230,12 +238,16 @@ export function Sheet({ visible, onClose, dismissible = true, variant = 'fit', t
                   {header}
                 </View>
                 <View style={variant === 'page' ? { flex: 1 } : { flexShrink: 1 }}>{children}</View>
-                <SafeAreaView edges={['bottom']} />
+                {/* minHeight: Android's SafeAreaView measures nothing while its height is 0, so an
+                    empty one never padded and the sheet's bottom (a playlist's Play) sat under the
+                    3-button nav bar. iOS has no such check. */}
+                <SafeAreaView edges={['bottom']} style={{ minHeight: 1 }} />
               </SheetWidth.Provider>
             </Animated.View>
           </KeyboardAvoidingView>
         </SafeAreaView>
       </View>
+      {SHEET_TOAST ? <Toaster /> : null}
     </Modal>
   )
 }

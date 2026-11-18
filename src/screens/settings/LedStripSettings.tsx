@@ -58,7 +58,7 @@ function StripCard({ base }: { base: string }): React.JSX.Element {
   // Settings, not live keys: the board refuses them while drawing, so on any
   // failure reload to show what it really has.
   const commitCount = () => {
-    const n = Math.max(1, Math.min(300, Math.round(Number(count) || 1)))
+    const n = Math.max(1, Math.min(400, Math.round(Number(count) || 1)))
     setCount(String(n))
     if (n === savedCountRef.current) return
     board.setLedCount(base, n)
@@ -90,7 +90,7 @@ function StripCard({ base }: { base: string }): React.JSX.Element {
         accessibilityLabel="Number of LEDs"
         style={[styles.numInput, { color: colors.foreground, backgroundColor: colors.inputBackground, borderColor: colors.border }]}
       />
-      <Text style={[styles.hint, { color: colors.mutedForeground }]}>How many LEDs your strip has (1–300).</Text>
+      <Text style={[styles.hint, { color: colors.mutedForeground }]}>How many LEDs your strip has (1–400).</Text>
 
       {order ? (
         <>

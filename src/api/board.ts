@@ -811,7 +811,7 @@ const realBoard = {
   /** fw ≥ the release that adds `LED/Intensity` to /sand_settings (older rejects the key). */
   setLedIntensity: (base: string, value: number) => command(base, `$Sand/Led=intensity=${clampInt(value, 0, 255)}`),
   /** Strip length. A setting, not a live key: idle/paused only (IdleError while drawing). */
-  setLedCount: (base: string, n: number) => command(base, `$LED/Count=${clampInt(n, 1, 300)}`),
+  setLedCount: (base: string, n: number) => command(base, `$LED/Count=${clampInt(n, 1, 400)}`),
   /** Wire color order (GRB, RGB, …, GRBW for RGBW strips) — firmware with $LED/Order
    * only (present in /sand_settings). A setting: idle/paused only, applies next frame. */
   setLedOrder: (base: string, order: string) => command(base, `$LED/Order=${order}`),

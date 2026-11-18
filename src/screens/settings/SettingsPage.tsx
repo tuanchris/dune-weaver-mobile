@@ -37,7 +37,7 @@ export function SettingsPage({
   const goBack = () => (navigation.canGoBack() ? navigation.goBack() : navigation.navigate('SettingsHome'))
   return (
     <Screen title={title} eyebrow={table ? tableName : undefined} back={{ label: 'Settings', onPress: goBack }}>
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: SCROLL_BOTTOM_PAD, gap: spacing.lg }}>
+      <ScrollView automaticallyAdjustKeyboardInsets contentContainerStyle={{ padding: spacing.lg, paddingBottom: SCROLL_BOTTOM_PAD, gap: spacing.lg }}>
         {gated ? (
           <>
             <IdleGateBanner base={base} />

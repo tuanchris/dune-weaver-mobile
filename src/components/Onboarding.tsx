@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Image, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { MaterialIcons } from '@expo/vector-icons'
 import { normalizeBase, testBoard } from '../api/board'
@@ -56,7 +56,7 @@ export function Onboarding() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.wrap} keyboardShouldPersistTaps="handled">
           <Image source={logoUri ? { uri: logoUri } : require('../../assets/dw-logo.png')} style={styles.brandLogo} />
           <Text style={[styles.title, { color: colors.foreground }]}>{brandName(brand)}</Text>

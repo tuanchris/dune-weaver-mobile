@@ -168,7 +168,7 @@ export function ControlScreen(): React.JSX.Element {
 
   return (
     <Screen title="Control">
-      <ScrollView scrollEnabled={!scrollLocked} contentContainerStyle={{ padding: spacing.lg, paddingBottom: SCROLL_BOTTOM_PAD, gap: spacing.lg }}>
+      <ScrollView scrollEnabled={!scrollLocked} automaticallyAdjustKeyboardInsets contentContainerStyle={{ padding: spacing.lg, paddingBottom: SCROLL_BOTTOM_PAD, gap: spacing.lg }}>
         {/* The table from above: where the ball is, what it's doing, and the two buttons that always apply. */}
         <Card style={styles.hero}>
           <View style={{ opacity: online ? 1 : 0.5 }}>

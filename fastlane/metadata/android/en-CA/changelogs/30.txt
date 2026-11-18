@@ -1,0 +1,2 @@
+• Settings › LED strip takes up to 400 LEDs (needs firmware v0.2.5 or newer)
+• On strips longer than 255 LEDs, Twinkle, Juggle, Lightning, Fireworks and the other sparkle effects now cover the whole ring in the app’s previews. Firmware v0.2.6 fixes the same on the table

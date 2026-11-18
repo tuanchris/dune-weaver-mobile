@@ -1,5 +1,5 @@
 import React from 'react'
-import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native'
 // The screens SafeAreaView, not safe-area-context's: inside a native tab its
 // insets include the tab bar (and iPadOS 18+'s TOP bar); on Android, the bar height.
 import { SafeAreaView } from 'react-native-screens/experimental'
@@ -8,7 +8,7 @@ import { useTheme } from '../stores/useTheme'
 import { MiniPlayer } from './NowPlayingBar'
 import { TablePill } from './TablePill'
 import { SyncBanner } from './SyncBanner'
-import { NATIVE_ACCESSORY, setScreenBox, setScreenWidth, useSplit } from '../lib/layout'
+import { NATIVE_ACCESSORY, setScreenBox, setScreenWidth, useScreenTop, useSplit } from '../lib/layout'
 import { spacing, font } from '../theme'
 
 /**
@@ -38,6 +38,7 @@ export function Screen({
 }) {
   const colors = useTheme((s) => s.colors)
   const split = useSplit()
+  const screenTop = useScreenTop()
   // Half folded, the flat half is short: a tab's big title goes (the tab bar says
   // where you are) unless it carries an action or heads a pushed page.
   const showTitle = !!title && (split?.side !== 'top' || !!back || !!action)
@@ -89,7 +90,19 @@ export function Screen({
         ) : null}
 
         {hideSync ? null : <SyncBanner />}
-        <View style={{ flex: 1 }} onLayout={(e) => setScreenWidth(e.nativeEvent.layout.width)}>{children}</View>
+        {/* Android: edge-to-edge, the window no longer resizes for the keyboard, so pad the content
+            above it (a ScrollView then keeps its focused field in view as it shrinks). The offset
+            puts this view's frame in window points. iOS: the scroll views inset themselves
+            (automaticallyAdjustKeyboardInsets), so this stays off there. */}
+        <KeyboardAvoidingView
+          enabled={Platform.OS === 'android'}
+          behavior="padding"
+          keyboardVerticalOffset={screenTop + (split?.inset.top ?? 0)}
+          style={{ flex: 1 }}
+          onLayout={(e) => setScreenWidth(e.nativeEvent.layout.width)}
+        >
+          {children}
+        </KeyboardAvoidingView>
         {NATIVE_ACCESSORY || split ? null : <MiniPlayer placement="floating" />}
       </View>
     </SafeAreaView>

@@ -43,3 +43,6 @@ yarn-error.*
 
 # store metadata and its secrets (ASC API key, reviewer passwords): never in a build archive
 fastlane/
+
+# graphify knowledge graph (local tooling, rebuilt by `graphify update .`)
+graphify-out/

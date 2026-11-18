@@ -206,7 +206,7 @@ export function SettingsScreen(): React.JSX.Element {
 
   return (
     <Screen title="Settings">
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: SCROLL_BOTTOM_PAD, gap: spacing.xl }}>
+      <ScrollView automaticallyAdjustKeyboardInsets contentContainerStyle={{ padding: spacing.lg, paddingBottom: SCROLL_BOTTOM_PAD, gap: spacing.xl }}>
         <View style={styles.group}>
           <SectionHeader title="Tables" />
           <Card>

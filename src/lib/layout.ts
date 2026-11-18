@@ -29,6 +29,8 @@ addHingeListener((e) => measured.setState({ halfFold: halfFolded(e.hinge) }))
 export const setScreenWidth = (width: number): void => measured.setState({ width })
 // Re-reads the hinge too: at import the window (where iOS reports it) may not exist yet.
 export const setScreenBox = ({ x, y, width, height }: Box): void => measured.setState({ box: { x, y, width, height }, halfFold: halfFolded(getHinge()) })
+/** Screen's box top in window points (the status bar on Android): its keyboard offset. */
+export const useScreenTop = (): number => measured((s) => s.box?.y ?? 0)
 
 /** The window split in two at the fold, one half showing the table (NowPlayingPane):
  *  - side by side: the open iPhone Duo held like a book (951 × 669 pt), or any window

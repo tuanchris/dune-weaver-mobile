@@ -25,6 +25,13 @@ const PLAY_SECONDS = 30 // the whole drawing at 1×, as the Fast player
 const { thr: source, table: model, size } = window.SAND
 const sandCanvas = document.getElementById('sand')
 const ballCanvas = document.getElementById('ball')
+// Contrast (owner's call, 2026-11-16): the engine leaves its sand in grey ~48–173
+// of 255, flat on a phone. Levels to 6–248: the still's pixels (the hub's and the
+// phone's previews), and the live canvas, so the player matches them.
+// brightness(b) contrast(c) is y = c·b·x + (1 − c)/2, the same line.
+const LEVELS = { slope: 242 / 125, offset: 6 - 48 * (242 / 125) }
+const levelsC = 1 - (2 * LEVELS.offset) / 255
+sandCanvas.style.filter = `brightness(${LEVELS.slope / levelsC}) contrast(${levelsC})`
 // Shaded at the screen's pixels, not the heightfield's 2048: the render runs per pixel.
 // The app passes the view's size, since the page may lay out before it has one.
 const px = Math.min(RES, Math.round((size || innerWidth || 360) * devicePixelRatio))
@@ -185,6 +192,10 @@ async function renderStill({ size: out = 540, type = 'image/webp', quality = 0.8
   g.arc(out / 2, out / 2, out / 2, 0, 2 * Math.PI)
   g.clip()
   g.drawImage(sandCanvas, 0, 0, out, out)
+  const img = g.getImageData(0, 0, out, out)
+  const d = img.data // clamped: rounds and clips to 0–255
+  for (let i = 0; i < d.length; i += 4) for (let k = i; k < i + 3; k++) d[k] = d[k] * LEVELS.slope + LEVELS.offset
+  g.putImageData(img, 0, 0)
   return c.toDataURL(type, quality)
 }
 if (window.SAND.still) {

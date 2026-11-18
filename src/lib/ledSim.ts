@@ -157,6 +157,11 @@ export class LedSim {
     const v = r & 255
     return lim === undefined ? v : (v * u8(lim)) >> 8
   }
+  /** Leds::random16: strip indices; random8's lim wraps past 255 LEDs. */
+  private random16(lim: number): number {
+    this.random8()
+    return Math.floor(((this.rng >>> 16) * lim) / 65536) // the product passes 2^31: no `>> 16`
+  }
   private set(i: number, r: number, g: number, b: number) {
     if (i < 0 || i >= this.n) return
     this.fb[i * 3] = u8(r)
@@ -303,7 +308,7 @@ export class LedSim {
         this.fadeBy(fade < 1 ? 1 : fade > 255 ? 255 : fade)
         for (let k = this.ixSpawns(50); k > 0; k--) {
           const c = this.palColor(this.random8())
-          this.set(this.random8(n), ...c)
+          this.set(this.random16(n), ...c)
         }
         return
       }
@@ -395,7 +400,7 @@ export class LedSim {
       case 'juggle': {
         this.fadeBy(this.ixFade(40))
         for (let k = 0; k < 3; k++) {
-          const pos = scale8(sin8((ph >>> 8) * (k + 2)), n - 1)
+          const pos = (sin8((ph >>> 8) * (k + 2)) * n) >> 8
           this.add(pos, ...this.palColor(k * 85 + hi))
         }
         return
@@ -413,12 +418,12 @@ export class LedSim {
           const [cr, cg, cb] = this.palColor(hi + div(i * 256, n))
           this.set(i, (cr * 180) >> 8, (cg * 180) >> 8, (cb * 180) >> 8)
         }
-        for (let s = this.ixSpawns(60); s > 0; s--) this.set(this.random8(n), 255, 255, 255)
+        for (let s = this.ixSpawns(60); s > 0; s--) this.set(this.random16(n), 255, 255, 255)
         return
       }
       case 'dissolve': {
         const converts = this.ixSpawns(256 * (div(n, 12) + 1))
-        for (let k = 0; k < converts; k++) this.heat[this.random8(n)] = this.aux ^ 1
+        for (let k = 0; k < converts; k++) this.heat[this.random16(n)] = this.aux ^ 1
         for (let i = 0; i < n; i++) this.heat[i] ? this.set(i, r2, g2, b2) : this.set(i, ...this.fx(div(i * 256, n), this.c1))
         this.step = (this.step + 1) & 0xffff
         if (this.step * FRAME_MS > (255 - speed + 15) * 24) {
@@ -433,7 +438,7 @@ export class LedSim {
         const waves = 1 + div(ix * K_BALLS, 256)
         for (let k = 0; k < waves; k++) {
           if (this.ballVel[k] <= 0 || this.ballVel[k] > n / 2) {
-            this.ballPos[k] = this.random8(n)
+            this.ballPos[k] = this.random16(n)
             this.ballVel[k] = 0.01
           }
           const center = Math.trunc(this.ballPos[k])
@@ -457,7 +462,7 @@ export class LedSim {
           if (this.ballPos[k] <= 0) {
             this.set(0, 255, 255, 255)
             this.set(1, (dr * 128) >> 8, (dg * 128) >> 8, (db * 128) >> 8)
-            this.ballPos[k] = n - 1 - this.random8(div(n, 2))
+            this.ballPos[k] = n - 1 - this.random16(div(n, 2))
             this.ballVel[k] = 0
           }
           this.add(Math.trunc(this.ballPos[k]), dr, dg, db)
@@ -479,8 +484,8 @@ export class LedSim {
           if (was === 0) {
             this.aux--
             this.candle = 1 + this.random8(3)
-            const start = this.random8(n)
-            const len = 2 + this.random8(div(n, 3))
+            const start = this.random16(n)
+            const len = 2 + this.random16(div(n, 3))
             for (let j = 0; j < len; j++) {
               const i = (start + j) % n
               this.set(i, ...this.fx(div(i * 256, n), [255, 255, 255]))
@@ -493,7 +498,7 @@ export class LedSim {
       case 'fireworks': {
         this.fadeBy(48)
         for (let s = this.ixSpawns(50); s > 0; s--) {
-          const center = this.random8(n)
+          const center = this.random16(n)
           const [cr, cg, cb] = this.palColor(this.random8())
           this.add(center, cr, cg, cb)
           this.add((center + 1) % n, cr >> 1, cg >> 1, cb >> 1)

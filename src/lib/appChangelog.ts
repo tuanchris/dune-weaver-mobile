@@ -21,6 +21,27 @@ export interface AppReleaseNote {
 
 export const APP_CHANGELOG: AppReleaseNote[] = [
   {
+    version: '1.4.4',
+    notes: [
+      '• Settings › LED strip takes up to 400 LEDs (needs firmware v0.2.5 or newer)',
+      '• On strips longer than 255 LEDs, Twinkle, Juggle, Lightning, Fireworks and the other sparkle effects now cover the whole ring in the app’s previews. Firmware v0.2.6 fixes the same on the table',
+    ].join('\n'),
+  },
+  {
+    version: '1.4.3',
+    notes: [
+      '• Fields near the bottom of a page or sheet stay above the keyboard',
+      '• Messages shown while a sheet is open now appear on top of it',
+      '• A playlist’s Play button no longer hides behind the phone’s navigation buttons',
+    ].join('\n'),
+  },
+  {
+    version: '1.4.2',
+    notes: [
+      '• Sand thumbnails and the sand preview player have more contrast, so a pattern’s grooves and ridges stand out',
+    ].join('\n'),
+  },
+  {
     version: '1.4.1',
     notes: [
       '• Sync to table keeps going in the background on firmware v0.2.3 or newer: switch apps or lock your phone and it carries on',

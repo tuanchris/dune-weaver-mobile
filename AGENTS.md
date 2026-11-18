@@ -719,7 +719,12 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   engine KEY and would re-render the hub) blend theme tokens over them: `sandLight` (#FFF8EC,
   MULTIPLY: the table's warm ring light, option B of four engine tints, matched within 1/255)
   and, in light mode only, `sandLift` (#FFF1DC, SOFT-LIGHT) so they don't sit too dark on the
-  paper. Retune by editing the tokens; no re-render.
+  paper. Retune by editing the tokens; no re-render. CONTRAST is the exception, and lives in
+  the page (owner's call, 2026-11-16: hub-side, so installed apps get it without an update):
+  the engine leaves its sand in grey ~48–173 of 255, and `LEVELS` in `scripts/sand-page.js`
+  stretches it to 6–248, on the still's pixels (hub and on-phone previews) and as a CSS
+  `brightness() contrast()` on the live canvas (the player). Changing it changes the KEY,
+  so the hub re-renders everything (`npm run gen-sand`, then redeploy the renderer).
 - **The app's sand grid and light** (owner's calls, 2026-11-11/12, from side-by-sides and a
   photo of a real Mini Pro): the app (player, on-phone previews, and the hub's previews, made by
   the same page) simulates on the viewer's `APP_GRID` (`clears.js`), not the 2048 grid the
@@ -1256,8 +1261,21 @@ thumbnails from the card's **preview bundle** instead — see the previewSync bu
   The JS sheet's drag zone claims the touch on START (inside a native Modal a touch that begins on
   the grabber/title otherwise bubbles to the Modal host and the move never reaches the header) and
   takes no gesture while closing; its slide-out unmounts whenever it ENDS closed, finished or not.
+  Its bottom spacer is a `SafeAreaView` with `minHeight: 1`: on Android an EMPTY one (height 0)
+  never measures its insets (safe-area-context bails on a 0-height view), which left a playlist's
+  Play under the 3-button nav bar. Never leave a `SafeAreaView` empty without a size.
   **Toasts over sheets**: on iOS `Toaster` draws in a `FullWindowOverlay` (react-native-screens),
-  remounted per toast — a root-view toast sits UNDER a presented pageSheet.
+  remounted per toast — a root-view toast sits UNDER a presented pageSheet. On Android (a Modal is
+  its own dialog window) and web (a portal) every JS sheet's Modal renders its own `Toaster`
+  (`SHEET_TOAST`), drawn exactly over the root's, which is under the sheet.
+  **Keyboard**: Android is edge-to-edge, so no window resizes for the keyboard (Expo's keyboard
+  guide). A sheet's `KeyboardAvoidingView` takes `behavior="padding"` on BOTH platforms. Tab
+  screens: `Screen` wraps its content in one that is ENABLED ON ANDROID ONLY (offset by
+  `useScreenTop()`, so its frame is in window points; the shrinking ScrollView keeps the focused
+  field in view), and on iOS the tab screens' ScrollViews with fields (`SettingsPage`, the
+  Settings list, Control) set `automaticallyAdjustKeyboardInsets`, which insets AND scrolls to the
+  focused field. Never both on iOS: they'd double. A new tab-screen ScrollView with a field needs
+  the prop too.
 - **Design language ("the table from above, at night")**: warm basalt/sand palette (NOT the web
   app's gray+blue — see `src/theme/index.ts`, the single token source; light vs dark palette
   follows the SYSTEM appearance, no in-app toggle), **circular pattern

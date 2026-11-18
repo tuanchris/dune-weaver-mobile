@@ -3,7 +3,7 @@
     "name": "Dune Weaver",
     "slug": "dune-weaver-mobile",
     "scheme": "duneweaver",
-    "version": "1.4.1",
+    "version": "1.4.4",
     "orientation": "portrait",
     "icon": "./assets/dw-logo.png",
     "userInterfaceStyle": "automatic",
